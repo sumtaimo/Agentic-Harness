@@ -953,7 +953,11 @@ await test('worker guards: a harness worker cannot start the controller, change 
 await test('.claude/settings.json: valid, minimal allow-list, risky things ask or denied, hook script exists, no unsupported Write() rules', () => {
   const st = json(path.join(REPO, '.claude', 'settings.json'));
   const { allow, ask, deny } = st.permissions;
-  assert(allow.length > 0 && allow.every((r) => /^Bash\(node \.harness\/[a-z-]+\.mjs[ :)]/.test(r)), `allow must only contain harness scripts: ${allow.filter((r) => !/^Bash\(node \.harness\//.test(r))}`);
+  const TEST_CMDS = ['Bash(npm test:*)', 'Bash(node --test:*)']; // the only two non-harness commands: the agents run them to check their own work
+  assert(allow.length > 0 && allow.every((r) => /^Bash\(node \.harness\/[a-z-]+\.mjs[ :)]/.test(r) || TEST_CMDS.includes(r)), `allow must only contain harness scripts and the two test commands: ${allow.filter((r) => !/^Bash\(node \.harness\//.test(r) && !TEST_CMDS.includes(r))}`);
+  for (const r of TEST_CMDS) assert(allow.includes(r), `${r} must be allowed so the named agents can check their own work without a prompt`);
+  for (const sub of ['brief', 'assign', 'verify', 'propose', 'status', 'report']) assert(allow.includes(`Bash(node .harness/visible.mjs ${sub}:*)`), `the editor workflow command "visible.mjs ${sub}" must be allowed`);
+  assert(!allow.some((r) => /visible\.mjs rollback/.test(r)) && ask.includes('Bash(node .harness/visible.mjs rollback:*)') && ask.includes('Edit(.harness/team.json)'), 'rollback and editing team.json must always ask');
   for (const r of [...allow, ...ask, ...deny]) assert(!/^Write\(/.test(r), `Write() rules are ignored by Claude Code; use Edit(): ${r}`);
   assert(!allow.some((r) => /^Bash\((node|git|npm|npx|rm|sh|bash|python)(:\*)?\)$/.test(r) || /^Bash\(\*/.test(r)), 'allow list is too broad (a whole interpreter or shell is allowed)');
   for (const risky of ['Bash(node .harness/backlog.mjs import:*)', 'Bash(node .harness/backlog.mjs ready:*)', 'Bash(node .harness/memory.mjs forget:*)', 'Bash(node .harness/daemon.mjs --autonomous:*)', 'Edit(.harness/charter.md)', 'Edit(.harness/config.json)', 'Bash(git push:*)'])
@@ -961,7 +965,7 @@ await test('.claude/settings.json: valid, minimal allow-list, risky things ask o
   assert(deny.includes('Edit(.harness/releases/**)') && deny.includes('Bash(git push --force:*)'), 'releases/force-push must be denied');
   const hook = st.hooks.SessionStart[0].hooks[0].command;
   assert(/hook-session\.mjs/.test(hook) && fs.existsSync(path.join(REPO, '.harness', 'hook-session.mjs')), hook);
-  for (const rule of allow) { const m = rule.match(/node (\.harness\/[a-z-]+\.mjs)/); assert(fs.existsSync(path.join(REPO, m[1])), `allowed script missing: ${m[1]}`); }
+  for (const rule of allow) { const m = rule.match(/node (\.harness\/[a-z-]+\.mjs)/); if (m) assert(fs.existsSync(path.join(REPO, m[1])), `allowed script missing: ${m[1]}`); }
 });
 
 await test('.claude/commands/harness/{status,tick,doctor,run,teach}.md: have a description and only call scripts/flags that exist', () => {

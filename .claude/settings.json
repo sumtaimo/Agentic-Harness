@@ -16,9 +16,19 @@
       "Bash(node .harness/memory.mjs list:*)",
       "Bash(node .harness/memory.mjs context:*)",
       "Bash(node .harness/memory.mjs sessions:*)",
-      "Bash(node .harness/memory.mjs remember:*)"
+      "Bash(node .harness/memory.mjs remember:*)",
+      "Bash(node .harness/visible.mjs brief:*)",
+      "Bash(node .harness/visible.mjs assign:*)",
+      "Bash(node .harness/visible.mjs verify:*)",
+      "Bash(node .harness/visible.mjs propose:*)",
+      "Bash(node .harness/visible.mjs status:*)",
+      "Bash(node .harness/visible.mjs report:*)",
+      "Bash(npm test:*)",
+      "Bash(node --test:*)"
     ],
     "ask": [
+      "Bash(node .harness/visible.mjs rollback:*)",
+      "Edit(.harness/team.json)",
       "Bash(node .harness/daemon.mjs --autonomous:*)",
       "Bash(node .harness/backlog.mjs import:*)",
       "Bash(node .harness/backlog.mjs ready:*)",

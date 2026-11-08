@@ -75,30 +75,23 @@ The agents are *named* on purpose: in Claude Code you see **`lead-dev`**, **`lea
 
 `node .harness/doctor.mjs` checks all of it, including that the named agents match `team.json`.
 
-## 6. Optional: skip the permission prompts in the editor
+## 6. Permission rules (already included: no prompts for the workflow)
 
-Without these rules Claude Code asks you to approve each harness command and each test run. To let the workflow run without prompts, add them
-to the `permissions.allow` list of `.claude/settings.json` (the folder must be trusted). They are narrow: only the workflow commands and the two test commands the agents need.
+`.claude/settings.json` ships with narrow rules, so the workflow runs without asking you for every command (the folder must be trusted):
 
-```json
-"Bash(node .harness/visible.mjs brief:*)",
-"Bash(node .harness/visible.mjs assign:*)",
-"Bash(node .harness/visible.mjs verify:*)",
-"Bash(node .harness/visible.mjs propose:*)",
-"Bash(node .harness/visible.mjs status:*)",
-"Bash(node .harness/visible.mjs report:*)",
-"Bash(npm test:*)",
-"Bash(node --test:*)"
-```
+- **Allowed without asking:** only the workflow commands (`visible.mjs brief | assign | verify | propose | status | report`, `status`, `doctor`, `team`, `dispatch`, the read-only `backlog` and `memory` commands) and the two test commands the agents use to check their own work: `npm test` and `node --test`. Never a whole interpreter (`node`, `git`, `npm`).
+- **Always asks:** `visible.mjs rollback`, editing `.harness/team.json`, `.harness/charter.md` or `.harness/config.json`, `backlog import | ready | block`, `memory forget`, `daemon --autonomous`, `git push`.
+- **Denied:** editing `.harness/releases/**`, force-pushing.
 
-Keep `rollback` (`Bash(node .harness/visible.mjs rollback:*)`) and edits to `.harness/team.json` in the `ask` list so you are always asked before those.
+For a project that already has its own `.claude/settings.json`, `node install.mjs <project>` **merges** these rules in (your rules stay; a rule you put in a stricter list is never loosened).
+`npm test` and `node --test` run your project's test code, so only trust a project whose tests you are happy to run.
 
 ## 7. Troubleshooting
 
 | You see | Why | Do |
 |---|---|---|
 | no `lead-…` agents appear | the session was open before the agents existed | restart the Claude Code session; run `node .harness/team.mjs sync-agents --check` |
-| it asks permission for every command | the folder is not trusted yet, or the optional rules in section 6 are not added | accept the trust dialog; add the rules |
+| it asks permission for every command | the folder is not trusted yet (Claude Code ignores a project's permission rules until you trust it) | accept the trust dialog once (section 6 lists the rules) |
 | "Run V-… is not finished" | an earlier run was neither verified nor rolled back | `node .harness/visible.mjs verify <run>` or `rollback <run>` |
 | auto mode does nothing | nothing is READY and the charter objectives are still the placeholder | add a READY task, or describe your goals in the charter |
 | "NO REAL CHECK" | the project has no test script | add a `test` script to `package.json`, or pass `--check "<command>"` |
