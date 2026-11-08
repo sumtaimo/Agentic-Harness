@@ -4,6 +4,7 @@
 .harness/telemetry.log
 .harness/daemon.pid
 .harness/engine-probe.json
+.harness/auto-state.json
 .harness/inbox/*
 .harness/completed/*
 .harness/failed/*

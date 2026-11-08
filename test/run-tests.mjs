@@ -577,8 +577,8 @@ await test('roles + skills: BA vs DEV vs QA get different engine tools; skill ru
   const denied = argsOf(d, 'dev').find((a) => a.startsWith('DENIED=')).slice(7);
   const ba = tools('ba'); const dev = tools('dev'); const qa = tools('qa');
   assert(ba.includes('Edit(docs/spec.md)') && ba.includes('Write(docs/spec.md)') && ba.includes('Bash(git status)') && !ba.some((t) => /npm|src/.test(t)), `BA: ${ba}`);
-  assert(dev.includes('Edit(src/a.js)') && dev.includes('Write(src/a.js)') && !dev.some((t) => t.startsWith('Bash')), `DEV (narrowed by code-craft): ${dev}`);
-  assert(qa.includes('Edit(tests/a.test.js)') && qa.includes('Bash(npm test:*)') && !qa.includes('Bash(npm:*)'), `QA: ${qa}`);
+  assert(dev.includes('Edit(src/a.js)') && dev.includes('Write(src/a.js)') && dev.includes('Bash(npm test:*)') && dev.includes('Bash(node:*)') && !dev.includes('Bash(npm:*)') && !dev.some((t) => /git/.test(t)), `DEV (narrowed by code-craft to test + node): ${dev}`);
+  assert(qa.includes('Edit(tests/a.test.js)') && qa.includes('Bash(npm test:*)') && !qa.includes('Bash(npm:*)') && !qa.includes('Bash(node:*)'), `QA (never gets node:* — its role lacks it): ${qa}`);
   assert(/Edit\(\.env\*\)/.test(denied) && /Bash\(git push:\*\)/.test(denied), `deny rules: ${denied}`);
   assert(promptOf(d, 'dev').includes('@governed-by PO_ARCHITECT') && promptOf(d, 'dev').includes('[ROLE PERSONA — DEV_ENGINEER]'), 'skill/persona not injected for DEV');
   assert(!promptOf(d, 'ba').includes('Code Craft Skill Rules') && promptOf(d, 'ba').includes('[ROLE PERSONA — BA_ANALYST]'), 'skill wrongly injected into BA');
@@ -700,6 +700,19 @@ await test('uat: failed check → uat does NOT move (no broken merge), worker br
   assert(/uat unchanged/.test(f.rollback) && f.git.protectedUnchanged === true, JSON.stringify(f.rollback));
 });
 
+await test('uat: MODIFYING an existing tracked file is committed and merged (regression: git status " M path" lost its first letter)', () => {
+  const { d, g } = gitSandbox();
+  fs.mkdirSync(path.join(d, 'src')); fs.writeFileSync(path.join(d, 'src', 'slug.js'), 'v1');
+  fs.writeFileSync(path.join(d, 'zz.txt'), 'z'); // sorts after src/: the modified file is the FIRST status entry
+  g('add', '-A'); g('commit', '-q', '-m', 'add slug');
+  setBacklog(d, [{ id: 'MOD', title: 'edit existing', priority: 1, status: 'READY', verifyCmd: 'node -e "process.exit(require(\'fs\').readFileSync(\'src/slug.js\',\'utf8\')===\'v2\'?0:1)"',
+    subtasks: [{ id: 'dev', role: 'DEV_ENGINEER', targetFiles: ['src/slug.js'], prompt: 'WRITE src/slug.js v2' }] }]);
+  tick(d);
+  assert(byId(d, 'MOD').status === 'DONE', `${byId(d, 'MOD').status} ${byId(d, 'MOD').blockedReason || ''}`);
+  assert(onBranch(g, 'uat', 'src/slug.js') === 'v2', 'the modification did not reach uat');
+  assert(!log(d).some((e) => e.phase === '2_SCOPE_VIOLATION'), 'in-scope modification wrongly reported as a scope violation');
+});
+
 await test('uat: a retry continues in the same worker branch and only the passing cycle is merged', () => {
   const { d, g } = gitSandbox();
   setBacklog(d, [{ id: 'U3', title: 'retry', priority: 1, status: 'READY', verifyCmd: existsCheck('src/f.js'),
@@ -790,6 +803,70 @@ await test('heartbeat: config heartbeatIntervalSeconds wakes the controller agai
   assert(ok, `LATE is ${byId(d, 'LATE')?.status}`);
   assert(log(d).some((e) => e.phase === 'AUTO_DISPATCH' && e.trigger === 'interval'), 'not woken by the heartbeat');
   assert(log(d).some((e) => e.phase === 'AUTO_START' && /every 1s/.test(e.message)), 'heartbeat config not used');
+});
+
+
+// ───────────── v2.2: skill exact-command rules, PO sees uat + is throttled, --status ─────────────
+
+await test('skill exact rules: DEV gets only "npm test" + node (not npm:*), a skill can never grant what the role lacks, QA never gets node', async () => {
+  const { computeAllowedTools, skillRulesNotGranted, loadRoles, loadSkills } = await import(path.join(REPO, '.harness', 'lib', 'governance.mjs'));
+  const roles = loadRoles(); const skills = loadSkills();
+  const cc = skills['code-craft'];
+  const dev = computeAllowedTools(roles.DEV_ENGINEER, [cc], ['src/a.js']);
+  assert(dev.includes('Bash(npm test:*)') && dev.includes('Bash(node:*)') && dev.includes('Edit(src/a.js)') && !dev.includes('Bash(npm:*)') && !dev.some((t) => /git/.test(t)), dev.join());
+  const qa = computeAllowedTools(roles.QA_AUDITOR, [cc], ['tests/a.test.js']);
+  assert(qa.includes('Bash(npm test:*)') && !qa.includes('Bash(node:*)') && !qa.some((t) => /npm run/.test(t)), qa.join());
+  assert(skillRulesNotGranted(roles.QA_AUDITOR, [cc]).join().includes('Bash(node:*)'), 'ungranted rule not reported');
+  const evil = { name: 'evil', allowedTools: ['Read', 'Bash(rm:*)', 'Bash(git push:*)', 'Bash(npm test:*)'] };
+  const d2 = computeAllowedTools(roles.DEV_ENGINEER, [evil], ['src/a.js']);
+  assert(!d2.some((t) => /rm|push/.test(t)) && d2.includes('Bash(npm test:*)') && !d2.some((t) => t.startsWith('Edit')), `skill granted something: ${d2.join()}`);
+  const ba = computeAllowedTools(roles.BA_ANALYST, [cc], ['docs/a.md']);
+  assert(!ba.some((t) => t.startsWith('Bash(node')), 'BA must not gain node');
+});
+
+await test('role + skill end-to-end: engine args for a DEV worker carry exactly the narrowed rules; the ungranted skill rule is logged', () => {
+  const d = sandbox();
+  drop(d, { id: 'skillrules', title: 's', verifyCmd: PASS, subtasks: [
+    { id: 'dev', role: 'DEV_ENGINEER', skills: ['code-craft'], targetFiles: ['src/a.js'], prompt: 'WRITE src/a.js a' },
+    { id: 'qa', role: 'QA_AUDITOR', skills: ['code-craft'], targetFiles: ['tests/a.test.js'], prompt: 'WRITE tests/a.test.js t' }] });
+  runOnce(d);
+  const tools = (id) => argsOf(d, id).find((a) => a.startsWith('ALLOWED=')).slice(8).split(',');
+  assert(tools('dev').includes('Bash(node:*)') && tools('dev').includes('Bash(npm test:*)'), tools('dev').join());
+  assert(!tools('qa').includes('Bash(node:*)'), tools('qa').join());
+  assert(log(d).some((e) => e.phase === 'SKILL_RULE_NOT_GRANTED' && /QA_AUDITOR/.test(e.message) && /node:\*/.test(e.message)), 'no SKILL_RULE_NOT_GRANTED for QA');
+  assert(promptOf(d, 'dev').includes('run the project\'s tests'), 'skill text lacks the self-test rule');
+});
+
+await test('PO_ARCHITECT works from the uat version of the project (not your folder), and is NOT re-asked while nothing changed', () => {
+  const { d, g } = gitSandbox();
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: PASS } }));
+  g('add', '-A'); g('commit', '-q', '-m', 'add package.json');
+  g('branch', 'uat'); g('checkout', '-q', 'uat');
+  fs.mkdirSync(path.join(d, 'src')); fs.writeFileSync(path.join(d, 'src', 'only-on-uat.js'), 'u');
+  g('add', '-A'); g('commit', '-q', '-m', 'work on uat'); g('checkout', '-q', 'main');
+  assert(!fs.existsSync(path.join(d, 'src', 'only-on-uat.js')), 'precondition: your folder (main) lacks the uat file');
+  setCharter(d, { autonomous: 'on' }, 'PO_JSON {"tasks":[]}');
+  setBacklog(d, []);
+  const poCalls = () => (fs.existsSync(path.join(d, '.mock-prompts', 'po-calls.txt')) ? fs.readFileSync(path.join(d, '.mock-prompts', 'po-calls.txt'), 'utf8').trim().split('\n').length : 0);
+  let r = tick(d);
+  assert(/empty/.test(r.stdout) && poCalls() === 1, `${r.stdout} calls=${poCalls()}`);
+  const po = promptOf(d, 'po-architect');
+  assert(po.includes('src/only-on-uat.js') && /the 'uat' branch @ [0-9a-f]{8}/.test(po), 'PO did not see the uat branch');
+  assert(g('worktree', 'list').split('\n').length === 1, 'PO view worktree left behind');
+  r = tick(d); // nothing changed → no second (paid) AI call
+  assert(/idle/.test(r.stdout) && poCalls() === 1, `PO asked again though nothing changed: ${r.stdout} calls=${poCalls()}`);
+  r = node(d, ['.harness/daemon.mjs', '--tick', '--force']);
+  assert(poCalls() === 2, `--force should ask again, calls=${poCalls()}`);
+  const cfgBacklog = backlog(d); cfgBacklog.push({ id: 'NEWIDEA', title: 'a new idea', status: 'BACKLOG' }); setBacklog(d, cfgBacklog);
+  tick(d);
+  assert(poCalls() === 3, `a changed backlog should trigger a new PO call, calls=${poCalls()}`);
+});
+
+await test('--status prints the harness status (read-only alias for status.mjs)', () => {
+  const d = sandbox();
+  runOnce(d);
+  const r = node(d, ['.harness/daemon.mjs', '--status']);
+  assert(r.status === 0 && /Daemon:/.test(r.stdout) && /Backlog:/.test(r.stdout) && /Autonomous:/.test(r.stdout), r.stdout + r.stderr);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

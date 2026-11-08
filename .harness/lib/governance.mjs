@@ -101,12 +101,27 @@ const baseTool = (rule) => String(rule).split('(')[0].trim();
 /** Turn "dir/" into "dir/**" for permission rules. */
 const toRulePath = (t) => (t.endsWith('/') ? `${t}**` : t);
 
+/** Does a role rule cover a skill rule? Same tool, and equal or a ":*" prefix match (Bash(npm:*) covers Bash(npm test:*)). */
+function covers(roleRule, skillRule) {
+  if (roleRule === skillRule) return true;
+  const [rt, ri] = [baseTool(roleRule), (roleRule.match(/\((.*)\)$/) || [])[1]];
+  const [st, si] = [baseTool(skillRule), (skillRule.match(/\((.*)\)$/) || [])[1]];
+  if (rt !== st || ri === undefined || si === undefined) return false;
+  if (!ri.endsWith(':*')) return false;
+  const prefix = ri.slice(0, -2);
+  return si === prefix || si.startsWith(`${prefix} `) || si.startsWith(`${prefix}:`);
+}
+
 /**
  * Compute the engine tool list for a worker:
  *  1. start from the role's allowedTools ("{targetFiles}" expands to one rule per target path;
  *     with no targets it expands to the role's writablePaths),
- *  2. a skill can only NARROW it: if the skill lists allowedTools, role rules whose base tool is
- *     not in the skill list are dropped (read-only tools are always kept).
+ *  2. a skill can only NARROW it. Per tool the skill lists either
+ *       - a bare name ("Edit")        → keep the role's rules for that tool unchanged, or
+ *       - exact rules ("Bash(npm test:*)") → replace the role's rules for that tool by those skill
+ *         rules that the role already covers (a skill can never grant a command the role lacks).
+ *     Tools the skill does not mention are dropped (read-only tools are always kept).
+ *  Returns the rules; use explainSkillNarrowing() for what a skill asked for but did not get.
  */
 export function computeAllowedTools(role, skills, targetFiles) {
   const targets = (targetFiles || []).length ? targetFiles.map(toRulePath) : (role.writablePaths || []);
@@ -117,10 +132,32 @@ export function computeAllowedTools(role, skills, targetFiles) {
   }
   for (const s of skills) {
     if (!Array.isArray(s.allowedTools) || s.allowedTools.length === 0) continue;
-    const keep = new Set(s.allowedTools.map(baseTool));
-    rules = rules.filter((r) => READ_ONLY_TOOLS.has(baseTool(r)) || keep.has(baseTool(r)));
+    const bare = new Set(s.allowedTools.filter((r) => !r.includes('(')).map(baseTool));
+    const exact = new Map();
+    for (const r of s.allowedTools.filter((x) => x.includes('('))) exact.set(baseTool(r), [...(exact.get(baseTool(r)) || []), r]);
+    const before = rules;
+    const out = [];
+    for (const r of before) {
+      const t = baseTool(r);
+      if (READ_ONLY_TOOLS.has(t) || bare.has(t)) out.push(r);
+    }
+    for (const [t, skillRules] of exact) {
+      if (bare.has(t)) continue; // a bare name already keeps the role's rules
+      for (const sr of skillRules) if (before.some((r) => covers(r, sr))) out.push(sr);
+    }
+    rules = out;
   }
   return [...new Set(rules)];
+}
+
+/** Skill rules the role does NOT cover (asked for, not granted) — for logs and Doctor. */
+export function skillRulesNotGranted(role, skills) {
+  const roleRules = role.allowedTools || [];
+  const missing = [];
+  for (const s of skills) for (const r of s.allowedTools || []) {
+    if (r.includes('(') && !roleRules.some((rr) => covers(rr, r))) missing.push(`${s.name}: ${r}`);
+  }
+  return missing;
 }
 
 /** Charter forbidden paths + tools → engine deny rules (Claude: --disallowedTools). */

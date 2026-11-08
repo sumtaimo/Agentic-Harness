@@ -112,7 +112,8 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
   `DEV_ENGINEER` (code), `QA_AUDITOR` (tests). A worker's role sets its persona **and** its
   engine permissions: with Claude Code it can only edit its own targetFiles.
 - Skills (`.harness/skills/<name>/SKILL.md`, frontmatter `name`, `description`, `roles`,
-  `allowedTools`): rules injected into matching workers. A skill can narrow tools, never add.
+  `allowedTools`): rules injected into matching workers. A skill can narrow tools, never add;
+  exact rules like `Bash(npm test:*)` are granted only if the role already covers them.
 - One step now: `node .harness/daemon.mjs --tick`. Scheduled: `node .harness/daemon.mjs --autonomous`
   (only one daemon per folder). When READY items run out, the PO_ARCHITECT proposes new ones
   (≤ budget); its suggested checks are recorded, never run.

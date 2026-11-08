@@ -10,20 +10,24 @@
 // It also saves the full prompt it received to .mock-prompts/<worker-id>.txt
 import fs from 'node:fs';
 import path from 'node:path';
+// Run from a harness worktree? Log at the real project root so tests can find the files.
+const wtMarker = `${path.sep}.harness${path.sep}worktrees${path.sep}`;
+const projectRoot = process.cwd().includes(wtMarker) ? process.cwd().split(wtMarker)[0] : process.cwd();
+const MP = path.join(projectRoot, '.mock-prompts');
 
 let prompt = '';
 for await (const chunk of process.stdin) prompt += chunk;
 const id = process.env.HARNESS_WORKER_ID || 'unknown';
-fs.mkdirSync('.mock-prompts', { recursive: true });
-fs.writeFileSync(path.join('.mock-prompts', `${id}.txt`), prompt);
+fs.mkdirSync(MP, { recursive: true });
+fs.writeFileSync(path.join(MP, `${id}.txt`), prompt);
 
-fs.writeFileSync(path.join('.mock-prompts', `${id}.args.json`), JSON.stringify(process.argv.slice(2)));
-fs.appendFileSync(path.join('.mock-prompts', 'timeline.txt'), `${Date.now()} start ${id}\n`);
+fs.writeFileSync(path.join(MP, `${id}.args.json`), JSON.stringify(process.argv.slice(2)));
+fs.appendFileSync(path.join(MP, 'timeline.txt'), `${Date.now()} start ${id}\n`);
 
 // PO_ARCHITECT mode: echo back the task list embedded in charter.md as "PO_JSON {...}" (one line).
 if (prompt.startsWith('[HARNESS PO_ARCHITECT]')) {
-  fs.appendFileSync(path.join('.mock-prompts', 'po-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);
-  fs.writeFileSync(path.join('.mock-prompts', 'po.txt'), prompt);
+  fs.appendFileSync(path.join(MP, 'po-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);
+  fs.writeFileSync(path.join(MP, 'po.txt'), prompt);
   const plan = (prompt.match(/PO_JSON (\{.*\})/) || [])[1] || 'not json';
   console.log(JSON.stringify({ type: 'result', is_error: false, result: plan }));
   process.exit(0);
@@ -31,8 +35,8 @@ if (prompt.startsWith('[HARNESS PO_ARCHITECT]')) {
 
 // Planner mode: echo back the plan embedded in the goal as "PLAN_JSON {...}" (one line).
 if (prompt.startsWith('[HARNESS PLANNER]')) {
-  fs.appendFileSync(path.join('.mock-prompts', 'planner-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);
-  fs.writeFileSync(path.join('.mock-prompts', 'planner.txt'), prompt);
+  fs.appendFileSync(path.join(MP, 'planner-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);
+  fs.writeFileSync(path.join(MP, 'planner.txt'), prompt);
   const plan = (prompt.match(/PLAN_JSON (\{.*\})/) || [])[1] || 'not json';
   console.log(JSON.stringify({ type: 'result', is_error: false, result: 'Here is the plan:\n```json\n' + plan + '\n```' }));
   process.exit(0);
@@ -56,6 +60,6 @@ for (const line of task.split('\n')) {
     fs.writeFileSync(file, rest.join(' '));
   }
 }
-fs.appendFileSync(path.join('.mock-prompts', 'timeline.txt'), `${Date.now()} end ${id}\n`);
+fs.appendFileSync(path.join(MP, 'timeline.txt'), `${Date.now()} end ${id}\n`);
 const result = { type: 'result', is_error: false, result: `mock ${id} done`, duration_ms: 42, permission_denials: denials };
 console.log(JSON.stringify(result));

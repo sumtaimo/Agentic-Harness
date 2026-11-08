@@ -161,6 +161,12 @@ you're happy.
 Manual tasks keep editing your folder, unless you ask for the branch: `dispatch.mjs --branch uat …`.
 Change this in `config.json` → `git` (`integrationMode`: `autonomous` | `always` | `off`).
 
+**The PO is not re-asked needlessly.** On every heartbeat with an empty backlog, the PO would
+otherwise be asked again (a paid AI call every minute). Instead the harness remembers a fingerprint of the
+charter, backlog and `uat` tip (`.harness/auto-state.json`). If the PO said "nothing to do" and
+nothing changed, the tick is skipped (`--tick --force` asks again). The PO also reads the `uat` version of
+the project (a temporary worktree), not whatever branch your folder is on.
+
 ### Watching the agents live
 While a task runs, the terminal shows what each agent does, as it happens, one line per action:
 ```
@@ -196,6 +202,14 @@ allowedTools: ["Read", "Edit", "Write"]
 ---
 rules in plain words…
 ```
+In `allowedTools` a skill lists, per tool, either a bare name (`Edit`: keep the role's rules for it)
+or **exact rules** (`Bash(npm test:*)`: replace the role's rules for that tool by these, but only
+those the role already covers, so `Bash(npm:*)` in the role covers `Bash(npm test:*)`). The shipped
+`code-craft` skill uses this to let DEV run **only** `npm test` and `node`: DEV can test its own code,
+but not use `git`, `rm`, or any other command. The QA role lacks `node:*`, so QA never gets it
+(Doctor and the log say so). Note that `node` can write to any file in its working folder: in
+`uat` mode anything outside the worker's files is discarded before commit, and the check runs on the merged candidate.
+
 A worker gets a skill when its task lists it (`"skills": ["code-craft"]`) or when the AI
 planner or PO picks it. A skill is only given to the roles it names, and a skill can only
 **narrow** a role's tools, never add to them. The sample `code-craft` skill requires a
@@ -294,13 +308,14 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 ```bash
 node .harness/daemon.mjs                 # watch mode with live HUD (also: --once, --self-test)
 node .harness/daemon.mjs --autonomous --interval 300   # scheduled autonomous controller
-node .harness/daemon.mjs --tick          # one autonomous step, then exit
+node .harness/daemon.mjs --tick          # one autonomous step, then exit (--force: ask the PO even if nothing changed)
+node .harness/daemon.mjs --status        # same as status.mjs
 node .harness/backlog.mjs overview|add|ready|block|pop|import|releases
 node .harness/dispatch.mjs --help        # all options: --goal --files --check --engine --auto-plan --wait, swarm --worker id:files:prompt
 node .harness/memory.mjs list|remember|forget|context|sessions
 node .harness/doctor.mjs                 # setup check + engine flag probe
 node .harness/status.mjs --log 25        # state + recent JSONL events
-node test/run-tests.mjs                  # 51 end-to-end tests with a mock engine (no AI account needed)
+node test/run-tests.mjs                  # 56 end-to-end tests with a mock engine (no AI account needed)
 ```
 
 Job file format (`.harness/inbox/*.json`):
@@ -393,6 +408,11 @@ problems were then found and fixed:
      no retry.
 
    v2.1 fixes all of these (see section 4).
+9. v2.2 let DEV run `npm test`/`node` (exact skill rules), added `--status`, Doctor git-cleanliness
+   checks and the PO throttle. Its live run found a **v2.1 bug**: modifying an existing file in `uat`
+   mode lost the first letter of its path (git's `" M path"` was trimmed), so the edit was discarded as "out
+   of scope" and the task failed 3 times. `uat` stayed safe, but good work was thrown away. Fixed, with a
+   regression test that fails when the bug is put back.
 
 ## License
 

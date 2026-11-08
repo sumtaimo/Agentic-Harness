@@ -18,6 +18,11 @@ export async function git(args, cwd) {
   const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 64 * 1024 * 1024 });
   return stdout.trim();
 }
+/** Raw git output, NOT trimmed — required for `status --porcelain`, whose first column can be a space (" M path"). */
+async function gitRaw(args, cwd) {
+  const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 64 * 1024 * 1024 });
+  return stdout;
+}
 const tryGit = (args, cwd) => git(args, cwd).catch(() => null);
 
 /** Branch names git accepts: keep [A-Za-z0-9._/-], no "..", no leading "-" or trailing ".lock". */
@@ -84,7 +89,7 @@ export async function ensureWorkerWorktree({ wtPath, branch, baseSha, root, link
  * inScope(file, targets) decides; .harness/ and linked folders are always ignored.
  */
 export async function commitScoped({ wtPath, targets, inScope, message, root, ignore = [] }) {
-  const raw = await git(['status', '--porcelain', '-uall', '-z'], wtPath);
+  const raw = await gitRaw(['status', '--porcelain', '-uall', '-z'], wtPath);
   const entries = raw.split('\0').filter(Boolean);
   const kept = []; const discarded = [];
   for (let i = 0; i < entries.length; i++) {

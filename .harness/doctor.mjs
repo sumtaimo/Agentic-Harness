@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, listLessons, probeEngine, profileFlags, detectVerifyCmd } from './lib/common.mjs';
-import { readCharter, loadRoles, loadSkills, readBacklog, backlogCounts, validateBacklog, listReleases } from './lib/governance.mjs';
+import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, readBacklog, backlogCounts, validateBacklog, listReleases } from './lib/governance.mjs';
 
 ensureDirs();
 const ok = (m) => console.log(`  ✔ ${m}`);
@@ -63,6 +63,7 @@ const roleNames = Object.keys(roles);
 roleNames.length ? ok(`roles: ${roleNames.join(', ')}`) : warn('No roles in .harness/roles/ — workers run without personas or per-role tool limits.');
 const skills = loadSkills();
 for (const s of Object.values(skills)) {
+  for (const r of s.roles) if (roles[r]) { const ng = skillRulesNotGranted(roles[r], [s]); if (ng.length) warn(`skill ${s.name} asks for tool rules role ${r} does not allow (ignored): ${ng.map((x) => x.split(': ')[1]).join(', ')}`); }
   const badRoles = s.roles.filter((r) => !roles[r]);
   badRoles.length ? warn(`skill ${s.name}: unknown role(s) ${badRoles.join(', ')}`) : ok(`skill ${s.name} → roles ${s.roles.join(', ') || 'any'}${s.allowedTools.length ? `; narrows tools to ${s.allowedTools.join(', ')}` : ''}`);
 }
@@ -92,6 +93,13 @@ console.log('\nGit integration branch (where autonomous work lands)');
       ok(tip ? `'${g.integrationBranch}' exists @ ${tip}. See its work with: git log --oneline ${g.integrationBranch}` : `'${g.integrationBranch}' does not exist yet; it will be created from ${g.integrationBase || 'HEAD'} on the first task.`);
       const left = (sh(['branch', '--list', 'harness/*']) || '').split('\n').map((b) => b.replace(/^[*+\s]+/, '').trim()).filter(Boolean);
       if (left.length) warn(`${left.length} worker branch(es) kept from failed tasks for review: ${left.slice(0, 5).join(', ')}${left.length > 5 ? ' …' : ''} (delete with: git branch -D <name>)`);
+      const wts = (sh(['worktree', 'list', '--porcelain']) || '').split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice(9));
+      const stray = wts.filter((w) => path.resolve(w) !== path.resolve(ROOT));
+      stray.length ? warn(`${stray.length} extra git worktree(s) still registered (a task may be running, or one was interrupted): ${stray.join(', ')}. Clean with: git worktree prune`) : ok('git worktrees clean: only your own folder');
+      const dirty = sh(['status', '--porcelain', '--untracked-files=no', '--', '.', ':(exclude).harness']);
+      dirty ? warn('Your folder has uncommitted changes (the harness never touches them; it only refuses to fast-forward a checked-out uat over them).') : ok('your folder has no uncommitted changes');
+      const prot = (g.protectedBranches || []).map((b) => [b, sh(['rev-parse', '--short', `refs/heads/${b}`])]).filter(([, sha]) => sha);
+      if (prot.length) ok(`protected branches (never written by the harness): ${prot.map(([b, sha]) => `${b}@${sha}`).join(', ')}`);
       if (!sh(['config', 'user.email'])) warn('git has no user.email: harness commits will use "Agentic Harness <harness@localhost>".');
     }
   }

@@ -24,6 +24,7 @@
  */
 
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { exec, execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -34,7 +35,7 @@ import {
 } from './lib/common.mjs';
 import {
   readCharter, loadRoles, loadSkills, matchSkills, computeAllowedTools, computeDisallowedTools,
-  matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, backlogCounts, itemToJob
+  matchesAny, withinAll, skillRulesNotGranted, readBacklog, writeBacklog, updateBacklogItem, nextReady, backlogCounts, itemToJob
 } from './lib/governance.mjs';
 import {
   isRepoWithCommits, branchSha, ensureBranch, protectedShas, ensureWorkerWorktree, commitScoped,
@@ -351,6 +352,10 @@ function resolveGovernance(sub, gov) {
   sub.resolvedRole = role ? role.name : null;
   sub.resolvedSkills = m.chosen.map((s) => s.name);
   sub.resolvedTools = role ? computeAllowedTools(role, m.chosen, sub.targetFiles) : (sub.allowedTools || null);
+  if (role) {
+    const notGranted = skillRulesNotGranted(role, m.chosen);
+    if (notGranted.length) logTelemetry('SKILL_RULE_NOT_GRANTED', `${sub.id}: skill asked for tools the role ${role.name} does not allow: ${notGranted.join('; ')}`, { worker: sub.id, notGranted });
+  }
   sub.deniedTools = computeDisallowedTools(gov.charter);
   if (role || m.chosen.length) {
     logTelemetry('1_ROLE_SKILL_MATCH', `${sub.id}: role ${sub.resolvedRole || '-'}, skills [${sub.resolvedSkills.join(', ')}]`, { worker: sub.id, role: sub.resolvedRole, skills: sub.resolvedSkills, allowedTools: sub.resolvedTools });
@@ -997,6 +1002,7 @@ function daemonAlive() {
 // Budget: at most charter maxAutoTasksPerRun dispatches per run (a run = one --autonomous session or one --tick).
 // Any autonomous task that fails pauses autonomy for the rest of the run: a human decides.
 
+const AUTO_STATE_FILE = path.join(path.dirname(FILES.state), 'auto-state.json'); // survives restarts and separate --tick runs
 const auto = { enabled: false, intervalSec: 300, used: 0, paused: null, ticking: false, lastTick: null, lastResult: '-' };
 
 function inboxCount() { return fs.readdirSync(DIRS.inbox).filter((f) => f.endsWith('.json')).length; }
@@ -1012,12 +1018,35 @@ function refreshAutoStatus(note) {
   });
 }
 
+/**
+ * The version of the project autonomous work builds on. In integration mode that is the tip of the
+ * integration branch (a detached worktree, removed afterwards) — NOT the user's folder, which may be
+ * on another branch. Returns { dir, tip, cleanup }.
+ */
+async function projectView() {
+  const branch = integrationFor({ autonomous: true });
+  if (!branch || !(await isRepoWithCommits(ROOT))) return { dir: ROOT, tip: null, cleanup: async () => {} };
+  const g = config.git || {};
+  const tip = (await branchSha(branch, ROOT)) || (await branchSha(g.integrationBase && g.integrationBase !== 'HEAD' ? g.integrationBase : 'HEAD', ROOT).catch(() => null))
+    || (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: ROOT })).stdout.trim();
+  const dir = path.join(DIRS.worktrees, '_view');
+  await removeWorktree(dir, ROOT);
+  fs.rmSync(dir, { recursive: true, force: true });
+  await execFileAsync('git', ['worktree', 'add', '-q', '--detach', dir, tip], { cwd: ROOT });
+  for (const n of g.linkIntoWorktrees || ['node_modules']) {
+    const src = path.join(ROOT, n); const dest = path.join(dir, n);
+    if (fs.existsSync(src) && !fs.existsSync(dest)) { try { fs.symlinkSync(src, dest, 'dir'); } catch { /* best effort */ } }
+  }
+  return { dir, tip, cleanup: async () => { await removeWorktree(dir, ROOT); fs.rmSync(dir, { recursive: true, force: true }); } };
+}
+
 /** PO_ARCHITECT: read charter + repo + backlog, propose ≤ max tasks, validate, add them as READY. */
 async function poGenerate(gov, max) {
   const po = gov.roles.PO_ARCHITECT || { name: 'PO_ARCHITECT', description: 'Product Owner and System Architect.', allowedTools: ['Read', 'Glob', 'Grep'] };
   const b = readBacklog();
-  const { files, total } = listProjectFiles(ROOT, (config.planner || {}).maxFilesListed || 400);
-  const scripts = readJsonSafe(path.join(ROOT, 'package.json'), null)?.scripts;
+  const view = await projectView();
+  const { files, total } = listProjectFiles(view.dir, (config.planner || {}).maxFilesListed || 400);
+  const scripts = readJsonSafe(path.join(view.dir, 'package.json'), null)?.scripts;
   const maxWorkers = (config.planner || {}).maxWorkers || 4;
   const prompt = [
     '[HARNESS PO_ARCHITECT]',
@@ -1034,7 +1063,7 @@ async function poGenerate(gov, max) {
     gov.charter.allowedPaths.length ? `[ALLOWED PATHS for autonomous work]: ${gov.charter.allowedPaths.join(', ')}` : '',
     `\n[CHARTER]:\n${gov.charter.text}`,
     `\n[CURRENT BACKLOG]:\n${b.tasks.map((t) => `- ${t.id} [${t.status}] ${t.title || t.goal}`).join('\n') || '(empty)'}`,
-    `\n[PROJECT FILES (${files.length} of ${total})]:\n${files.join('\n') || '(empty project)'}`,
+    `\n[PROJECT FILES (${files.length} of ${total})${view.tip ? ` — the '${integrationFor({ autonomous: true })}' branch @ ${view.tip.slice(0, 8)}, which is what autonomous work builds on` : ''}]:\n${files.join('\n') || '(empty project)'}`,
     scripts ? `\n[package.json scripts]:\n${JSON.stringify(scripts, null, 2)}` : '',
     memoryContext(config) ? `\n[USER MEMORY]:\n${memoryContext(config)}` : ''
   ].filter(Boolean).join('\n');
@@ -1042,14 +1071,16 @@ async function poGenerate(gov, max) {
   writeState({ phase: '0_PO_ARCHITECT', taskTitle: 'PO_ARCHITECT is grooming the backlog from charter.md', planSummary: `generating ≤ ${max} task(s)` });
   logTelemetry('0_PO_ARCHITECT', `Backlog has no READY items; asking PO_ARCHITECT for up to ${max} task(s)`);
   let parsed = null; let lastErr = '';
-  for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
-    const { output } = await spawnEngine({
-      id: 'po-architect', prompt: attempt === 1 ? prompt : `${prompt}\n\n[YOUR PREVIOUS REPLY WAS NOT VALID JSON — reply with the JSON object only]: ${lastErr}`,
-      cwd: ROOT, timeoutMs: config.workerTimeoutMs,
-      allowedTools: computeAllowedTools(po, [], []), disallowedTools: computeDisallowedTools(gov.charter)
-    });
-    try { parsed = extractJson(output); if (!Array.isArray(parsed.tasks)) throw new Error('no "tasks" list'); } catch (e) { parsed = null; lastErr = `${e.message}: ${output.slice(0, 200)}`; }
-  }
+  try {
+    for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
+      const { output } = await spawnEngine({
+        id: 'po-architect', prompt: attempt === 1 ? prompt : `${prompt}\n\n[YOUR PREVIOUS REPLY WAS NOT VALID JSON — reply with the JSON object only]: ${lastErr}`,
+        cwd: view.dir, timeoutMs: config.workerTimeoutMs,
+        allowedTools: computeAllowedTools(po, [], []), disallowedTools: computeDisallowedTools(gov.charter)
+      });
+      try { parsed = extractJson(output); if (!Array.isArray(parsed.tasks)) throw new Error('no "tasks" list'); } catch (e) { parsed = null; lastErr = `${e.message}: ${output.slice(0, 200)}`; }
+    }
+  } finally { await view.cleanup(); }
   if (!parsed) { logTelemetry('0_PO_INVALID', `PO_ARCHITECT reply unusable: ${lastErr}`); throw fatal(`PO_ARCHITECT reply was not valid JSON twice: ${lastErr}`); }
 
   const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
@@ -1086,6 +1117,13 @@ async function poGenerate(gov, max) {
   return added;
 }
 
+/** Fingerprint of everything the PO's answer depends on: charter, backlog, and the integration branch tip. */
+async function poFingerprint(gov) {
+  const branch = integrationFor({ autonomous: true });
+  const tip = branch ? (await branchSha(branch, ROOT).catch(() => null)) || '' : '';
+  return crypto.createHash('sha1').update(gov.charter.text).update(JSON.stringify(readBacklog().tasks)).update(tip).digest('hex');
+}
+
 /** One controller tick. Returns a short result code. */
 async function autonomousTick(reason = 'interval') {
   if (auto.ticking) return 'busy';
@@ -1100,15 +1138,21 @@ async function autonomousTick(reason = 'interval') {
 
     let item = nextReady();
     if (!item) {
-      if (gov.charter.requireRealCheck && !detectVerifyCmd(ROOT, config).real) {
+      const checkView = await projectView();
+      const realCheck = detectVerifyCmd(checkView.dir, config).real; await checkView.cleanup();
+      if (gov.charter.requireRealCheck && !realCheck) {
         auto.paused = 'no real check for PO-generated tasks (add a package.json test script)';
         logTelemetry('AUTO_PAUSED', auto.paused); refreshAutoStatus(); return 'paused';
       }
+      const fp = await poFingerprint(gov);
+      const saved = readJsonSafe(AUTO_STATE_FILE, {});
+      if (saved.poIdleFp === fp && !process.argv.includes('--force')) { refreshAutoStatus('idle: PO found nothing to do and nothing changed since (no AI call; --tick --force asks again)'); return 'idle'; }
       let added = [];
       try { added = await poGenerate(gov, remaining); } catch (e) {
         auto.paused = `PO_ARCHITECT failed: ${e.message.slice(0, 120)}`; logTelemetry('AUTO_PAUSED', auto.paused); refreshAutoStatus(); return 'paused';
       }
-      if (!added.length) { refreshAutoStatus('PO_ARCHITECT: nothing left to do for the charter'); return 'empty'; }
+      if (!added.length) { atomicWriteJson(AUTO_STATE_FILE, { poIdleFp: fp, at: new Date().toISOString() }); refreshAutoStatus('PO_ARCHITECT: nothing left to do for the charter'); return 'empty'; }
+      if (fs.existsSync(AUTO_STATE_FILE)) fs.rmSync(AUTO_STATE_FILE, { force: true });
       item = nextReady();
     }
     if (!item) { refreshAutoStatus('no READY items'); return 'empty'; }
@@ -1131,6 +1175,11 @@ async function autonomousTick(reason = 'interval') {
 
 const args = process.argv.slice(2);
 const selfTestMode = args.includes('--self-test');
+if (args.includes('--status')) { // convenience alias for status.mjs (read-only)
+  const { spawnSync } = await import('node:child_process');
+  const r = spawnSync(process.execPath, [path.join(ROOT, '.harness', 'status.mjs'), '--log', '8'], { stdio: 'inherit' });
+  process.exit(r.status ?? 0);
+}
 const tickMode = args.includes('--tick');
 const onceMode = args.includes('--once') || tickMode;
 const argVal = (flag) => { const i = args.indexOf(flag); return i > -1 ? args[i + 1] : undefined; };
