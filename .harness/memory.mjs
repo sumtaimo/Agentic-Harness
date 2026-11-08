@@ -19,6 +19,10 @@ import { DIRS, FILES, ensureDirs, loadConfig, remember, forget, listLessons, mem
 
 ensureDirs();
 const [cmd, ...rest] = process.argv.slice(2);
+if (process.env.HARNESS_WORKER === '1' && ['remember', 'add', 'teach', 'forget', 'forget-auto'].includes(cmd)) {
+  console.error('Harness workers must not change the user memory.');
+  process.exit(2);
+}
 const text = rest.join(' ').trim();
 
 switch (cmd) {

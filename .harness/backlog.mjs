@@ -31,6 +31,10 @@ import {
 
 ensureDirs();
 let argv = process.argv.slice(2);
+if (process.env.HARNESS_WORKER === '1' && !['list', 'overview', 'releases'].includes(argv[0] || 'list')) {
+  console.error('Harness workers may only read the backlog (list / overview / releases).');
+  process.exit(2);
+}
 if (argv[0] === '--pop') argv[0] = 'pop';
 if (argv[0] === '--import') argv[0] = 'import';
 const [cmd = 'list', ...rest] = argv;

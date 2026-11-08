@@ -113,6 +113,8 @@ fs.writeFileSync(`${inboxPath}.tmp`, JSON.stringify(job, null, 2)); // atomic ha
 fs.renameSync(`${inboxPath}.tmp`, inboxPath);                       // the daemon never sees half a file
 console.log(`Dispatched [${(engine || config.activeProfile).toUpperCase()}] job ${job.id} (${usePlanner ? 'AI planner will choose the workers' : `${job.subtasks.length} worker[s]`}) -> ${path.relative(ROOT, inboxPath)}`);
 console.log(`Check: ${checkLine}`);
+console.log(`JOB_ID=${job.id}`);
+console.log(`LIVE_FROM=${(() => { try { return fs.statSync(path.join(ROOT, '.harness', 'live.log')).size; } catch { return 0; } })()}`);
 if (branch) console.log(`Git: result is merged into '${branch}' only if the check passes; your folder and protected branches are not touched.`);
 
 if (!wait) process.exit(0);

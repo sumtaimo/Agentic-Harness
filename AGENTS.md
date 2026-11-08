@@ -90,6 +90,15 @@ Rules for you when dispatching:
   discarded); otherwise it is an instruction plus the backup.
 - The AI planner's suggested check is only recorded, never run. Review it with the user before
   using it as `--check`.
+- **Show the work live in the chat** (preferred when the user wants to watch):
+  1. Make sure the controller runs: `node .harness/daemon.mjs --status`; if not, start it with the
+     Bash tool in the background (`run_in_background: true`): `node .harness/daemon.mjs`.
+  2. Dispatch **without** `--wait`. Note the `JOB_ID=` and `LIVE_FROM=` lines it prints.
+  3. Start the Monitor tool with `node .harness/watch.mjs --job <JOB_ID> --from <LIVE_FROM>`
+     (`timeout_ms` 900000). Every line is an agent action happening right now; say in one short
+     sentence what matters. It ends with a `RESULT:` line (exit 0 = committed). Do not poll or sleep.
+  Without Monitor, tell the user to follow the same feed in a terminal: `node .harness/watch.mjs`
+  (or the VS Code task "Harness: 1. Start (live screen)", which shows it automatically).
 - After `--wait` finishes, read the session note it prints (`.harness/memory/sessions/…`) and
   explain the outcome to the user in plain words.
 - On `HALTED_HITL_REQUIRED` or `REJECTED`: do **not** silently retry. The scoped files have
@@ -150,6 +159,8 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/releases/` | snapshots made before every upload (git-ignored, never edit) |
 | `.harness/examples/backlog.sample.json` | a BA + DEV + QA parallel sample to import |
 | `.harness/state.json` · `telemetry.log` | live state · JSONL event log |
+| `.harness/live.log` · `watch.mjs` | plain-text live feed of every agent action · follow it (`--job <id>` ends with the result) |
+| `.harness/hook-session.mjs` | prints harness state for an editor AI at session start (needs the Claude Code hook; see README) |
 | `.vscode/tasks.json` | buttons for the user (Run Task menu) |
 
 Engines marked `"verified": false` in `config.json` have command-line flags that were not tested

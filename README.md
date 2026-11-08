@@ -112,6 +112,19 @@ automatically**.
   that holds the error from every cycle (a "dead-letter queue").
 - **No runaway loops.** It stops after 3 cycles, and workers cannot start new jobs.
 
+### Watching the agents inside your editor
+Three ways to see the agents work, all fed by the same plain-text feed (`.harness/live.log`):
+1. **VS Code / Antigravity / Cursor:** task "Harness: 1. Start (live screen)" opens a terminal panel when the folder
+   opens. It shows the dashboard while idle and one line per agent action while a task runs.
+2. **Any terminal:** `node .harness/watch.mjs` follows the feed. `node .harness/watch.mjs --job <id>` stops
+   with the result (exit 0 = committed).
+3. **Inside an AI chat (Claude Code):** ask the chat to run your task "through the harness". `AGENTS.md` tells
+   it to start the controller in the background, dispatch, and stream `watch.mjs` with its `Monitor` tool,
+   so each agent action arrives in the chat as it happens, ending with the result.
+
+`.harness/hook-session.mjs` prints a short harness status (controller running? backlog? autonomy?) for
+an editor AI when a session starts. It is designed to run as a Claude Code `SessionStart` hook.
+
 ## 4. Autonomous controller ("act as me")
 
 The controller works **on your behalf**, but only inside the rules you write in
@@ -321,7 +334,8 @@ node .harness/dispatch.mjs --help        # all options: --goal --files --check -
 node .harness/memory.mjs list|remember|forget|context|sessions
 node .harness/doctor.mjs                 # setup check + engine flag probe
 node .harness/status.mjs --log 25        # state + recent JSONL events
-node test/run-tests.mjs                  # 57 end-to-end tests with a mock engine (no AI account needed)
+node .harness/watch.mjs --job <id>       # live feed of every agent action until that job finishes
+node test/run-tests.mjs                  # 61 end-to-end tests with a mock engine (no AI account needed)
 ```
 
 Job file format (`.harness/inbox/*.json`):

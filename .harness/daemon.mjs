@@ -74,6 +74,11 @@ function writeState(patch) {
   return state;
 }
 
+/** Plain-text live feed (no colours) that anything can follow: `tail -f`, the editor chat's Monitor, watch.mjs. */
+function liveLog(line) {
+  try { fs.appendFileSync(FILES.live, `${new Date().toISOString().slice(11, 19)} ${String(line).replace(/\x1b\[[0-9;]*m/g, '')}\n`); } catch { /* feed is best effort */ }
+}
+
 function logTelemetry(phase, message, meta = {}) {
   const entry = JSON.stringify({ ts: new Date().toISOString(), phase, message, ...meta });
   fs.appendFileSync(FILES.log, entry + '\n');
@@ -122,7 +127,7 @@ function renderHUD(s) {
   // so the agents' streamed activity stays readable on screen.
   if (!process.stdout.isTTY || (liveOn() && draining)) {
     const line = `${p} | ${s.engine || '-'} | cycle ${s.cycle || 0}/${MAX_CYCLES} | ${s.taskTitle || ''} | ${s.workerSummary || ''} | ${s.lastGateStatus || ''}`;
-    if (line !== lastCompact) { lastCompact = line; console.log(`${process.stdout.isTTY ? C.bold : ''}[harness]${process.stdout.isTTY ? C.reset : ''} ${line}`); }
+    if (line !== lastCompact) { lastCompact = line; liveLog(`[harness] ${line}`); console.log(`${process.stdout.isTTY ? C.bold : ''}[harness]${process.stdout.isTTY ? C.reset : ''} ${line}`); }
     return;
   }
   const color = p.startsWith('HALT') || p.includes('FAIL') || p === 'REJECTED' ? C.red
@@ -197,6 +202,7 @@ function livePrint(id, text) {
   if (!liveColor.has(id)) liveColor.set(id, LIVE_COLORS[liveColor.size % LIVE_COLORS.length]);
   const tty = process.stdout.isTTY;
   const label = `[${id}]`.padEnd(18);
+  liveLog(`  ${label} ${text}`);
   process.stdout.write(`${tty ? liveColor.get(id) : ''}  ${label}${tty ? '\x1b[0m' : ''} ${text}\n`);
 }
 const oneLine = (t, n = 160) => { const x = String(t ?? '').replace(/\s+/g, ' ').trim(); return x.length > n ? `${x.slice(0, n - 1)}…` : x; };
@@ -1173,6 +1179,7 @@ async function autonomousTick(reason = 'interval') {
 
 // ───────────────────────────── entry point ─────────────────────────────
 
+if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must not start the controller.'); process.exit(2); }
 const args = process.argv.slice(2);
 const selfTestMode = args.includes('--self-test');
 if (args.includes('--status')) { // convenience alias for status.mjs (read-only)
@@ -1231,6 +1238,7 @@ if (selfTestMode) {
     process.exit(0);
   }
   fs.writeFileSync(FILES.pid, String(process.pid));
+  try { fs.writeFileSync(FILES.live, ''); } catch { /* ignore */ }
   const cleanup = () => { try { if (Number(fs.readFileSync(FILES.pid, 'utf8')) === process.pid) fs.rmSync(FILES.pid); } catch { /* ignore */ } };
   process.on('exit', cleanup);
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process.exit(0));

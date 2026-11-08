@@ -32,6 +32,7 @@ export const FILES = {
   log: path.join(HARNESS_DIR, 'telemetry.log'),
   pid: path.join(HARNESS_DIR, 'daemon.pid'),
   probe: path.join(HARNESS_DIR, 'engine-probe.json'),
+  live: path.join(HARNESS_DIR, 'live.log'),
   profile: path.join(HARNESS_DIR, 'memory', 'profile.md'),
   lessons: path.join(HARNESS_DIR, 'memory', 'lessons.md'),
   autoLessons: path.join(HARNESS_DIR, 'memory', 'auto-lessons.md')

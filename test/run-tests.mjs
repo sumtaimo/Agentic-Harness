@@ -882,5 +882,70 @@ await test('--status prints the harness status (read-only alias for status.mjs)'
   assert(r.status === 0 && /Daemon:/.test(r.stdout) && /Backlog:/.test(r.stdout) && /Autonomous:/.test(r.stdout), r.stdout + r.stderr);
 });
 
+
+// ───────────── v2.3: editor integration (live feed, watch, session hook, worker guards) ─────────────
+
+function liveSandbox() {
+  const d = sandbox();
+  const cfg = json(path.join(d, '.harness', 'config.json'));
+  cfg.profiles.mock.args = [MOCK, '{output}', 'ALLOWED={allowedTools}'];
+  cfg.profiles.mock.output = { batch: ['FMT=json'], stream: ['FMT=stream'] };
+  fs.writeFileSync(path.join(d, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
+  return d;
+}
+
+await test('live feed + watch: a running controller writes live.log; "watch --job" streams the agent actions from the dispatch point and exits 0 with the result', async () => {
+  const d = liveSandbox();
+  const daemon = spawn(process.execPath, ['.harness/daemon.mjs'], { cwd: d, env: { ...env, HARNESS_LIVE: '1' }, stdio: 'ignore' });
+  await waitFor(() => fs.existsSync(path.join(d, '.harness', 'daemon.pid')), 8000);
+  const disp = node(d, ['.harness/dispatch.mjs', '--goal', 'SAY Building it now\nWRITE src/a.js a', '--files', 'src/a.js', '--check', existsCheck('src/a.js')]);
+  const id = (disp.stdout.match(/^JOB_ID=(\S+)/m) || [])[1]; const from = (disp.stdout.match(/^LIVE_FROM=(\d+)/m) || [])[1];
+  assert(id && from !== undefined, disp.stdout);
+  const w = node(d, ['.harness/watch.mjs', '--job', id, '--from', from, '--max-wait', '30']);
+  daemon.kill('SIGTERM'); await new Promise((r) => daemon.on('close', r));
+  assert(w.status === 0, `watch exit ${w.status}\n${w.stdout}`);
+  for (const want of ['agent started (mock-model)', '💬 Building it now', '🔧 Write src/a.js', 'RESULT: COMMITTED']) assert(w.stdout.includes(want), `missing "${want}" in:\n${w.stdout}`);
+  assert(!/\x1b\[/.test(fs.readFileSync(path.join(d, '.harness', 'live.log'), 'utf8')), 'live.log must be plain text (no colour codes)');
+});
+
+await test('watch --job: a failed job exits 1 with NOT DONE; no controller running is reported instead of hanging silently', async () => {
+  const d = liveSandbox();
+  const daemon = spawn(process.execPath, ['.harness/daemon.mjs'], { cwd: d, env: { ...env, HARNESS_LIVE: '1' }, stdio: 'ignore' });
+  await waitFor(() => fs.existsSync(path.join(d, '.harness', 'daemon.pid')), 8000);
+  const disp = node(d, ['.harness/dispatch.mjs', '--goal', 'WRITE src/b.js b', '--files', 'src/b.js', '--check', FAIL_VERIFY]);
+  const id = (disp.stdout.match(/^JOB_ID=(\S+)/m) || [])[1];
+  const w = node(d, ['.harness/watch.mjs', '--job', id, '--from-start', '--max-wait', '60']);
+  daemon.kill('SIGTERM'); await new Promise((r) => daemon.on('close', r));
+  assert(w.status === 1 && /RESULT: NOT DONE/.test(w.stdout) && /HALTED_HITL_REQUIRED/.test(w.stdout), `exit ${w.status}\n${w.stdout}`);
+  const d2 = liveSandbox();
+  const w2 = spawnSync(process.execPath, ['.harness/watch.mjs', '--job', 'nothing', '--max-wait', '7'], { cwd: d2, env, encoding: 'utf8', timeout: 20000 });
+  assert(w2.status === 3 && /no controller is running/.test(w2.stdout), `exit ${w2.status}\n${w2.stdout}`);
+});
+
+await test('session hook (SessionStart): reports controller/backlog/autonomy/uat to the editor AI; silent for harness workers; never crashes on a broken folder', () => {
+  const d = sandbox();
+  setBacklog(d, [{ id: 'R1', title: 'r', status: 'READY' }, { id: 'D1', title: 'd', status: 'DONE' }]);
+  let r = node(d, ['.harness/hook-session.mjs']);
+  assert(r.status === 0 && /Controller: NOT running/.test(r.stdout) && /READY 1, IN_PROGRESS 0, DONE 1/.test(r.stdout) && /charter says off/.test(r.stdout) && /\/harness <goal>/.test(r.stdout), r.stdout);
+  fs.writeFileSync(path.join(d, '.harness', 'daemon.pid'), String(process.pid));
+  r = node(d, ['.harness/hook-session.mjs']);
+  assert(/Controller: running \(PID \d+\)/.test(r.stdout), r.stdout);
+  r = node(d, ['.harness/hook-session.mjs'], { HARNESS_WORKER: '1' });
+  assert(r.status === 0 && r.stdout === '', `worker should get no output, got: ${r.stdout}`);
+  fs.writeFileSync(path.join(d, '.harness', 'config.json'), '{ broken');
+  r = node(d, ['.harness/hook-session.mjs']);
+  assert(r.status === 0, 'a broken config must not make the hook fail');
+});
+
+await test('worker guards: a harness worker cannot start the controller, change the backlog, or write memory — but can read', () => {
+  const d = sandbox();
+  const asWorker = (args) => node(d, args, { HARNESS_WORKER: '1' });
+  assert(asWorker(['.harness/daemon.mjs', '--tick']).status === 2, 'worker started the controller');
+  assert(asWorker(['.harness/backlog.mjs', 'add', 'x']).status === 2 && backlog(d).length === 0, 'worker changed the backlog');
+  assert(asWorker(['.harness/backlog.mjs', 'import', 'x.json']).status === 2, 'worker imported');
+  assert(asWorker(['.harness/memory.mjs', 'remember', 'evil rule']).status === 2 && !/evil/.test(fs.readFileSync(path.join(d, '.harness', 'memory', 'lessons.md'), 'utf8')), 'worker wrote memory');
+  assert(asWorker(['.harness/backlog.mjs', 'overview']).status === 0 && asWorker(['.harness/memory.mjs', 'list']).status === 0 && asWorker(['.harness/status.mjs']).status === 0, 'read-only commands must work for workers');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
