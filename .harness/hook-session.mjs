@@ -32,6 +32,22 @@ try {
     `- Memory: ${listLessons(FILES.lessons).length} taught rule(s) (already loaded via CLAUDE.md)`
   ];
   if (/\(fill me/i.test(profile)) lines.push('- profile.md is not filled in yet: ask the user a few simple questions and fill it (see AGENTS.md section 1).');
-  lines.push('- To run work visibly in this chat: use /harness:run <goal>. Status: /harness:status. Health check: /harness:doctor. One autonomous step: /harness:tick. Teach a rule: /harness:teach <rule>.');
+
+  // Editor workflow state: unfinished runs need a decision; AUTO MODE starts the workflow by itself.
+  const VIS = path.join(path.dirname(FILES.state), 'visible');
+  let runs = [];
+  try { runs = fs.readdirSync(VIS).map((d) => readJsonSafe(path.join(VIS, d, 'run.json'), null)).filter(Boolean); } catch { /* no runs yet */ }
+  const open = runs.filter((r) => !['PASSED', 'HALTED_HITL_REQUIRED', 'ROLLED_BACK', 'ESCALATED'].includes(r.status));
+  const stopped = runs.filter((r) => ['HALTED_HITL_REQUIRED', 'ESCALATED'].includes(r.status)).slice(-1);
+  if (open.length) lines.push(`- UNFINISHED editor run ${open[0].id} ("${open[0].title}", ${open[0].status}). Ask the user whether to finish it (node .harness/visible.mjs verify ${open[0].id}) or undo it (node .harness/visible.mjs rollback ${open[0].id}). Do not start another task first.`);
+  else if (charter.autonomous && c.READY > 0) {
+    const { nextReady } = await import('./lib/governance.mjs');
+    const next = nextReady();
+    lines.push(`- AUTO MODE IS ON (the owner enabled it in .harness/charter.md) and ${c.READY} task(s) are READY${next ? `; next: "${next.title || next.goal}"` : ''}. Start the autonomous workflow now with /harness:auto: you act as the orchestrator, the named agents work visibly, the controller verifies, and you report to the user at the end. If the user's message is about something else, answer it first and then offer to run the READY task(s).`);
+  } else if (charter.autonomous && /\(describe your product goals here/.test(charter.text)) {
+    lines.push('- Auto mode is ON but there is nothing READY and the charter objectives are not filled in, so the harness will not plan anything by itself. Add a task (node .harness/backlog.mjs add "<title>" --status READY) or fill in the objectives in .harness/charter.md.');
+  }
+  if (stopped.length && !open.length) lines.push(`- A previous editor run stopped and needs a human decision: ${stopped[0].id} ("${stopped[0].title}", ${stopped[0].status}). Report it to the user if they have not seen it.`);
+  lines.push('- To run work with visible named agents: use /harness:run <goal>. Autonomous: /harness:auto. Team: /harness:team. Status: /harness:status. Health check: /harness:doctor. Teach a rule: /harness:teach <rule>.');
   console.log(lines.join('\n'));
 } catch { /* never block the session */ }

@@ -61,6 +61,27 @@ should be checked automatically, or when it can be split across parallel workers
 
 Check it is ready: `node .harness/doctor.mjs` · current state: `node .harness/status.mjs`
 
+### In Claude Code you are the ORCHESTRATOR (this is the preferred way)
+
+Workflow: **human → controller → you (orchestrator) → named agents → controller verify → report to the human.**
+The user types `/harness:run <goal>` (or `/harness:auto` for the READY backlog); those commands contain the exact steps.
+The rules, in short (the controller enforces them; do not try to get around them):
+1. `node .harness/visible.mjs brief …` first: it gives you the task, the check, the team and each lead's scope.
+2. You only **plan and delegate**: give every file to exactly one lead, inside that lead's scope, and put the exact shared names/formats in
+   the interface contract. `visible.mjs assign <run> '<json>'` validates it before anything starts (3 bad tries escalate to the user).
+3. Start **all** assigned named agents (`lead-ba`, `lead-dev`, `lead-qa`; subagent_type = the lead's id) **in one message** so they run in
+   parallel and the user sees them work. Use the prompts `assign` prints. **Never do their work or edit project files yourself.**
+4. When they report, run `visible.mjs verify <run> --reports '{…}'`. The controller reverts every change outside the assignments, runs the
+   real check and writes the report. Send failures back to the responsible lead (3 cycles at most).
+5. **Report to the human in plain words**: which named agent did what, whether the controller said PASSED, what needs their decision.
+   Never say it passed unless the controller said PASSED. Never commit, push or merge. Never edit `.harness/` or `.claude/`.
+Details and limits: `docs/WORKFLOW.md`. The named agents are generated from `.harness/team.json` (`node .harness/team.mjs sync-agents`).
+
+If you are one of the named agents (`lead-…`): change only the files in your assignment, follow the interface contract, check your work with
+`npm test` or `node --test` only, and finish with a short honest report.
+
+The sections below describe the headless controller (background / terminal / unattended runs).
+
 **One worker** (most tasks):
 ```bash
 node .harness/dispatch.mjs --goal "<clear instructions>" --files "path/a,path/b" --check "<command that exits 0 only when the work is right>" --wait
@@ -125,8 +146,9 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 
 - `charter.md` — the user's rules for autonomous work. The bullets in its section 0 are
   machine-read (`autonomous: on|off`, `maxAutoTasksPerRun`, `allowedPaths`, `forbiddenPaths`,
-  `forbiddenTools`, `requireRealCheck`). **Never switch `autonomous` on or widen these limits
-  without the user's explicit OK.** To replace the charter, use the import command below.
+  `forbiddenTools`, `requireRealCheck`). **Autonomous mode ships ON (the owner's decision).** Never
+  change the charter or widen these limits yourself: only the user does (to stop autonomy they set
+  `- autonomous: off`). To replace the charter, use the import command below.
 - `backlog.json` — tasks with status `BACKLOG → READY → IN_PROGRESS → DONE | BLOCKED`.
   Add work: `node .harness/backlog.mjs add "<title>" --goal "<details>" --files "src/x.js" --role DEV_ENGINEER --check "npm test" --status READY`.
   See it: `node .harness/backlog.mjs overview`. Unblock after a human decision: `node .harness/backlog.mjs ready <id>`.
@@ -169,7 +191,10 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/charter.md` · `backlog.json` | autonomous limits · task backlog |
 | `.harness/backlog.mjs` | backlog list / add / ready / pop / import (with snapshot) / releases |
 | `.harness/roles/` · `skills/` | role personas + tool limits · skill rules |
-| `.harness/team.json` · `team.mjs` | the agent team (orchestrator → leads → workers): scopes, limits, budgets · show / validate it |
+| `.harness/team.json` · `team.mjs` | the agent team (orchestrator → leads → workers): scopes, limits, budgets · show / validate / `sync-agents` |
+| `.harness/visible.mjs` | the controller for the editor workflow: brief / assign / verify / rollback / propose / status / report |
+| `.claude/agents/lead-*.md` | the named agents (generated from team.json; the user sees them working in the session) |
+| `docs/WORKFLOW.md` | the workflow, the rules, the two modes, what is not guaranteed |
 | `.harness/releases/` | snapshots made before every upload (git-ignored, never edit) |
 | `.harness/examples/backlog.sample.json` | a BA + DEV + QA parallel sample to import |
 | `.harness/state.json` · `telemetry.log` | live state · JSONL event log |

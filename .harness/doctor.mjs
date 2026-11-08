@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, listLessons, probeEngine, profileFlags, detectVerifyCmd } from './lib/common.mjs';
-import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam } from './lib/governance.mjs';
+import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
 
 ensureDirs();
 const ok = (m) => console.log(`  ✔ ${m}`);
@@ -60,7 +60,7 @@ else {
   ok(`charter.md: autonomous ${charter.autonomous ? 'ON' : 'off'}, maxAutoTasksPerRun ${charter.maxAutoTasksPerRun}, requireRealCheck ${charter.requireRealCheck ? 'yes' : 'no'}`);
   ok(`allowedPaths: ${charter.allowedPaths.join(', ') || '(any)'} | forbiddenPaths: ${charter.forbiddenPaths.join(', ')}`);
   if (charter.autonomous && charter.requireRealCheck && !v.real) { bad('Autonomous is ON but the project has no real check: the controller will pause. Add a "test" script to package.json.'); problems++; }
-  if (charter.autonomous && /\(describe your product goals here/.test(charter.text)) warn('charter.md still has the placeholder objectives — the PO_ARCHITECT will have little to go on.');
+  if (charter.autonomous && /\(describe your product goals here/.test(charter.text)) note('charter.md objectives are still the placeholder. Autonomous mode is on but plans nothing by itself until you describe your goals (section 1 of .harness/charter.md); it still runs any READY task you add.');
 }
 const roles = loadRoles();
 const roleNames = Object.keys(roles);
@@ -90,6 +90,10 @@ console.log('\nAgent team (hierarchy: orchestrator → leads → workers)');
     if (!errors.length) {
       const orch = team.members.find((m) => m.level === 'orchestrator'); const leads = team.members.filter((m) => m.level === 'lead');
       ok(`team.json valid: ${orch.id} → ${leads.length} lead(s): ${leads.map((l) => `${l.id} [${l.role}] owns ${l.scope.join(', ')}`).join(' | ')}`);
+      const ag = syncAgents(team, roles, { check: true });
+      if (ag.stale.length) warn(`editor agents out of sync with team.json (${ag.stale.join(', ')}): run  node .harness/team.mjs sync-agents  and restart the Claude Code session`);
+      else ok(`editor agents in sync: ${leads.map((l) => l.id).join(', ')} are named agents in .claude/agents/ (visible when the orchestrator delegates in Claude Code)`);
+      ok(`workflow: human → controller → orchestrator (editor session) → named agents → controller verify → report. Autonomous mode: ${charter.autonomous ? 'ON' : 'off'} (${charter.autonomous ? 'acts on READY tasks; plans new ones only once the charter objectives are filled in' : 'set "- autonomous: on" in charter.md to enable'})`);
     }
   }
 }

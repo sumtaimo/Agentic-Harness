@@ -128,15 +128,33 @@ const giBlock = fs.readFileSync(path.join(SRC, '.gitignore'), 'utf8');
 const existing = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : '';
 if (!existing.includes('# agentic-harness runtime')) { fs.writeFileSync(gi, `${existing.replace(/\s*$/, '')}${existing ? '\n\n' : ''}${giBlock}`); report.push('updated .gitignore'); }
 
+// Autonomous mode ships ON (it only acts on READY tasks you add, and plans new ones only once the charter objectives
+// are filled in). `--autonomous off` writes a freshly installed charter with it switched off. A charter that already
+// existed in the project is never touched.
+const optI = process.argv.indexOf('--autonomous');
+if (optI > -1) {
+  const want = String(process.argv[optI + 1] || '').toLowerCase();
+  if (!['on', 'off'].includes(want)) { console.error('--autonomous takes "on" or "off".'); process.exit(1); }
+  const cp = path.join(target, '.harness', 'charter.md');
+  if (want === 'off' && report.includes('wrote  .harness/charter.md') && fs.existsSync(cp)) {
+    fs.writeFileSync(cp, fs.readFileSync(cp, 'utf8').replace(/^- autonomous: on$/m, '- autonomous: off'));
+    report.push('set   autonomous mode OFF in the new .harness/charter.md');
+  }
+}
+
 console.log(`Installed the agentic harness into ${target}\n`);
 report.forEach((l) => console.log(`  ${l}`));
 console.log(`
-Done. Your project now has the agentic harness. Next steps:
+Done. Your project now has the agentic harness. The workflow:
+  human -> controller (task, charter, backlog, team) -> orchestrator (your editor session) -> named agents -> verify -> report to you
+Next steps:
   1. Check it:        node .harness/doctor.mjs        (needs Node 18+ and one AI engine, e.g. Claude Code, logged in)
-  2. Fill the team:   node .harness/team.mjs show     (edit .harness/team.json to change who is on the agent team)
+  2. Fill the charter: describe your project goals in .harness/charter.md ("Project objectives"); see the team with  node .harness/team.mjs show
   3. Prompt it:
-       in Claude Code:  open the folder, accept the trust dialog once, then type  /harness:run <what you want done>
-                        (add "use the team" for a big goal: orchestrator -> leads -> workers)
+       in Claude Code:  open the folder, accept the trust dialog once, restart the session so it loads the agents, then type
+                        /harness:run <what you want done>     (the named agents appear working in your session; you get a report)
+                        /harness:auto                         (autonomous: works through the READY backlog by itself)
        in a terminal:   node .harness/daemon.mjs                  (leave it running; watch the agents work)
                         node .harness/dispatch.mjs --goal "<what you want>" --hierarchy --max-cost 2 --wait
-  Every file above is plain text in your project; nothing is installed globally.`);
+  Autonomous mode is ON by default; it only acts on READY tasks you add. Turn it off: set "- autonomous: off" in .harness/charter.md
+  (or install with  --autonomous off ). Every file above is plain text in your project; nothing is installed globally.`);

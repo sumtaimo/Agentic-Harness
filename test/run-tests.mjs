@@ -410,7 +410,7 @@ await test('memory: no double injection when the engine auto-loads it via CLAUDE
 
 function setCharter(d, policy = {}, extra = '') {
   const f = path.join(d, '.harness', 'charter.md');
-  let t = fs.readFileSync(f, 'utf8');
+  let t = fs.readFileSync(f, 'utf8').replace(/\(describe your product goals here[^)]*\)/, 'Test project objectives: build the feature set the tests describe.');
   for (const [k, v] of Object.entries(policy)) t = t.replace(new RegExp(`^- ${k}: .*$`, 'm'), `- ${k}: ${v}`);
   fs.writeFileSync(f, t + (extra ? `\n${extra}\n` : ''));
 }
@@ -439,7 +439,7 @@ await test('autonomous tick: empty inbox promotes the highest-priority READY ite
 });
 
 await test('autonomous off in charter.md → tick does nothing', () => {
-  const d = sandbox();
+  const d = sandbox(); setCharter(d, { autonomous: 'off' });
   setBacklog(d, [{ id: 'A', title: 'x', status: 'READY', verifyCmd: PASS, subtasks: [{ id: 'w', targetFiles: ['src/a.js'], prompt: 'WRITE src/a.js A' }] }]);
   const r = tick(d);
   assert(/off/.test(r.stdout) && byId(d, 'A').status === 'READY' && ls(d, 'completed').length === 0, r.stdout);
@@ -926,7 +926,7 @@ await test('session hook (SessionStart): reports controller/backlog/autonomy/uat
   const d = sandbox();
   setBacklog(d, [{ id: 'R1', title: 'r', status: 'READY' }, { id: 'D1', title: 'd', status: 'DONE' }]);
   let r = node(d, ['.harness/hook-session.mjs']);
-  assert(r.status === 0 && /Controller: NOT running/.test(r.stdout) && /READY 1, IN_PROGRESS 0, DONE 1/.test(r.stdout) && /charter says off/.test(r.stdout) && /\/harness:run <goal>/.test(r.stdout) && /\/harness:doctor/.test(r.stdout), r.stdout);
+  assert(r.status === 0 && /Controller: NOT running/.test(r.stdout) && /READY 1, IN_PROGRESS 0, DONE 1/.test(r.stdout) && /charter says ON/.test(r.stdout) && /AUTO MODE IS ON .* 1 task\(s\) are READY/.test(r.stdout) && /\/harness:auto/.test(r.stdout) && /\/harness:run <goal>/.test(r.stdout) && /\/harness:doctor/.test(r.stdout), r.stdout);
   fs.writeFileSync(path.join(d, '.harness', 'daemon.pid'), String(process.pid));
   r = node(d, ['.harness/hook-session.mjs']);
   assert(/Controller: running \(PID \d+\)/.test(r.stdout), r.stdout);
@@ -967,7 +967,7 @@ await test('.claude/settings.json: valid, minimal allow-list, risky things ask o
 await test('.claude/commands/harness/{status,tick,doctor,run,teach}.md: have a description and only call scripts/flags that exist', () => {
   const dir = path.join(REPO, '.claude', 'commands', 'harness');
   const daemon = fs.readFileSync(path.join(REPO, '.harness', 'daemon.mjs'), 'utf8');
-  for (const c of ['status', 'tick', 'doctor', 'run', 'teach', 'team']) {
+  for (const c of ['status', 'tick', 'doctor', 'run', 'teach', 'team', 'auto']) {
     const t = fs.readFileSync(path.join(dir, `${c}.md`), 'utf8');
     assert(/^---\ndescription: .+\n/.test(t), `${c}.md lacks a description`);
     for (const m of t.matchAll(/node (\.harness\/[a-z-]+\.mjs)/g)) assert(fs.existsSync(path.join(REPO, m[1])), `${c}.md calls a missing script ${m[1]}`);
@@ -1005,8 +1005,9 @@ await test('doctor: a valid setup reports 0 failures and 0 warnings; profile pla
   const { d, g } = gitSandbox({ autonomous: false });
   fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: PASS } }));
   g('add', '-A'); g('commit', '-q', '-m', 'package.json');
+  fs.cpSync(path.join(REPO, '.claude'), path.join(d, '.claude'), { recursive: true }); // an installed project has the editor agents
   const out = node(d, ['.harness/doctor.mjs']).stdout;
-  assert(/Failures: 0 · Warnings: 0 · Notes: 2/.test(out), out.split('\n').filter((l) => /^  [!✖ℹ]|Failures/.test(l)).join('\n'));
+  assert(/Failures: 0 · Warnings: 0 · Notes: 3/.test(out), out.split('\n').filter((l) => /^  [!✖ℹ]|Failures/.test(l)).join('\n'));
   assert(/ℹ memory\/profile\.md/.test(out) && /ℹ The background controller is not running/.test(out), 'the two notes are missing');
   fs.writeFileSync(path.join(d, '.harness', 'config.json'), '{ broken');
   assert(node(d, ['.harness/doctor.mjs']).status !== 0 || true, 'doctor must not crash silently');
@@ -1043,7 +1044,7 @@ await test('/harness:team and /harness:run: the editor commands know the team mo
   const dir = path.join(REPO, '.claude', 'commands', 'harness');
   const team = fs.readFileSync(path.join(dir, 'team.md'), 'utf8'); const run = fs.readFileSync(path.join(dir, 'run.md'), 'utf8');
   assert(/^---\ndescription: .+\n/.test(team) && /team\.mjs show/.test(team) && /team\.mjs validate/.test(team) && /Do not change any file/.test(team), 'team.md');
-  assert(/--hierarchy/.test(run) && /--max-cost/.test(run) && /team\.mjs show/.test(run) && /orchestrator/.test(run) && /lead-dev\.impl/.test(run), 'run.md does not explain the team mode');
+  assert(/visible\.mjs brief/.test(run) && /visible\.mjs assign/.test(run) && /visible\.mjs verify/.test(run) && /Agent tool/.test(run) && /subagent_type/.test(run) && /orchestrator/.test(run) && /Never commit, push or merge/.test(run) && /--hierarchy --max-cost/.test(run), 'run.md does not describe the visible workflow');
   const st = json(path.join(REPO, '.claude', 'settings.json')).permissions;
   assert(st.allow.includes('Bash(node .harness/team.mjs:*)') && !st.ask.includes('Bash(node .harness/team.mjs:*)'), 'team.mjs must be allowed');
   assert(fs.readFileSync(path.join(REPO, '.harness', 'hook-session.mjs'), 'utf8').includes('/harness:run'), 'hook text');
@@ -1241,6 +1242,240 @@ await test('dispatch --hierarchy / --max-cost: writes a hierarchy job (no subtas
   assert(arch.hierarchy === true && arch.maxCostUsd === 1.5 && !arch.subtasks, JSON.stringify(Object.keys(arch)));
   assert(node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--hierarchy', '--max-cost', 'lots']).status === 1, 'a non-numeric --max-cost must be refused');
   assert(/--hierarchy/.test(node(d, ['.harness/dispatch.mjs', '--help']).stdout), 'help does not mention --hierarchy');
+});
+
+// ───────────── v3.1: the editor workflow — controller → orchestrator → NAMED agents → verify → report ─────────────
+
+const vis = (d, ...a) => node(d, ['.harness/visible.mjs', ...a]);
+const runIdOf = (r) => (r.stdout.match(/^RUN_ID=(\S+)/m) || [])[1];
+const deleg = (assignments, contract = 'CONTRACT-X') => JSON.stringify({ interfaceContract: contract, assignments });
+const trio = () => [{ lead: 'lead-ba', goal: 'write the spec', files: ['docs/a.md'] }, { lead: 'lead-dev', goal: 'implement it', files: ['src/a.js'] }, { lead: 'lead-qa', goal: 'write the tests', files: ['tests/a.test.js'] }];
+const agentsWrite = (d, files) => files.forEach(([f, c]) => { fs.mkdirSync(path.dirname(path.join(d, f)), { recursive: true }); fs.writeFileSync(path.join(d, f), c); });
+const trioFiles = () => [['docs/a.md', 'spec'], ['src/a.js', 'code'], ['tests/a.test.js', 'tests']];
+const TRIO_CHECK = existsCheck('docs/a.md', 'src/a.js', 'tests/a.test.js');
+const runJson = (d, id) => json(path.join(d, '.harness', 'visible', id, 'run.json'));
+const read = (d, f) => fs.readFileSync(path.join(d, f), 'utf8');
+
+await test('editor workflow: brief → assign → agents work → verify → report; prompts carry scope/contract/skills/memory; backlog and session note updated', () => {
+  const d = sandbox();
+  node(d, ['.harness/memory.mjs', 'remember', 'Always answer in plain English']);
+  setBacklog(d, [{ id: 'T1', title: 'slug feature', priority: 1, status: 'READY', goal: 'Build slugify', acceptanceCriteria: ['AC-one'], interfaceContract: 'slugify(text) -> string', verifyCmd: TRIO_CHECK }]);
+  const b = vis(d, 'brief', '--item', 'T1'); const id = runIdOf(b);
+  assert(b.status === 0 && id && /ORCHESTRATOR BRIEF/.test(b.stdout) && /lead-dev \(DEV_ENGINEER\) may own: src\/\*\*/.test(b.stdout) && /AC-one/.test(b.stdout) && /slugify\(text\) -> string/.test(b.stdout) && /Always answer in plain English/.test(b.stdout), b.stdout);
+  assert(byId(d, 'T1').status === 'IN_PROGRESS' && byId(d, 'T1').visibleRun === id, 'backlog item not marked IN_PROGRESS');
+  const a = vis(d, 'assign', id, deleg(trio()));
+  assert(a.status === 0 && /DELEGATION OK/.test(a.stdout), a.stdout + a.stderr);
+  for (const l of ['lead-ba', 'lead-dev', 'lead-qa']) assert(new RegExp(`subagent_type: "${l}"`).test(a.stdout), `no ready-made call for ${l}`);
+  const section = (lead) => a.stdout.split('===== agent: ').find((x) => x.startsWith(lead));
+  const dev = section('lead-dev'); const ba = section('lead-ba'); const qa = section('lead-qa');
+  assert(/ONLY these files\/folders: src\/a\.js/.test(dev) && /CONTRACT-X/.test(dev) && /slugify\(text\) -> string/.test(dev) && /AC-one/.test(dev) && /Always answer in plain English/.test(dev) && /@governed-by PO_ARCHITECT/.test(dev) && /npm test/.test(dev), 'dev prompt incomplete');
+  assert(/ONLY these files\/folders: tests\/a\.test\.js/.test(qa) && /@governed-by PO_ARCHITECT/.test(qa), 'qa prompt incomplete');
+  assert(/no shell/.test(ba) && !/Code Craft/.test(ba) && /ONLY these files\/folders: docs\/a\.md/.test(ba), 'ba prompt wrong (no shell, no code-craft skill)');
+  agentsWrite(d, trioFiles());
+  const v = vis(d, 'verify', id, '--reports', JSON.stringify({ 'lead-dev': 'wrote src/a.js' }));
+  assert(v.status === 0 && /PASSED ✔/.test(v.stdout) && /lead-dev: \+ src\/a\.js/.test(v.stdout) && /says: wrote src\/a\.js/.test(v.stdout) && /controller → orchestrator \(editor session\) → lead-ba, lead-dev, lead-qa/.test(v.stdout), v.stdout);
+  assert(byId(d, 'T1').status === 'DONE' && runJson(d, id).status === 'PASSED', 'backlog/run not DONE/PASSED');
+  assert(!fs.existsSync(path.join(d, '.harness', 'visible', id, 'baseline')), 'baseline copy not cleaned after a pass');
+  const note = fs.readdirSync(path.join(d, '.harness', 'memory', 'sessions')).map((f) => read(d, `.harness/memory/sessions/${f}`)).join('');
+  assert(/Team: orchestrator → lead-ba \(lead-ba\); lead-dev \(lead-dev\); lead-qa \(lead-qa\)/.test(note) && /Result: \*\*VERIFIED\*\*/.test(note), 'session note lacks the team/result');
+  assert(/PASSED ✔/.test(vis(d, 'report', id).stdout) && new RegExp(id).test(vis(d, 'status').stdout), 'report/status commands');
+});
+
+await test('editor workflow guardrails: a bad delegation never starts anything (unknown lead / outside scope / twice / unsafe / outside the files the human allowed); 3 bad attempts escalate to the human', () => {
+  const g = (lead, files, goal = 'x') => ({ lead, goal, files });
+  const cases = [
+    [deleg([g('lead-x', ['src/a.js'])]), [], /not a lead you may delegate to/],
+    [deleg([g('lead-dev', ['docs/a.md'])]), [], /outside lead "lead-dev"'s scope/],
+    [deleg([g('lead-dev', ['src/a.js']), g('lead-dev', ['src/b.js'])]), [], /assigned twice/],
+    [deleg([g('lead-dev', ['../escape.js'])]), [], /unsafe path/],
+    [deleg([g('lead-dev', ['.harness/team.json'])]), [], /unsafe path/],
+    [deleg([g('lead-dev', ['src/a.js'])]), ['--files', 'src/b.js'], /outside the files the human allowed|outside the files the user allowed/],
+    ['not json', [], /not valid JSON/],
+    [JSON.stringify({ assignments: [] }), [], /no "assignments"/]
+  ];
+  for (const [plan, extra, re] of cases) {
+    const d = sandbox(); const id = runIdOf(vis(d, 'brief', '--goal', 'g', '--check', PASS, ...extra));
+    const r = vis(d, 'assign', id, plan);
+    assert(r.status === 1 && re.test(r.stderr) && /Nothing was started/.test(r.stderr), `${re}: exit ${r.status} ${r.stderr}`);
+    assert(runJson(d, id).assignments.length === 0 && runJson(d, id).status === 'BRIEFED', 'run state changed by a rejected delegation');
+  }
+  const d = sandbox(); setBacklog(d, [{ id: 'E1', title: 'esc', status: 'READY', verifyCmd: PASS }]);
+  const id = runIdOf(vis(d, 'brief', '--item', 'E1'));
+  assert(vis(d, 'assign', id, 'bad').status === 1 && vis(d, 'assign', id, 'bad').status === 1, 'first two rejections should exit 1');
+  const third = vis(d, 'assign', id, 'bad');
+  assert(third.status === 2 && /ESCALATED to the human/.test(third.stderr) && runJson(d, id).status === 'ESCALATED' && byId(d, 'E1').status === 'BLOCKED' && /ESCALATED/.test(byId(d, 'E1').blockedReason), `exit ${third.status} ${third.stderr}`);
+});
+
+await test('editor workflow verify: every change outside the assignments is detected and REVERTED (new, modified, deleted files, the charter, the team, .claude), then a clean re-verify passes', () => {
+  const d = sandbox();
+  fs.writeFileSync(path.join(d, 'README.md'), 'ORIGINAL'); fs.mkdirSync(path.join(d, 'docs')); fs.writeFileSync(path.join(d, 'docs', 'keep.md'), 'KEEP');
+  const charter = read(d, '.harness/charter.md'); const teamJson = read(d, '.harness/team.json');
+  const id = runIdOf(vis(d, 'brief', '--goal', 'g', '--check', TRIO_CHECK));
+  assert(vis(d, 'assign', id, deleg(trio())).status === 0, 'assign failed');
+  agentsWrite(d, trioFiles());
+  agentsWrite(d, [['README.md', 'HACKED'], ['notes.txt', 'rogue'], ['.claude/injected.md', 'x'], ['.harness/charter.md', `${charter}\n- autonomous: off\n`], ['.harness/team.json', '{"members":[]}']]);
+  fs.rmSync(path.join(d, 'docs', 'keep.md'));
+  const v = vis(d, 'verify', id);
+  assert(v.status === 1 && /NOT PASSED YET/.test(v.stdout) && /not run \(fix the violations first\)/.test(v.stdout), v.stdout);
+  for (const f of ['README.md', 'notes.txt', '.claude/injected.md', '.harness/charter.md', '.harness/team.json', 'docs/keep.md']) assert(v.stdout.includes(`${f}:`), `violation not reported for ${f}`);
+  assert(read(d, 'README.md') === 'ORIGINAL' && !fs.existsSync(path.join(d, 'notes.txt')) && !fs.existsSync(path.join(d, '.claude', 'injected.md')) && read(d, '.harness/charter.md') === charter && read(d, '.harness/team.json') === teamJson && read(d, 'docs/keep.md') === 'KEEP', 'a violating change was not reverted');
+  assert(trioFiles().every(([f, c]) => read(d, f) === c), 'the agents\' legitimate files must stay');
+  const again = vis(d, 'verify', id);
+  assert(again.status === 0 && /PASSED ✔/.test(again.stdout) && runJson(d, id).cycles === 2, again.stdout);
+});
+
+await test('editor workflow verify: a git-ignored secret (.env) edited by an agent is DETECTED (hash only, never copied) and reported as not auto-revertable', () => {
+  const { d, g } = gitSandbox({ autonomous: false });
+  fs.appendFileSync(path.join(d, '.gitignore'), '\n.env\n'); fs.writeFileSync(path.join(d, '.env'), 'SECRET=1'); g('add', '-A'); g('commit', '-q', '-m', 'ignore env');
+  const id = runIdOf(vis(d, 'brief', '--goal', 'g', '--check', TRIO_CHECK));
+  assert(vis(d, 'assign', id, deleg(trio())).status === 0, 'assign');
+  assert(!fs.existsSync(path.join(d, '.harness', 'visible', id, 'baseline', '.env')), 'a secret must never be copied into the baseline');
+  agentsWrite(d, [...trioFiles(), ['.env', 'SECRET=stolen']]);
+  const v = vis(d, 'verify', id);
+  assert(v.status === 1 && /\.env: not inside any lead's assigned files/.test(v.stdout) && /COULD NOT be reverted automatically \(secrets are never copied\): \.env/.test(v.stdout), v.stdout);
+  assert(read(d, '.env') === 'SECRET=stolen', 'the harness cannot restore what it never copied; it must say so instead of pretending');
+});
+
+await test('editor workflow verify: a failing check is retried, and after 3 cycles the run HALTS, restores every file, blocks the backlog item and records a lesson', () => {
+  const d = sandbox();
+  fs.mkdirSync(path.join(d, 'src')); fs.writeFileSync(path.join(d, 'src', 'old.js'), 'OLD');
+  setBacklog(d, [{ id: 'H1', title: 'halting task', status: 'READY', verifyCmd: FAIL_VERIFY }]);
+  const id = runIdOf(vis(d, 'brief', '--item', 'H1'));
+  assert(vis(d, 'assign', id, deleg([{ lead: 'lead-dev', goal: 'x', files: ['src/'] }])).status === 0, 'assign failed');
+  agentsWrite(d, [['src/old.js', 'CHANGED'], ['src/new.js', 'NEW']]);
+  const r1 = vis(d, 'verify', id); const r2 = vis(d, 'verify', id);
+  assert(r1.status === 1 && /NOT PASSED YET/.test(r1.stdout) && /Cycle 1\/3/.test(r1.stdout) && r2.status === 1 && runJson(d, id).status === 'FAILED', 'cycles 1-2 should fail but stay open');
+  assert(read(d, 'src/old.js') === 'CHANGED', 'files must be left in place until the last cycle');
+  const r3 = vis(d, 'verify', id);
+  assert(r3.status === 1 && /STOPPED/.test(r3.stdout) && /Cycle 3\/3/.test(r3.stdout) && /NOPE/.test(r3.stdout) && runJson(d, id).status === 'HALTED_HITL_REQUIRED', r3.stdout);
+  assert(read(d, 'src/old.js') === 'OLD' && !fs.existsSync(path.join(d, 'src', 'new.js')), 'the halted run did not restore the files');
+  assert(byId(d, 'H1').status === 'BLOCKED' && /HALTED_HITL_REQUIRED after 3 cycles/.test(byId(d, 'H1').blockedReason), byId(d, 'H1').blockedReason);
+  assert(/halting task.*HALTED_HITL_REQUIRED/.test(read(d, '.harness/memory/auto-lessons.md')), 'no lesson recorded');
+  assert(vis(d, 'verify', id).status === 1, 'a halted run cannot be verified again');
+});
+
+await test('editor workflow: only one open run at a time; rollback restores everything and ends the run; harness workers cannot use it', () => {
+  const d = sandbox(); fs.writeFileSync(path.join(d, 'a.txt'), 'ORIGINAL');
+  const id = runIdOf(vis(d, 'brief', '--goal', 'g', '--check', PASS));
+  const second = vis(d, 'brief', '--goal', 'other', '--check', PASS);
+  assert(second.status === 4 && /is not finished/.test(second.stderr), `exit ${second.status} ${second.stderr}`);
+  assert(vis(d, 'assign', id, deleg([{ lead: 'lead-dev', goal: 'x', files: ['src/'] }])).status === 0, 'assign');
+  agentsWrite(d, [['src/x.js', 'x'], ['a.txt', 'CHANGED']]);
+  const rb = vis(d, 'rollback', id);
+  assert(rb.status === 0 && /Rolled back/.test(rb.stdout) && read(d, 'a.txt') === 'ORIGINAL' && !fs.existsSync(path.join(d, 'src', 'x.js')) && runJson(d, id).status === 'ROLLED_BACK', rb.stdout + rb.stderr);
+  assert(vis(d, 'brief', '--goal', 'next', '--check', PASS).status === 0, 'a new run should be possible after rollback');
+  assert(node(d, ['.harness/visible.mjs', 'status'], { HARNESS_WORKER: '1' }).status === 2, 'a harness worker must not use the editor workflow');
+});
+
+await test('autonomous (editor): brief --next takes the highest-priority READY item; budget stops it; a failed run pauses it; off/empty/placeholder are refused', () => {
+  const d = sandbox(); setCharter(d, { maxAutoTasksPerRun: 2 });
+  setBacklog(d, [1, 2, 3].map((n) => ({ id: `Q${n}`, title: `task ${n}`, priority: 4 - n, status: 'READY', verifyCmd: TRIO_CHECK })));
+  const finish = (sid, expectId) => { const r = vis(d, 'brief', '--next', '--auto-session', sid); const id = runIdOf(r); assert(r.status === 0 && new RegExp(`Task: task ${expectId}`).test(r.stdout) && /autonomous mode/.test(r.stdout), r.stdout + r.stderr); assert(vis(d, 'assign', id, deleg(trio())).status === 0, 'assign'); agentsWrite(d, trioFiles()); return { id, v: vis(d, 'verify', id) }; };
+  const first = finish('S1', 3); assert(first.v.status === 0 && byId(d, 'Q3').status === 'DONE', 'first auto task');
+  fs.rmSync(path.join(d, 'src'), { recursive: true }); fs.rmSync(path.join(d, 'docs'), { recursive: true }); fs.rmSync(path.join(d, 'tests'), { recursive: true });
+  const second = finish('S1', 2); assert(second.v.status === 0, 'second auto task');
+  const third = vis(d, 'brief', '--next', '--auto-session', 'S1');
+  assert(third.status === 3 && /Auto budget used: 2\/2/.test(third.stderr) && byId(d, 'Q1').status === 'READY', `budget: exit ${third.status} ${third.stderr}`);
+  const d2 = sandbox(); setCharter(d2, {}); setBacklog(d2, [{ id: 'F1', title: 'will fail', priority: 1, status: 'READY', verifyCmd: FAIL_VERIFY }, { id: 'F2', title: 'never started', priority: 9, status: 'READY', verifyCmd: PASS }]);
+  const id2 = runIdOf(vis(d2, 'brief', '--next', '--auto-session', 'S2'));
+  vis(d2, 'assign', id2, deleg([{ lead: 'lead-dev', goal: 'x', files: ['src/'] }])); agentsWrite(d2, [['src/a.js', 'x']]);
+  for (let i = 0; i < 3; i++) vis(d2, 'verify', id2);
+  const paused = vis(d2, 'brief', '--next', '--auto-session', 'S2');
+  assert(runJson(d2, id2).status === 'HALTED_HITL_REQUIRED' && paused.status === 4 && /paused/.test(paused.stderr) && byId(d2, 'F2').status === 'READY', `pause: exit ${paused.status} ${paused.stderr}`);
+  const off = sandbox(); setCharter(off, { autonomous: 'off' }); setBacklog(off, [{ id: 'O1', title: 'x', status: 'READY', verifyCmd: PASS }]);
+  const offR = vis(off, 'brief', '--next');
+  assert(offR.status === 1 && /Autonomous mode is off/.test(offR.stderr) && byId(off, 'O1').status === 'READY', offR.stderr);
+  const empty = sandbox(); setCharter(empty, {}); setBacklog(empty, []);
+  assert(vis(empty, 'brief', '--next').status === 6, 'nothing READY should exit 6');
+  const noCheck = sandbox(); setCharter(noCheck, {}); setBacklog(noCheck, [{ id: 'N1', title: 'x', status: 'READY' }]);
+  const nc = vis(noCheck, 'brief', '--next');
+  assert(nc.status === 1 && /no real check/.test(nc.stderr) && byId(noCheck, 'N1').status === 'READY', `no real check must refuse autonomous work: ${nc.stderr}`);
+});
+
+await test('autonomous (editor): "propose" adds READY tasks only inside the budget, the team scopes and the charter; the placeholder charter plans nothing; AI-suggested checks are only recorded', () => {
+  const ph = sandbox();
+  const r0 = vis(ph, 'propose', 'S1', JSON.stringify({ tasks: [{ title: 't', files: ['src/a.js'] }] }));
+  assert(r0.status === 5 && /placeholder/.test(r0.stderr) && backlog(ph).length === 0, `placeholder: exit ${r0.status} ${r0.stderr}`);
+  const d = sandbox(); setCharter(d, { maxAutoTasksPerRun: 2 }); realTest(d);
+  setBacklog(d, [{ id: 'X0', title: 'existing task', status: 'DONE' }]);
+  const t = (title, files, extra = {}) => ({ title, goal: title, files, ...extra });
+  const out = vis(d, 'propose', 'S1', JSON.stringify({ tasks: [
+    t('good one', ['src/good.js'], { verifySuggestion: 'rm -rf /', acceptanceCriteria: ['works'] }), t('outside scope', ['lib/x.js']), t('forbidden', ['.env']), t('Existing   Task', ['src/e.js']),
+    t('unsafe', ['../x.js']), t('no files', []), t('good two', ['docs/two.md']), t('over budget', ['src/z.js'])] }));
+  const tasks = backlog(d).filter((x) => x.source === 'orchestrator');
+  assert(out.status === 0 && tasks.length === 2 && tasks.map((x) => x.title).join() === 'good one,good two', `${out.stdout}\n${out.stderr}\n${JSON.stringify(tasks.map((x) => x.title))}`);
+  assert(/rejected "outside scope".*not inside any lead's scope/.test(out.stdout) && /rejected "forbidden"/.test(out.stdout) && /duplicate/.test(out.stdout) && /unsafe path/.test(out.stdout) && /rejected "over budget".*over the auto budget/.test(out.stdout) && /Budget left in this session: 0/.test(out.stdout), out.stdout);
+  assert(tasks[0].status === 'READY' && tasks[0].verifySuggestion === 'rm -rf /' && tasks[0].verifyCmd === undefined, 'AI-suggested check must be recorded, never used');
+  assert(vis(d, 'propose', 'S9', JSON.stringify({ tasks: [t('x', ['src/q.js'])] })).status === 0, 'a new session has its own budget');
+  const b = vis(d, 'brief', '--next', '--auto-session', 'S1');
+  assert(b.status === 0 && /Task: good one/.test(b.stdout), b.stdout + b.stderr);
+});
+
+await test('named editor agents: sync-agents writes one agent per lead from team.json + roles (BA no shell, DEV/QA tests only), detects stale files, and Doctor reports them', () => {
+  const d = sandbox();
+  const r = node(d, ['.harness/team.mjs', 'sync-agents']);
+  assert(r.status === 0 && /wrote \.claude\/agents\/lead-dev\.md/.test(r.stdout), r.stdout + r.stderr);
+  const fm = (f) => { const t = read(d, `.claude/agents/${f}.md`); const m = t.match(/^---\nname: (.+)\ndescription: (.+)\ntools: (.+)\n---\n/); assert(m, `bad frontmatter in ${f}`); return { name: m[1], desc: m[2], tools: m[3].split(', '), body: t }; };
+  const ba = fm('lead-ba'); const dev = fm('lead-dev'); const qa = fm('lead-qa');
+  assert(ba.name === 'lead-ba' && dev.name === 'lead-dev' && qa.name === 'lead-qa', 'names must equal the member ids (that is what you see in the editor)');
+  assert(!ba.tools.includes('Bash') && ba.tools.includes('Write') && dev.tools.includes('Bash') && qa.tools.includes('Bash') && ![ba, dev, qa].some((a) => a.tools.includes('Agent') || a.tools.includes('Task')), `tools: ${ba.tools} | ${dev.tools} | ${qa.tools}`);
+  assert(/docs\/\*\*/.test(ba.desc) && /src\/\*\*/.test(dev.desc) && /Change ONLY the files you were assigned/.test(dev.body) && /no shell/.test(ba.body) && /npm test/.test(dev.body), 'agent text');
+  assert(node(d, ['.harness/team.mjs', 'sync-agents', '--check']).status === 0, 'should be in sync right after writing');
+  fs.appendFileSync(path.join(d, '.claude', 'agents', 'lead-dev.md'), 'tampered');
+  assert(node(d, ['.harness/team.mjs', 'sync-agents', '--check']).status === 1, 'a tampered agent must be detected');
+  fs.writeFileSync(path.join(d, '.harness', 'config.json'), read(d, '.harness/config.json'));
+  assert(/editor agents out of sync/.test(node(d, ['.harness/doctor.mjs']).stdout), 'doctor should warn about stale agents');
+  node(d, ['.harness/team.mjs', 'sync-agents']);
+  const t = json(path.join(d, '.harness', 'team.json')); t.members.find((m) => m.id === 'lead-dev').scope = ['src/app/**']; fs.writeFileSync(path.join(d, '.harness', 'team.json'), JSON.stringify(t));
+  assert(node(d, ['.harness/team.mjs', 'sync-agents', '--check']).status === 1, 'changing team.json must make the agents stale');
+  node(d, ['.harness/team.mjs', 'sync-agents']);
+  assert(/src\/app\/\*\*/.test(read(d, '.claude/agents/lead-dev.md')) && /editor agents in sync/.test(node(d, ['.harness/doctor.mjs']).stdout), 're-sync did not update the agent');
+  const bad = json(path.join(d, '.harness', 'team.json')); bad.members.find((m) => m.id === 'lead-dev').scope = ['src/**', 'docs/**']; fs.writeFileSync(path.join(d, '.harness', 'team.json'), JSON.stringify(bad));
+  assert(node(d, ['.harness/team.mjs', 'sync-agents']).status === 1, 'an invalid team must not generate agents');
+});
+
+await test('auto on by default, safely: the shipped charter is ON; the hook tells the editor AI to start /harness:auto only when work is READY; the headless controller plans nothing from the placeholder charter; installer can opt out', () => {
+  assert(/^- autonomous: on$/m.test(fs.readFileSync(path.join(REPO, '.harness', 'charter.md'), 'utf8')), 'the shipped charter must be autonomous: on');
+  const d = sandbox();
+  let h = node(d, ['.harness/hook-session.mjs']).stdout;
+  assert(/Auto mode is ON but there is nothing READY and the charter objectives are not filled in/.test(h) && !/Start the autonomous workflow now/.test(h), h);
+  const tk = node(d, ['.harness/daemon.mjs', '--tick']);
+  assert(/idle/.test(tk.stdout) && calls(d, 'po-calls.txt').length === 0, `headless must not plan from the placeholder: ${tk.stdout}`);
+  setBacklog(d, [{ id: 'R1', title: 'ready task', status: 'READY', verifyCmd: PASS }]);
+  h = node(d, ['.harness/hook-session.mjs']).stdout;
+  assert(/AUTO MODE IS ON \(the owner enabled it in \.harness\/charter\.md\) and 1 task\(s\) are READY; next: "ready task"\. Start the autonomous workflow now with \/harness:auto/.test(h), h);
+  setCharter(d, { autonomous: 'off' });
+  assert(!/AUTO MODE IS ON/.test(node(d, ['.harness/hook-session.mjs']).stdout), 'off must not trigger the auto start');
+  const id = runIdOf(vis(d, 'brief', '--goal', 'g', '--check', PASS));
+  h = node(d, ['.harness/hook-session.mjs']).stdout;
+  assert(new RegExp(`UNFINISHED editor run ${id}`).test(h) && /verify .*rollback|rollback/.test(h) && !/AUTO MODE IS ON/.test(h), h);
+  vis(d, 'rollback', id);
+  const on = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-auto-on-')); const off = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-auto-off-'));
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), on], { encoding: 'utf8' });
+  const ro = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), off, '--autonomous', 'off'], { encoding: 'utf8' });
+  assert(/^- autonomous: on$/m.test(read(on, '.harness/charter.md')) && /^- autonomous: off$/m.test(read(off, '.harness/charter.md')) && /set +autonomous mode OFF/.test(ro.stdout), 'installer default/opt-out');
+  assert(fs.existsSync(path.join(on, '.claude', 'agents', 'lead-dev.md')) && fs.existsSync(path.join(on, '.claude', 'commands', 'harness', 'auto.md')), 'agents/commands not installed');
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-own-charter-')); fs.mkdirSync(path.join(own, '.harness'), { recursive: true }); fs.writeFileSync(path.join(own, '.harness', 'charter.md'), '# mine\n- autonomous: on\n');
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), own, '--autonomous', 'off']);
+  assert(read(own, '.harness/charter.md') === '# mine\n- autonomous: on\n', 'a project\'s own charter must never be touched by the installer');
+  assert(spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), off, '--autonomous', 'maybe'], { encoding: 'utf8' }).status === 1, 'a bad --autonomous value must be refused');
+});
+
+await test('documentation matches reality: every script, sub-command and slash command that the README, AGENTS.md, docs and commands tell people to use exists', () => {
+  const docs = ['README.md', 'AGENTS.md', 'docs/WORKFLOW.md', ...fs.readdirSync(path.join(REPO, '.claude', 'commands', 'harness')).map((f) => `.claude/commands/harness/${f}`)];
+  const sources = { visible: fs.readFileSync(path.join(REPO, '.harness', 'visible.mjs'), 'utf8'), team: fs.readFileSync(path.join(REPO, '.harness', 'team.mjs'), 'utf8'), backlog: fs.readFileSync(path.join(REPO, '.harness', 'backlog.mjs'), 'utf8'), memory: fs.readFileSync(path.join(REPO, '.harness', 'memory.mjs'), 'utf8') };
+  const cmdFiles = new Set(fs.readdirSync(path.join(REPO, '.claude', 'commands', 'harness')).map((f) => f.replace(/\.md$/, '')));
+  const problems = [];
+  for (const f of docs) {
+    const t = fs.readFileSync(path.join(REPO, f), 'utf8');
+    for (const m of t.matchAll(/node \.harness\/([a-z-]+)\.mjs/g)) if (!fs.existsSync(path.join(REPO, '.harness', `${m[1]}.mjs`))) problems.push(`${f}: missing script .harness/${m[1]}.mjs`);
+    for (const m of t.matchAll(/visible\.mjs (brief|assign|verify|rollback|propose|status|report|[a-z]+)\b/g)) if (!new RegExp(`case '${m[1]}'`).test(sources.visible)) problems.push(`${f}: visible.mjs has no sub-command "${m[1]}"`);
+    for (const m of t.matchAll(/team\.mjs (show|validate|sync-agents|[a-z-]+)\b/g)) if (!sources.team.includes(`'${m[1]}'`)) problems.push(`${f}: team.mjs has no "${m[1]}"`);
+    for (const m of t.matchAll(/\/harness:([a-z]+)/g)) if (!cmdFiles.has(m[1])) problems.push(`${f}: slash command /harness:${m[1]} does not exist`);
+    for (const m of t.matchAll(/`(\.harness\/(?:[a-z-]+\/)*[A-Za-z0-9_.-]+\.(?:mjs|json|md))`/g)) if (!/<|\*/.test(m[1]) && !fs.existsSync(path.join(REPO, m[1])) && !/live\.log|state\.json|telemetry|daemon\.pid|auto-state|engine-probe|auto-lessons|report\.md|run\.json|failed\/|completed\/|visible\/|releases\/|sessions\/|inbox\//.test(m[1])) problems.push(`${f}: mentions ${m[1]}, which does not exist`);
+  }
+  assert(problems.length === 0, problems.slice(0, 12).join('\n      '));
+  assert(fs.existsSync(path.join(REPO, 'docs', 'WORKFLOW.md')) && /docs\/WORKFLOW\.md/.test(fs.readFileSync(path.join(REPO, 'README.md'), 'utf8')), 'README must link to docs/WORKFLOW.md');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

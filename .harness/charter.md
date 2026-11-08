@@ -6,16 +6,22 @@ Edit it in plain words. To replace it and keep the old one, run task
 "Harness: Import New Goal/Backlog with Snapshot" (the old charter goes to `.harness/releases/`).
 
 ## 0. Machine-readable policy (the harness reads these exact bullets)
-- autonomous: off
+- autonomous: on
 - maxAutoTasksPerRun: 3
 - allowedPaths: src/**, docs/**, tests/**, test/**
 - forbiddenPaths: .git/**, .harness/**, node_modules/**, .env*, production-credentials/**
 - forbiddenTools: Bash(git push:*), Bash(git remote:*), Bash(rm -rf:*), Bash(npm publish:*)
 - requireRealCheck: yes
 
-`autonomous: on` lets the scheduled controller promote READY backlog items and, when none are
-left, ask the PO_ARCHITECT to write new ones. Keep it `off` until the objectives below describe
-your project.
+`autonomous: on` (the default of this template) means the workflow runs by itself: it takes READY
+backlog items, has the orchestrator delegate them to the named agents, verifies the result and reports to
+you. It is safe to leave on because:
+- it only acts on **READY items you put in the backlog**; it invents new tasks only after you replace the
+  "Project objectives" placeholder below with your real goals (until then it plans nothing and spends nothing);
+- it needs a **real check** (`requireRealCheck`), does at most `maxAutoTasksPerRun` tasks per run, and **pauses on any failure** for you to decide;
+- every file an agent changes is checked against its assignment, anything outside is reverted, and headless
+  autonomous work lands on the `uat` branch, never on `main`.
+Set `- autonomous: off` to stop all of it.
 
 ## 1. Project Identity & Operational Objectives
 - System Role: Autonomous Project Lifecycle Orchestrator (acting on behalf of the Lead PO/Architect).

@@ -2,10 +2,10 @@
 /**
  * test/live-e2e.mjs — REAL end-to-end test with real Claude Code agents (not the mock engine).
  *
- *   npm run test:live              all four scenarios
- *   node test/live-e2e.mjs manual      one scenario: manual | autonomous | hierarchy | editor
+ *   npm run test:live              all six scenarios
+ *   node test/live-e2e.mjs visible     one scenario: manual | autonomous | hierarchy | visible | auto | editor
  *
- * It costs real money (roughly $1.5 for everything: a dozen agent runs) and needs the `claude` CLI installed
+ * It costs real money (roughly $2.5 for everything: about twenty agent runs) and needs the `claude` CLI installed
  * and logged in. It is NOT part of `npm test`. Every scenario runs in its own throw-away project
  * under your temp folder and stops any controller it starts.
  *
@@ -15,6 +15,9 @@
  *   hierarchy   `dispatch --hierarchy --max-cost 2` → a REAL orchestrator splits the goal between REAL team leads,
  *               each lead plans its REAL workers, the workers run in parallel inside their lead's scope; the
  *               cost of every agent is counted against the cap
+ *   visible     the EDITOR workflow: a real Claude Code session is the orchestrator, follows /harness:run, and starts the
+ *               real NAMED agents lead-ba/lead-dev/lead-qa in one message; the controller verifies and a report comes back
+ *   auto        the same with autonomous mode on: a READY backlog task is worked by itself (/harness:auto)
  *   editor      Claude Code accepts .claude/settings.json (no rule-syntax warnings) and the
  *               SessionStart hook really reaches the AI
  */
@@ -63,7 +66,7 @@ const header = (f) => `node -e "const t=require('fs').readFileSync('${f}','utf8'
 
 // ───────────────────────── manual: controller + dispatch + live feed ─────────────────────────
 async function manual() {
-  console.log('Scenario 1/4 — manual task: real agent, live feed, verified result');
+  console.log('Scenario 1/6 — manual task: real agent, live feed, verified result');
   const d = project('manual');
   const ctl = await startController(d);
   try {
@@ -84,7 +87,7 @@ async function manual() {
 
 // ───────────────────────── autonomous: backlog → tick → uat ─────────────────────────
 async function autonomous() {
-  console.log('\nScenario 2/4 — autonomous tick: DEV + QA agents in parallel, merged into uat only after the check');
+  console.log('\nScenario 2/6 — autonomous tick: DEV + QA agents in parallel, merged into uat only after the check');
   const d = project('auto');
   const mainBefore = git(d, 'rev-parse', 'main');
   const charter = path.join(d, '.harness', 'charter.md');
@@ -125,7 +128,7 @@ async function autonomous() {
 
 // ───────────────────────── hierarchy: real orchestrator → real leads → real workers ─────────────────────────
 async function hierarchy() {
-  console.log('\nScenario 3/4 — team hierarchy: real orchestrator → leads → workers, scoped, in parallel, cost counted');
+  console.log('\nScenario 3/6 — team hierarchy: real orchestrator → leads → workers, scoped, in parallel, cost counted');
   const d = project('hier');
   const ctl = await startController(d);
   let from; let id;
@@ -168,9 +171,76 @@ async function hierarchy() {
   check('no controller left running', !fs.existsSync(path.join(d, '.harness', 'daemon.pid')));
 }
 
+// ───────────────────────── editor workflow: a REAL orchestrator session + REAL named agents ─────────────────────────
+// A headless Claude Code session plays the orchestrator and follows one of the slash-command files exactly as an
+// editor session would. Its event stream tells us who did what: the main session's calls vs the named agents' calls.
+const ORCH_TOOLS = ['Agent', 'Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash(node .harness/visible.mjs:*)', 'Bash(node .harness/status.mjs:*)', 'Bash(npm test:*)', 'Bash(node --test:*)'].join(',');
+function orchestrate(d, commandFile, instruction) {
+  const prompt = `Read the file .claude/commands/harness/${commandFile} and follow it exactly, as if the user had typed that command. ${instruction}`;
+  const t = Date.now();
+  // the prompt goes on stdin: --allowedTools would swallow it as one more tool name
+  const r = spawnSync('claude', ['-p', '--output-format', 'stream-json', '--verbose', '--allowedTools', ORCH_TOOLS], { cwd: d, input: prompt, encoding: 'utf8', timeout: 900000, maxBuffer: 64 * 1024 * 1024 });
+  const events = (r.stdout || '').split('\n').filter((l) => l.startsWith('{')).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const calls = [];
+  for (const e of events) if (e.type === 'assistant') for (const c of e.message?.content || []) if (c.type === 'tool_use') calls.push({ name: c.name, input: c.input || {}, parent: e.parent_tool_use_id || null, msg: e.message?.id });
+  // a headless session can emit several `result` events (one per turn as background agents report back): the LAST one is the final report
+  const result = events.filter((e) => e.type === 'result').pop() || {};
+  const agents = calls.filter((c) => c.name === 'Agent' || c.name === 'Task');
+  return { status: r.status, seconds: Math.round((Date.now() - t) / 1000), calls, agents, result, text: String(result.result || ''), stderr: r.stderr || '' };
+}
+const runRecords = (d) => { const v = path.join(d, '.harness', 'visible'); return fs.existsSync(v) ? fs.readdirSync(v).map((x) => json(path.join(v, x, 'run.json'))) : []; };
+function checkOrchestration(d, o, { expectLeads = 2 } = {}) {
+  const named = [...new Set(o.agents.map((a) => a.input.subagent_type))];
+  console.log(`      the orchestrator started these NAMED agents: ${named.join(', ')}   (${o.seconds}s, $${(o.result.total_cost_usd ?? 0).toFixed(3)})`);
+  console.log(`      the agents' own tool calls: ${o.calls.filter((c) => c.parent).map((c) => `${c.name}${c.input.file_path ? ` ${path.relative(d, c.input.file_path)}` : ''}`).join(', ')}`);
+  check('the real orchestrator session finished without error', o.status === 0 && !o.result.is_error && o.text.length > 0, `${o.status} ${o.stderr.slice(0, 300)}`);
+  check(`named agents from .claude/agents were started (${expectLeads}+ of lead-ba, lead-dev, lead-qa)`, named.filter((n) => /^lead-(ba|dev|qa)$/.test(n)).length >= expectLeads, JSON.stringify(named));
+  const perMsg = {}; for (const a of o.agents) perMsg[a.msg] = (perMsg[a.msg] || 0) + 1;
+  check('all agents were started together in ONE message, so they run in parallel and are visible', Math.max(0, ...Object.values(perMsg)) >= expectLeads, JSON.stringify(perMsg));
+  const mainWrites = o.calls.filter((c) => !c.parent && ['Write', 'Edit'].includes(c.name) && c.input.file_path && path.resolve(c.input.file_path).startsWith(d + path.sep));
+  check('the orchestrator did not write project files itself (only the named agents did)', mainWrites.length === 0 && o.calls.some((c) => c.parent && ['Write', 'Edit'].includes(c.name)), mainWrites.map((c) => c.input.file_path).join(', '));
+  const used = o.calls.filter((c) => !c.parent && c.name === 'Bash').map((c) => String(c.input.command));
+  check('the controller was used for brief → assign → verify', ['brief', 'assign', 'verify'].every((s) => used.some((u) => new RegExp(`visible\\.mjs ${s}`).test(u))), used.map((u) => u.slice(0, 60)).join(' | '));
+  check('the final message reports back to the human naming the agents, and nothing was committed', named.filter((n) => o.text.includes(n)).length >= expectLeads && git(d, 'rev-list', '--count', 'HEAD') === '1', o.text.slice(0, 300));
+}
+
+async function visibleRun() {
+  console.log('\nScenario 4/6 — editor workflow: real orchestrator → real NAMED agents (lead-ba/dev/qa) → controller verify → report');
+  const d = project('visible');
+  const goal = 'Build a small clamp helper as a team: a short spec in docs/clamp.md; src/clamp.js (CommonJS, exports { clamp }; clamp(n, min, max) returns n limited to [min, max]; throws TypeError if any argument is not a finite number and RangeError if min > max); and tests/clamp.test.js using node:test that require("../src/clamp.js") and cover it.';
+  const o = orchestrate(d, 'run.md', `Where it says $ARGUMENTS, the goal is: ${goal}`);
+  checkOrchestration(d, o, { expectLeads: 3 });
+  const runs = runRecords(d);
+  check('the controller recorded the run as PASSED with an assignment per lead', runs.length === 1 && runs[0].status === 'PASSED' && runs[0].assignments.length === 3 && runs[0].cycles >= 1, JSON.stringify(runs.map((r) => [r.status, r.assignments.length])));
+  const changed = git(d, 'status', '--porcelain', '-uall').split('\n').filter(Boolean).map((l) => l.slice(3)).filter((f) => !/^(\.harness|\.claude)\//.test(f) && !/^(CLAUDE|GEMINI|AGENTS)\.md$|^\.(vscode|github|cursor)\/|^\.windsurfrules$|^package\.json$|^\.gitignore$/.test(f));
+  check('only docs/clamp.md, src/clamp.js and tests/clamp.test.js were created', changed.sort().join() === 'docs/clamp.md,src/clamp.js,tests/clamp.test.js', changed.join(', '));
+  const tp = nodeIn(d, ['--test']);
+  check('the team produced working code: its tests pass (node --test)', tp.status === 0 && /# pass [1-9]/.test(tp.stdout) && /# fail 0/.test(tp.stdout), tp.stdout.slice(-300));
+  check('the report and a session note with the team were written', fs.existsSync(path.join(d, '.harness', 'visible', runs[0]?.id || 'none', 'report.md')) && fs.readdirSync(path.join(d, '.harness', 'memory', 'sessions')).some((f) => /Team: orchestrator/.test(fs.readFileSync(path.join(d, '.harness', 'memory', 'sessions', f), 'utf8'))), '');
+}
+
+async function autoRun() {
+  console.log('\nScenario 5/6 — autonomous mode (editor): READY backlog task → orchestrator works it by itself → report');
+  const d = project('auto');
+  const charter = path.join(d, '.harness', 'charter.md');
+  if (!/^- autonomous: on$/m.test(fs.readFileSync(charter, 'utf8'))) throw new Error('the shipped charter should be autonomous: on');
+  const cmd = nodeIn(d, ['.harness/backlog.mjs', 'add', 'Add a slug helper', '--status', 'READY', '--priority', '1',
+    '--goal', 'Create src/slug.js (CommonJS, exports { slugify }; slugify(text) lowercases, trims, replaces every run of non-alphanumeric characters with a single "-", strips leading/trailing "-", throws TypeError if text is not a string) and tests/slug.test.js (node:test) covering it.']);
+  check('a READY task was added to the backlog', cmd.status === 0 && /READY/.test(cmd.stdout), cmd.stdout + cmd.stderr);
+  const hook = nodeIn(d, ['.harness/hook-session.mjs']).stdout;
+  check('the session hook tells the editor AI that AUTO MODE is on and a task is READY', /AUTO MODE IS ON/.test(hook) && /1 task\(s\) are READY/.test(hook) && /\/harness:auto/.test(hook), hook);
+  const o = orchestrate(d, 'auto.md', 'Where it says $ARGUMENTS there is nothing extra: do at most one task.');
+  checkOrchestration(d, o, { expectLeads: 1 });
+  const b = json(path.join(d, '.harness', 'backlog.json')).tasks[0];
+  const runs = runRecords(d);
+  check('the controller marked the backlog item DONE (VERIFIED) and linked the run', b.status === 'DONE' && b.result === 'VERIFIED' && runs.length === 1 && runs[0].status === 'PASSED' && runs[0].autonomous === true && !!runs[0].autoSession, JSON.stringify([b.status, runs.map((r) => [r.status, r.autonomous, r.autoSession])]));
+  const tp = nodeIn(d, ['--test']);
+  check('the autonomous work is real: its tests pass (node --test)', tp.status === 0 && /# pass [1-9]/.test(tp.stdout) && fs.existsSync(path.join(d, 'src', 'slug.js')), tp.stdout.slice(-300));
+}
+
 // ───────────────────────── editor: Claude Code accepts our settings + hook reaches the AI ─────────────────────────
 function editor() {
-  console.log('\nScenario 4/4 — Claude Code editor integration (.claude/settings.json + SessionStart hook)');
+  console.log('\nScenario 6/6 — Claude Code editor integration (.claude/settings.json + SessionStart hook)');
   const d = project('editor');
   check('install copied .claude/settings.json and the slash commands', fs.existsSync(path.join(d, '.claude', 'settings.json')) && ['status', 'tick', 'doctor', 'run', 'teach', 'team'].every((c) => fs.existsSync(path.join(d, '.claude', 'commands', 'harness', `${c}.md`))), '');
   const ping = sh('claude', ['-p', 'Reply with the single word OK.'], { cwd: d, stdio: ['ignore', 'pipe', 'pipe'], timeout: 180000 });
@@ -186,6 +256,8 @@ try {
   if (!only || only === 'manual') await manual();
   if (!only || only === 'autonomous') await autonomous();
   if (!only || only === 'hierarchy') await hierarchy();
+  if (!only || only === 'visible') await visibleRun();
+  if (!only || only === 'auto') await autoRun();
   if (!only || only === 'editor') editor();
 } catch (e) { fail++; console.log(`  ✖ scenario crashed: ${e.stack}`); }
 console.log(`\n${pass} passed, ${fail} failed  (${Math.round((Date.now() - t0) / 1000)}s)`);

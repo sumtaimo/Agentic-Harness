@@ -737,7 +737,7 @@ async function hierDecompose(task, gov) {
       seenLeads.add(lead.id);
       if (typeof a.goal !== 'string' || !a.goal.trim()) throw new Error(`assignment to "${lead.id}" has no goal.`);
       if (!Array.isArray(a.files) || !a.files.length) throw new Error(`assignment to "${lead.id}" has no files.`);
-      a.files = a.files.map((f) => { const s = safeTarget(f); if (!s) throw new Error(`assignment to "${lead.id}" has an unsafe path "${f}".`); return String(f).endsWith('/') ? `${s}/` : s; });
+      a.files = a.files.map((f) => { const s = safeTarget(f); if (!s) throw new Error(`assignment to "${lead.id}" has an unsafe path "${f}".`); const base = s.replace(/\/+$/, ''); return String(f).endsWith('/') ? `${base}/` : base; });
       for (const f of a.files) {
         if (!withinAll(f, lead.scope)) throw new Error(`file "${f}" is outside lead "${lead.id}"'s scope (${lead.scope.join(', ')}).`);
         if (userAllowed.length && !inScope(stripSlash(f), userAllowed)) throw new Error(`file "${f}" is outside the files the user allowed (${userAllowed.join(', ')}).`);
@@ -836,7 +836,7 @@ async function hierDecompose(task, gov) {
   plan.assignments.forEach((a, i) => {
     const lead = leads.find((l) => l.id === a.lead);
     const mine = settled[i].value.map((s) => ({
-      id: `${lead.id}.${s.id}`, lead: lead.id, role: lead.role, skills: Array.isArray(s.skills) ? s.skills : undefined,
+      id: `${lead.id}.${s.id}`, lead: lead.id, role: lead.role, skills: Array.isArray(s.skills) ? s.skills : (lead.skills && lead.skills.length ? lead.skills : undefined),
       targetFiles: s.targetFiles, prompt: String(s.prompt).trim(), engine: task.engine, goal: a.goal,
       timeoutMs: minutesToMs(lead.budget?.maxMinutes, undefined), maxCostUsd: lead.budget?.maxCostUsd
     }));
@@ -1343,6 +1343,11 @@ async function autonomousTick(reason = 'interval') {
 
     let item = nextReady();
     if (!item) {
+      // "autonomous: on" never means planning from nothing: with the placeholder objectives there is no AI call and no spend.
+      if (/\(describe your product goals here/.test(gov.charter.text)) {
+        refreshAutoStatus('idle: no READY task, and the charter objectives are not filled in, so nothing to plan (no AI call)');
+        return 'idle';
+      }
       const checkView = await projectView();
       const realCheck = detectVerifyCmd(checkView.dir, config).real; await checkView.cleanup();
       if (gov.charter.requireRealCheck && !realCheck) {

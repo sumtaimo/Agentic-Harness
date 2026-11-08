@@ -34,6 +34,36 @@ You can use it without being able to code.
 
 ---
 
+## How it works — the workflow
+
+```
+ YOU give a goal (or the backlog already has READY tasks: autonomous mode is ON by default)
+  │
+  ▼
+ CONTROLLER   .harness/  — plain scripts and rules; the only part that enforces anything
+  │            holds: the task · charter.md (limits) · backlog.json · team.json (who may do what) · memory
+  │            does:  briefs the orchestrator → validates its delegation → checks every changed file → runs the real check → writes the report
+  ▼  brief
+ ORCHESTRATOR your editor session. It only PLANS and DELEGATES; it never edits project files
+  │
+  ▼  delegates, all at once
+ NAMED AGENTS lead-ba · lead-dev · lead-qa   ← you SEE them working in your session; each owns only its assigned files
+  │
+  ▼  report back
+ CONTROLLER   verify: every changed file must belong to an agent (anything outside is reverted) → the real check (e.g. npm test)
+  │
+  ▼
+ REPORT       to you, in plain words: what each agent did, did the check pass, what needs your decision
+```
+
+**The rules ("agent law")**, enforced by the controller, not by asking the AI nicely:
+1. **Nothing starts without a brief**, and the orchestrator's delegation is validated *before* any agent starts (right agent, files inside its scope, no overlaps). Three bad delegations escalate to you.
+2. **Each agent changes only its assigned files.** Anything else (including the charter, the team, the config, roles, skills and `.claude/`) is detected and reverted.
+3. **Done means the real check passed.** Not "the AI says so". 3 cycles at most, then it stops, restores the files and asks you.
+4. **Nothing is committed, pushed or merged for you.** (Headless autonomous work lands on a `uat` branch, never `main`.)
+5. **Autonomous mode is ON by default, and safe:** it acts on READY tasks you add; it plans new ones only once you describe your goals in `charter.md`; it needs a real check; it does at most `maxAutoTasksPerRun` tasks; any failure pauses it for your decision.
+6. **You always get a report.** Full detail of the rules, the two modes (editor / headless) and what is *not* enforced: [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
+
 ## 1. Get it
 
 Pick one:
@@ -52,10 +82,14 @@ node agentic-harness/install.mjs /path/to/their/project     # safe to re-run; ne
 cd /path/to/their/project && node .harness/doctor.mjs         # checks Node, the AI engine, git, the team, the rules
 ```
 Then they simply **prompt it**, from either place:
-- **Editor (Claude Code):** open the project, accept the trust dialog once, and type `/harness:run <what you want>`.
-  Say "use the team" (or ask for something big) and it runs the agent hierarchy; the agents appear in the chat live.
-- **Terminal:** `node .harness/daemon.mjs` in one terminal, then in another
-  `node .harness/dispatch.mjs --goal "<what you want>" --hierarchy --max-cost 2 --wait` and watch the agents work.
+- **Editor (Claude Code):** open the project, **accept the trust dialog once, then restart the session** (so it loads the named agents),
+  and type `/harness:run <what you want>`. Your session becomes the orchestrator, the named agents `lead-ba`, `lead-dev`, `lead-qa`
+  appear working in the session, and you get a report. Type `/harness:auto` to let it work through the READY backlog by itself.
+- **Terminal / unattended:** `node .harness/daemon.mjs` in one terminal, then in another
+  `node .harness/dispatch.mjs --goal "<what you want>" --hierarchy --max-cost 2 --wait` and watch the agents work (the headless
+  controller can also enforce a money cap).
+- **Before the first run, tell it your goals:** describe your project in `.harness/charter.md` ("Project objectives"). Until you do, autonomous
+  mode will run any READY task you add but will not invent work. `node install.mjs <project> --autonomous off` installs with autonomy off.
 
 Each team then makes it theirs by editing plain files: `.harness/team.json` (who is on the agent team and what each may touch),
 `.harness/charter.md` (what the harness may do on its own), `.harness/roles/` and `.harness/skills/` (personas and rules),
@@ -170,7 +204,8 @@ The template ships a project config for Claude Code (VS Code extension, terminal
 
 | Command | What it does |
 |---|---|
-| `/harness:run <goal>` | starts the controller in the background, dispatches your goal, and **streams every agent action into the chat**, then explains the result |
+| `/harness:run <goal>` | **the visible workflow:** the controller briefs your session (the orchestrator), which delegates to the named agents (`lead-ba`, `lead-dev`, `lead-qa`) that work in parallel in front of you; the controller then verifies the files and the real check, and you get a report |
+| `/harness:auto` | the same, **autonomous**: works through the READY backlog by itself (and proposes tasks once the charter objectives are filled in), pauses on any failure, then reports |
 | `/harness:status` | runs `node .harness/status.mjs` + the backlog overview and summarises them in plain words |
 | `/harness:tick` | one autonomous step (`node .harness/daemon.mjs --tick`). It first checks the charter: if `autonomous: off` it stops and asks, and never edits the charter itself |
 | `/harness:doctor` | runs `node .harness/doctor.mjs` and explains every failure, warning and note |
@@ -403,8 +438,9 @@ node .harness/memory.mjs list|remember|forget|context|sessions
 node .harness/doctor.mjs                 # setup check + engine flag probe
 node .harness/status.mjs --log 25        # state + recent JSONL events
 node .harness/watch.mjs --job <id>       # live feed of every agent action until that job finishes
-node test/run-tests.mjs                  # 77 end-to-end tests with a mock engine (no AI account needed, free)
-npm run test:live                        # REAL Claude agents end to end (manual task, autonomous uat run, agent-team hierarchy, editor config); ~$1.5, needs `claude` logged in
+node test/run-tests.mjs                  # 88 end-to-end tests with a mock engine (no AI account needed, free)
+npm run test:live                        # REAL Claude agents end to end, 6 scenarios (manual task, autonomous uat run, headless team, the editor workflow with named agents, autonomous editor mode, editor config); ~$2.5, needs `claude` logged in
+node .harness/visible.mjs status          # runs of the editor workflow
 node .harness/team.mjs show|validate     # the agent team and its guardrails
 ```
 

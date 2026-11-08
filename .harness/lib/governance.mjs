@@ -6,7 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, HARNESS_DIR, DIRS, FILES, atomicWriteJson, readJsonSafe, ensureDirs, LESSONS_HEADER, AUTO_LESSONS_HEADER } from './common.mjs';
+import { ROOT, HARNESS_DIR, DIRS, FILES, atomicWriteJson, readJsonSafe, ensureDirs, LESSONS_HEADER, AUTO_LESSONS_HEADER, safeTarget } from './common.mjs';
 
 export const GOV = {
   charter: path.join(HARNESS_DIR, 'charter.md'),
@@ -330,6 +330,107 @@ export function describeMember(m, roles) {
     scope: m.scope || [], maxWorkers: m.level === 'lead' ? (m.maxWorkers ?? 3) : null,
     tools: r.allowedTools || [], budget: m.budget || {}, mission: r.mission || r.description || ''
   };
+}
+
+/**
+ * Level-1 guardrail, shared by the headless controller and the editor workflow: is the orchestrator's
+ * delegation allowed? Throws an Error with a plain message on the first broken rule.
+ *  - each assignment goes to a lead the orchestrator may delegate to, each lead at most once
+ *  - every file is a safe relative path inside that lead's scope (and inside what the user allowed)
+ *  - no two leads are given overlapping files
+ */
+export function validateDelegation(plan, { leads, delegable, userAllowed = [] }) {
+  if (!plan || !Array.isArray(plan.assignments) || !plan.assignments.length) throw new Error('JSON has no "assignments" list.');
+  const strip = (f) => String(f).replace(/\/$/, '');
+  const inside = (file, targets) => targets.some((t) => { const n = strip(String(t).replace(/\\/g, '/').replace(/^\.\//, '')); return file === n || file.startsWith(`${n}/`); });
+  const seenLeads = new Set(); const claimed = [];
+  for (const a of plan.assignments) {
+    const lead = leads.find((l) => l.id === a.lead);
+    if (!lead || !delegable.has(lead.id)) throw new Error(`assignment to "${a.lead}": that is not a lead you may delegate to (${[...delegable].join(', ')}).`);
+    if (seenLeads.has(lead.id)) throw new Error(`lead "${lead.id}" is assigned twice; use each lead at most once.`);
+    seenLeads.add(lead.id);
+    if (typeof a.goal !== 'string' || !a.goal.trim()) throw new Error(`assignment to "${lead.id}" has no goal.`);
+    if (!Array.isArray(a.files) || !a.files.length) throw new Error(`assignment to "${lead.id}" has no files.`);
+    a.files = a.files.map((f) => { const s = safeTarget(f); if (!s) throw new Error(`assignment to "${lead.id}" has an unsafe path "${f}".`); const base = s.replace(/\/+$/, ''); return String(f).endsWith('/') ? `${base}/` : base; });
+    for (const f of a.files) {
+      if (!withinAll(f, lead.scope)) throw new Error(`file "${f}" is outside lead "${lead.id}"'s scope (${lead.scope.join(', ')}).`);
+      if (userAllowed.length && !inside(strip(f), userAllowed)) throw new Error(`file "${f}" is outside the files the user allowed (${userAllowed.join(', ')}).`);
+      for (const [other, by] of claimed) {
+        if (by !== lead.id && (strip(f) === strip(other) || strip(f).startsWith(`${strip(other)}/`) || strip(other).startsWith(`${strip(f)}/`))) throw new Error(`Swarm Lock Collision: "${f}" (${lead.id}) overlaps "${other}" (${by}).`);
+      }
+      claimed.push([f, lead.id]);
+    }
+  }
+  return plan;
+}
+
+// ───────────────────────────── native editor agents generated from team.json ─────────────────────────────
+// In the editor (Claude Code) every lead is also a NAMED sub-agent the orchestrator can delegate to, so you see
+// "lead-dev" etc. working in the session. The files in .claude/agents/ are generated from team.json + roles, so
+// team.json stays the single source of truth for each member's set-up.
+
+export const AGENTS_DIR = path.join(ROOT, '.claude', 'agents');
+const hasRule = (role, re) => (role.allowedTools || []).some((r) => re.test(r));
+
+/** The native tool list for a lead: read tools always; write tools if the role owns files; Bash only if the role runs tests/node. */
+export function agentToolsFor(role) {
+  const tools = ['Read', 'Glob', 'Grep'];
+  if ((role.writablePaths || []).length) tools.push('Edit', 'Write');
+  if (hasRule(role, /^Bash\((npm|node)/)) tools.push('Bash');
+  return tools;
+}
+
+export function renderAgentFile(lead, role, team) {
+  const orch = (team.members || []).find((m) => m.level === 'orchestrator');
+  const tools = agentToolsFor(role);
+  const mission = role.mission || role.description || lead.role;
+  const desc = `${lead.id} (${role.name}), a lead on the agent team. The orchestrator delegates ${lead.scope.join(', ')} work to it; it changes only the files it is assigned.`.replace(/\s+/g, ' ');
+  return [
+    '---',
+    `name: ${lead.id}`,
+    `description: ${desc}`,
+    `tools: ${tools.join(', ')}`,
+    '---',
+    `<!-- Generated from .harness/team.json and .harness/roles by "node .harness/team.mjs sync-agents". Edit those, not this file. -->`,
+    `You are **${lead.id}**, a team lead (level 2) in an agent team${orch ? ` reporting to the orchestrator \`${orch.id}\`` : ''}. Your role: ${role.name}.`,
+    '',
+    mission,
+    '',
+    `Your team may own: ${lead.scope.join(', ')}. The orchestrator's message tells you exactly which files you may create or change in this run.`,
+    '',
+    '## How you work',
+    '- Change ONLY the files you were assigned. The controller compares every changed file against the assignments after you finish: anything outside your files is reverted and the run fails.',
+    '- Follow the shared interface contract and acceptance criteria in your assignment exactly; other leads are building against them in parallel.',
+    '- Never touch `.harness/`, `.claude/`, `.git/`, secrets or `.env*`. Never run git commands that change history or remotes, and never push.',
+    ...(tools.includes('Bash') ? ['- You may check your work with `npm test` or `node --test`. Do not run other commands.'] : ['- You have no shell. Work with the file tools only.']),
+    '- Finish with a short report (at most 5 lines): files changed, what you did, what you checked, anything unresolved. Do not claim you tested something you did not run.',
+    ''
+  ].join('\n');
+}
+
+/** { 'lead-dev.md': content, … } for every lead whose role is known. */
+export function expectedAgentFiles(team, roles) {
+  const out = {};
+  for (const l of (team?.members || []).filter((m) => m.level === 'lead')) {
+    const role = roles[String(l.role).toUpperCase()];
+    if (role) out[`${l.id}.md`] = renderAgentFile(l, role, team);
+  }
+  return out;
+}
+
+/** Write (or check) .claude/agents/*.md. Returns { written[], unchanged[], stale[] }; with check:true nothing is written. */
+export function syncAgents(team, roles, { dir = AGENTS_DIR, check = false } = {}) {
+  const want = expectedAgentFiles(team, roles);
+  const res = { written: [], unchanged: [], stale: [] };
+  if (!check) fs.mkdirSync(dir, { recursive: true });
+  for (const [f, content] of Object.entries(want)) {
+    const p = path.join(dir, f);
+    let cur = null; try { cur = fs.readFileSync(p, 'utf8'); } catch { /* missing */ }
+    if (cur === content) res.unchanged.push(f);
+    else if (check) res.stale.push(f);
+    else { fs.writeFileSync(p, content); res.written.push(f); }
+  }
+  return res;
 }
 
 // ───────────────────────────── backlog store ─────────────────────────────

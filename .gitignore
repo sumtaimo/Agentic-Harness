@@ -11,6 +11,7 @@
 .harness/failed/*
 .harness/staging/*
 .harness/releases/*
+.harness/visible/*
 .harness/worktrees/*
 .harness/memory/sessions/*
 .harness/memory/auto-lessons.md
