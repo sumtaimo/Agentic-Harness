@@ -1,11 +1,13 @@
 /**
  * .harness/lib/common.mjs
- * Shared helpers for the harness: paths, config, engine detection, memory store.
+ * Shared helpers: paths, config, engine detection + flag probing, verify-command detection,
+ * project file listing, and the Markdown memory store.
  * Zero dependencies — Node.js 18+ standard library only.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // Project root = the folder that contains .harness/ (works no matter where you run from).
@@ -18,6 +20,7 @@ export const DIRS = {
   inbox: path.join(HARNESS_DIR, 'inbox'),
   completed: path.join(HARNESS_DIR, 'completed'),
   failed: path.join(HARNESS_DIR, 'failed'),
+  staging: path.join(HARNESS_DIR, 'staging'),
   worktrees: path.join(HARNESS_DIR, 'worktrees'),
   memory: path.join(HARNESS_DIR, 'memory'),
   sessions: path.join(HARNESS_DIR, 'memory', 'sessions')
@@ -27,6 +30,7 @@ export const FILES = {
   state: path.join(HARNESS_DIR, 'state.json'),
   log: path.join(HARNESS_DIR, 'telemetry.log'),
   pid: path.join(HARNESS_DIR, 'daemon.pid'),
+  probe: path.join(HARNESS_DIR, 'engine-probe.json'),
   profile: path.join(HARNESS_DIR, 'memory', 'profile.md'),
   lessons: path.join(HARNESS_DIR, 'memory', 'lessons.md'),
   autoLessons: path.join(HARNESS_DIR, 'memory', 'auto-lessons.md')
@@ -68,32 +72,143 @@ export function which(binary) {
   return null;
 }
 
+// ───────────────────────────── engine flag probe ─────────────────────────────
+
+/** Flags a profile relies on: every arg starting with "-" (placeholders excluded). */
+export function profileFlags(profile) {
+  return (profile.args || []).filter((a) => /^-[\w-]/.test(a) && a !== '--' && !a.includes('{'));
+}
+
+/**
+ * Run `<binary> [subcommand] --help` once and check every configured flag appears in the output.
+ * Result is cached in .harness/engine-probe.json keyed by binary path + mtime + flags.
+ *   { installed, checked, compatible, missing[], binPath, error? }
+ * checked=false means help could not be read; that is treated as "unknown", not "incompatible".
+ */
+export function probeEngine(profile, { force = false } = {}) {
+  const binPath = which(profile.binary);
+  if (!binPath) return { installed: false, checked: false, compatible: false, missing: [], binPath: null };
+  const flags = profileFlags(profile);
+  if (flags.length === 0) return { installed: true, checked: false, compatible: true, missing: [], binPath };
+  let mtime = 0;
+  try { mtime = fs.statSync(binPath).mtimeMs; } catch { /* ignore */ }
+  const key = `${binPath}|${mtime}|${flags.join(' ')}`;
+  const cache = readJsonSafe(FILES.probe, {});
+  if (!force && cache[key]) return cache[key];
+
+  const first = (profile.args || [])[0];
+  const sub = first && !first.startsWith('-') && !first.includes('{') ? [first] : [];
+  const isWin = process.platform === 'win32';
+  const r = spawnSync(binPath, [...sub, '--help'], { encoding: 'utf8', timeout: 15000, shell: isWin, env: { ...process.env, NO_COLOR: '1' } });
+  const help = `${r.stdout || ''}\n${r.stderr || ''}`;
+  let result;
+  if (!help.trim()) {
+    result = { installed: true, checked: false, compatible: true, missing: [], binPath, error: r.error?.message || `'--help' printed nothing (exit ${r.status})` };
+  } else {
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const missing = flags.filter((f) => !new RegExp(`(^|[\\s,\\[(|/])${esc(f)}(?=[\\s,=\\]).|<\\[]|$)`, 'm').test(help));
+    result = { installed: true, checked: true, compatible: missing.length === 0, missing, binPath };
+  }
+  try { cache[key] = { ...result, probedAt: new Date().toISOString() }; atomicWriteJson(FILES.probe, cache); } catch { /* read-only is fine */ }
+  return result;
+}
+
 /**
  * Resolve which engine profile to use.
- * Order: explicit name -> HARNESS_AGENT env -> config.activeProfile.
- * "auto" picks the first engine in config.autoOrder that is installed on this machine.
+ * Order: explicit name -> HARNESS_AGENT env -> config.activeProfile ("auto" by default).
+ * "auto" = first engine in config.autoOrder that is installed and whose flags pass the probe.
+ * If an explicitly requested engine is not installed or fails the probe, we fall back to "auto"
+ * and report why (fallbackFrom / fallbackReason). Unknown names are a configuration error.
  */
-export function resolveProfile(config, requested) {
-  let key = requested || process.env.HARNESS_AGENT || config.activeProfile || 'auto';
-  key = String(key).toLowerCase();
-  if (key === 'auto') {
-    const order = config.autoOrder || Object.keys(config.profiles);
-    key = order.find((k) => config.profiles[k] && which(config.profiles[k].binary)) || order[0];
+export function resolveProfile(config, requested, { allowFallback = true } = {}) {
+  const want = String(requested || process.env.HARNESS_AGENT || config.activeProfile || 'auto').toLowerCase();
+  const order = config.autoOrder || Object.keys(config.profiles);
+  const usable = (k) => {
+    const p = config.profiles[k];
+    if (!p) return { ok: false, why: 'unknown engine' };
+    const probe = probeEngine(p);
+    if (!probe.installed) return { ok: false, why: `'${p.binary}' is not installed` };
+    if (!probe.compatible) return { ok: false, why: `'${p.binary} --help' does not list ${probe.missing.join(', ')}` };
+    return { ok: true, probe };
+  };
+  const auto = () => {
+    for (const k of order) if (usable(k).ok) return k;
+    return null;
+  };
+
+  if (want !== 'auto' && !config.profiles[want]) {
+    throw Object.assign(new Error(`Unknown engine '${want}'. Known engines: auto, ${Object.keys(config.profiles).join(', ')}`), { fatal: true });
   }
-  const profile = config.profiles[key];
-  if (!profile) {
-    const known = Object.keys(config.profiles).join(', ');
-    throw Object.assign(new Error(`Unknown engine '${key}'. Known engines: ${known}`), { fatal: true });
+  if (want !== 'auto') {
+    const u = usable(want);
+    if (u.ok) return { name: want, ...config.profiles[want] };
+    if (!allowFallback) throw Object.assign(new Error(`Engine '${want}' cannot be used: ${u.why}.`), { fatal: true });
+    const k = auto();
+    if (!k) throw Object.assign(new Error(`Engine '${want}' cannot be used (${u.why}) and no other engine is available. Run "Harness: Doctor".`), { fatal: true });
+    return { name: k, ...config.profiles[k], fallbackFrom: want, fallbackReason: u.why };
   }
-  return { name: key, ...profile };
+  const k = auto();
+  if (!k) throw Object.assign(new Error('No AI engine is available (none installed, or all failed the flag probe). Run "Harness: Doctor".'), { fatal: true });
+  return { name: k, ...config.profiles[k] };
+}
+
+// ───────────────────────────── verify-command detection ─────────────────────────────
+
+/**
+ * Pick the strongest deterministic check from package.json scripts:
+ *   "check" (usually an aggregate)  >  "typecheck" + "test"  >  "build"  >  "lint"
+ * Falls back to config.defaultVerifyCmd (always passes) with real=false.
+ */
+export function detectVerifyCmd(root, config) {
+  const pkg = readJsonSafe(path.join(root, 'package.json'), null);
+  const scripts = pkg?.scripts || {};
+  const has = (n) => typeof scripts[n] === 'string' && scripts[n].trim() && !/no test specified/.test(scripts[n]);
+  const exists = (f) => fs.existsSync(path.join(root, f));
+  const pm = exists('pnpm-lock.yaml') ? 'pnpm' : exists('yarn.lock') ? 'yarn' : (exists('bun.lockb') || exists('bun.lock')) ? 'bun' : 'npm';
+  const run = (n) => (n === 'test' && pm !== 'bun' ? `${pm} test` : `${pm} run ${n}`);
+  let chosen = has('check') ? ['check'] : ['typecheck', 'test'].filter(has);
+  if (!chosen.length) chosen = ['build'].filter(has);
+  if (!chosen.length) chosen = ['lint'].filter(has);
+  if (chosen.length) return { cmd: chosen.map(run).join(' && '), source: `auto-detected from package.json scripts: ${chosen.join(' + ')}`, real: true };
+  return { cmd: config.defaultVerifyCmd, source: 'default — NO real check (always passes)', real: false };
+}
+
+// ───────────────────────────── project file listing ─────────────────────────────
+
+const SKIP_DIRS = new Set(['.git', '.harness', 'node_modules', 'dist', 'build', '.next', 'coverage', '.venv', 'venv', '__pycache__', 'target']);
+
+export function listProjectFiles(root, max = 400) {
+  try {
+    const out = execFileSync('git', ['ls-files', '-co', '--exclude-standard'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
+    const files = out.split('\n').filter((f) => f && !f.startsWith('.harness/'));
+    return { files: files.slice(0, max), total: files.length };
+  } catch { /* not a git repo: walk */ }
+  const files = [];
+  const walk = (dir, rel) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (files.length > max * 5) return;
+      if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) walk(path.join(dir, e.name), rel ? `${rel}/${e.name}` : e.name); } else files.push(rel ? `${rel}/${e.name}` : e.name);
+    }
+  };
+  walk(root, '');
+  return { files: files.slice(0, max), total: files.length };
+}
+
+/** Normalise a target path; returns null if it is unsafe (absolute, "..", root, .git, .harness). */
+export function safeTarget(p) {
+  const n = String(p || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!n || n === '.' || n === '/' || path.isAbsolute(n) || /^[a-zA-Z]:/.test(n)) return null;
+  if (n.split('/').includes('..')) return null;
+  if (/^(\.git|\.harness)(\/|$)/.test(n)) return null;
+  return n;
 }
 
 // ───────────────────────────── Memory store ─────────────────────────────
 // Memory is plain Markdown so BOTH the harness and any editor AI can read/edit it.
-//   profile.md       — who the user is and how they like to work (edited by hand or by AI)
+//   profile.md       — who the user is and how they like to work
 //   lessons.md       — rules the user taught explicitly ("remember ...")  [highest priority]
-//   auto-lessons.md  — things the harness learned automatically from failed/retried tasks
-//   sessions/*.md    — one record per task the harness ran
+//   auto-lessons.md  — things the harness learned from failed/retried tasks (git-ignored)
+//   sessions/*.md    — one record per task the harness ran (git-ignored)
 
 const LESSON_RE = /^- \[(L\d+)\] \(([^)]*)\) (.*)$/;
 
@@ -108,12 +223,14 @@ export function listLessons(file = FILES.lessons) {
     .map(([, id, date, text]) => ({ id, date, text }));
 }
 
+const norm = (t) => String(t).toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim();
+
 export function remember(text, file = FILES.lessons) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   if (!clean) throw new Error('Nothing to remember (empty text).');
   ensureDirs();
   const existing = listLessons(file);
-  const dup = existing.find((l) => l.text.toLowerCase() === clean.toLowerCase());
+  const dup = existing.find((l) => norm(l.text) === norm(clean));
   if (dup) return { ...dup, duplicate: true };
   const next = existing.reduce((max, l) => Math.max(max, Number(l.id.slice(1))), 0) + 1;
   const lesson = { id: `L${next}`, date: new Date().toISOString().slice(0, 10), text: clean };
@@ -125,26 +242,41 @@ export function remember(text, file = FILES.lessons) {
 }
 
 export function forget(id, file = FILES.lessons) {
-  const body = readText(file);
-  const lines = body.split('\n');
-  const kept = lines.filter((line) => !(line.match(LESSON_RE) || [])[1]?.match(new RegExp(`^${id}$`, 'i')));
+  const lines = readText(file).split('\n');
+  const kept = lines.filter((line) => (line.match(LESSON_RE) || [])[1]?.toUpperCase() !== String(id).toUpperCase());
   if (kept.length === lines.length) return false;
   fs.writeFileSync(file, kept.join('\n'));
   return true;
 }
 
-/** Build the memory block injected into every worker prompt (size-bounded). */
-export function memoryContext(config) {
+/**
+ * Build the memory block injected into worker prompts.
+ *  - skip: ['profile','lessons'] when the engine already auto-loads them (e.g. CLAUDE.md @imports)
+ *  - lesson lines are de-duplicated and capped at memory.maxLessonLines (default 50):
+ *    taught rules first (newest kept if over the cap), then the most recent auto lessons.
+ */
+export function memoryContext(config, { skip = [] } = {}) {
   const mem = config.memory || {};
   if (mem.enabled === false) return '';
-  const max = mem.maxContextChars || 6000;
+  const maxLines = mem.maxLessonLines ?? 50;
   const parts = [];
-  const profile = readText(FILES.profile).trim();
-  if (profile) parts.push(`## User profile\n${profile}`);
-  const taught = listLessons(FILES.lessons);
-  if (taught.length) parts.push(`## Rules the user taught (always follow)\n${taught.map((l) => `- ${l.text}`).join('\n')}`);
-  const auto = listLessons(FILES.autoLessons).slice(-(mem.maxAutoLessons || 10));
+
+  if (!skip.includes('profile')) {
+    const profile = readText(FILES.profile).split('\n').filter((l) => !/\(fill me/i.test(l)).join('\n').trim();
+    if (profile && /^- .+:\s*\S/m.test(profile)) parts.push(`## User profile\n${profile}`);
+  }
+
+  const seen = new Set();
+  const fresh = (l) => { const k = norm(l.text); if (seen.has(k)) return false; seen.add(k); return true; };
+  const taught = listLessons(FILES.lessons).filter(fresh).slice(-maxLines); // dedupe even if skipped,
+  const autoRoom = Math.max(0, Math.min(mem.maxAutoLessons ?? 10, maxLines - (skip.includes('lessons') ? 0 : taught.length)));
+  const auto = listLessons(FILES.autoLessons).reverse().filter(fresh).slice(0, autoRoom).reverse(); // so auto never repeats a rule
+
+  if (taught.length && !skip.includes('lessons')) parts.push(`## Rules the user taught (always follow)\n${taught.map((l) => `- ${l.text}`).join('\n')}`);
   if (auto.length) parts.push(`## Lessons from earlier harness runs\n${auto.map((l) => `- ${l.text}`).join('\n')}`);
+  if (skip.length) parts.push(`(Also follow the ${skip.join(' and ')} memory your engine already loaded from the project instruction file.)`);
+
+  const max = mem.maxContextChars || 6000;
   let text = parts.join('\n\n');
   if (text.length > max) text = `${text.slice(0, max)}\n…[memory truncated to ${max} chars]`;
   return text;
@@ -160,13 +292,17 @@ export function recordSession(record) {
     `- Result: **${record.result}**`,
     `- Engine: ${record.engine}`,
     `- Cycles used: ${record.cycles}/${record.maxCycles}`,
-    `- Verify command: \`${record.verifyCmd}\``,
+    `- Verify command: \`${record.verifyCmd}\` (${record.verifySource || 'given by task'})`,
+    ...(record.planner ? [`- Plan: ${record.planner}`] : []),
+    ...(record.rollback ? [`- Rollback: ${record.rollback}`] : []),
     `- Finished: ${record.finishedAt}`,
     '',
     '## What was asked',
+    ...(record.goal ? [`Goal: ${record.goal}`, ''] : []),
     ...record.subtasks.map((s) => `- **${s.id}** (files: ${(s.targetFiles || []).join(', ') || 'unscoped'}): ${s.prompt || s.cliCommand || ''}`),
     ''
   ];
+  if (record.verifySuggestion) lines.push(`AI planner suggested this check (NOT run automatically): \`${record.verifySuggestion}\``, '');
   if (record.errors?.length) {
     lines.push('## Errors seen (per cycle)');
     record.errors.forEach((e, i) => lines.push(`### Cycle ${i + 1}`, '```', String(e).slice(0, 2000), '```'));
@@ -193,5 +329,6 @@ export const AUTO_LESSONS_HEADER = `# Lessons learned automatically
 Written by the harness when a task failed verification and then recovered, or halted.
 Only the most recent entries are injected into prompts. Promote a good one to
 lessons.md with  node .harness/memory.mjs remember "..."  and delete noise freely.
+This file is git-ignored (it is about your machine's history, not the template).
 
 `;

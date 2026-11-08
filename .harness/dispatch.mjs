@@ -6,6 +6,13 @@
  *   node .harness/dispatch.mjs --goal "Add a dark-mode toggle to the settings page" \
  *        [--files "src/settings.tsx,src/theme.css"] [--check "npm test"] [--engine claude] [--wait]
  *
+ * AI planner (the AI splits the goal into parallel workers with separate files):
+ *   node .harness/dispatch.mjs --goal "Add a /health API endpoint with tests" --auto-plan --wait
+ *   (--files then limits which files the planner may hand out; --auto-plan no turns it off)
+ *
+ * No --check?  The planner picks the strongest check from package.json scripts
+ *   (check > typecheck + test > build > lint). With none, nothing really checks the work.
+ *
  * Swarm (original spec form — several workers in parallel, each owning its files):
  *   node .harness/dispatch.mjs "Build API & Tests" --engine claude --verify "npm test" \
  *     --worker "w1:src/api.ts:Implement endpoint" \
@@ -18,7 +25,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe } from './lib/common.mjs';
+import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd } from './lib/common.mjs';
 
 if (process.env.HARNESS_WORKER === '1') {
   console.error('Refusing to dispatch from inside a harness worker (prevents agents spawning agents in a loop).');
@@ -38,6 +45,7 @@ let engine;
 let verifyCmd;
 let files = [];
 let wait = false;
+let autoPlan = !!config.planner?.defaultAutoPlan;
 const subtasks = [];
 
 for (let i = 0; i < args.length; i++) {
@@ -48,6 +56,10 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--title' && v !== undefined) { title = args[++i].trim(); }
   else if (a === '--files' && v !== undefined) { files = args[++i].split(',').map((f) => f.trim()).filter(Boolean); }
   else if (a === '--wait') { wait = true; }
+  else if (a === '--auto-plan') {
+    autoPlan = true;
+    if (/^(yes|no|true|false|on|off)$/i.test(v || '')) autoPlan = /^(yes|true|on)$/i.test(args[++i]);
+  }
   else if (a === '--worker' && v !== undefined) {
     const [id, filesCsv, ...promptParts] = args[++i].split(':');
     subtasks.push({
@@ -65,33 +77,37 @@ if (engine && !config.profiles[engine]) {
 if (!title) title = goal ? goal.slice(0, 80) : 'Dispatched Swarm Task';
 if (!goal && subtasks.length === 0) goal = title;
 
-// Pick a sensible check when none was given: the project's own test script, if it has one.
-let checkNote = '';
-if (!verifyCmd) {
-  const pkg = readJsonSafe(path.join(ROOT, 'package.json'), null);
-  const test = pkg?.scripts?.test;
-  if (test && !/no test specified/.test(test)) { verifyCmd = 'npm test'; checkNote = ' (auto-detected from package.json)'; }
-  else { verifyCmd = config.defaultVerifyCmd; checkNote = ' — WARNING: no real check, so any result will "pass". Add --check "<command>" for a real gate.'; }
+// No --check: the planner (Node 1) picks one from package.json when the job runs. Preview it here.
+let checkLine;
+if (verifyCmd) checkLine = verifyCmd;
+else {
+  const d = detectVerifyCmd(ROOT, config);
+  checkLine = `${d.cmd}  (${d.source})${d.real ? '' : ' — WARNING: any result will "pass". Add --check "<command>" for a real gate.'}`;
 }
 
 for (const s of subtasks) if (engine) s.engine = engine;
+const usePlanner = autoPlan && subtasks.length === 0;
 const job = {
   id: `job-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 6)}`,
   ...(engine ? { engine } : {}),
   title,
-  verifyCmd,
+  ...(verifyCmd ? { verifyCmd } : {}),
   createdAt: new Date().toISOString(),
-  subtasks: subtasks.length > 0
-    ? subtasks
-    : [{ id: 'worker-main', ...(engine ? { engine } : {}), targetFiles: files, prompt: goal }]
+  ...(usePlanner
+    ? { autoPlan: true, goal, targetFiles: files }
+    : {
+        subtasks: subtasks.length > 0
+          ? subtasks
+          : [{ id: 'worker-main', ...(engine ? { engine } : {}), targetFiles: files, prompt: goal }]
+      })
 };
 
 ensureDirs();
 const inboxPath = path.join(DIRS.inbox, `${job.id}.json`);
 fs.writeFileSync(`${inboxPath}.tmp`, JSON.stringify(job, null, 2)); // atomic hand-off:
 fs.renameSync(`${inboxPath}.tmp`, inboxPath);                       // the daemon never sees half a file
-console.log(`Dispatched [${(engine || config.activeProfile).toUpperCase()}] job ${job.id} (${job.subtasks.length} worker[s]) -> ${path.relative(ROOT, inboxPath)}`);
-console.log(`Check: ${verifyCmd}${checkNote}`);
+console.log(`Dispatched [${(engine || config.activeProfile).toUpperCase()}] job ${job.id} (${usePlanner ? 'AI planner will choose the workers' : `${job.subtasks.length} worker[s]`}) -> ${path.relative(ROOT, inboxPath)}`);
+console.log(`Check: ${checkLine}`);
 
 if (!wait) process.exit(0);
 

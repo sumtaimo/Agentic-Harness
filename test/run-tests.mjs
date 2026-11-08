@@ -21,8 +21,9 @@ function sandbox({ worktrees = false } = {}) {
     filter: (src) => !/(state\.json|telemetry\.log|daemon\.pid)$/.test(src) && !/[\\/](inbox|completed|failed|sessions)[\\/][^.]/.test(src)
   });
   const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.harness', 'config.json'), 'utf8'));
-  cfg.profiles.mock = { verified: true, binary: process.execPath, args: [MOCK], allowedTools: [] };
+  cfg.profiles.mock = { verified: true, binary: process.execPath, args: [MOCK, '{allowedTools}'], promptVia: 'stdin', allowedTools: [] };
   cfg.activeProfile = 'mock';
+  cfg.autoOrder = ['mock'];
   cfg.useGitWorktrees = worktrees;
   cfg.workerTimeoutMs = 20000;
   fs.writeFileSync(path.join(dir, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
@@ -52,7 +53,7 @@ await test('spec self-audit: self-test commits, state 4_COMMITTED + ANTIGRAVITY,
   const s = json(path.join(d, '.harness', 'state.json'));
   assert(s.phase === '4_COMMITTED', `phase ${s.phase}`);
   assert(s.engine === 'ANTIGRAVITY', `engine ${s.engine}`);
-  assert(ls(d, 'completed').some((f) => f.startsWith('self-test-swarm')), 'not archived');
+  assert(ls(d, 'completed').some((f) => f.startsWith('self-test-001-')), 'not archived');
 });
 
 await test('swarm lock collision is rejected BEFORE any worker runs, in 1 cycle, moved to failed/', () => {
@@ -103,6 +104,7 @@ await test('feedback loop works: fails cycle 1, worker uses the error, passes cy
 
 await test('memory: taught rule + profile are injected into the worker prompt', () => {
   const d = sandbox();
+  fs.writeFileSync(path.join(d, '.harness', 'memory', 'profile.md'), '# User profile\n- Name: Test User\n- Coding experience: (fill me)\n');
   node(d, ['.harness/memory.mjs', 'remember', 'Always use British spelling']);
   const dup = node(d, ['.harness/memory.mjs', 'remember', 'always use british spelling']);
   assert(/Already remembered/.test(dup.stdout), 'duplicate stored');
@@ -110,20 +112,49 @@ await test('memory: taught rule + profile are injected into the worker prompt', 
   runOnce(d);
   const p = fs.readFileSync(path.join(d, '.mock-prompts', 'w.txt'), 'utf8');
   assert(p.includes('Always use British spelling') && p.includes('[USER MEMORY'), 'memory missing from prompt');
-  assert(p.includes('# User profile'), 'profile missing');
+  assert(p.includes('Name: Test User') && !p.includes('(fill me)'), 'profile missing or placeholders leaked');
   assert(/Forgot L1/.test(node(d, ['.harness/memory.mjs', 'forget', 'L1']).stdout), 'forget failed');
   assert(!/British/.test(node(d, ['.harness/memory.mjs', 'context']).stdout), 'forgotten rule still in context');
 });
 
-await test('missing engine → REJECTED immediately with a plain message (no pointless retries)', () => {
+await test('unavailable engine falls back to auto (ENGINE_FALLBACK) and the task still runs', () => {
   const d = sandbox();
   const cfg = json(path.join(d, '.harness', 'config.json'));
   cfg.profiles.ghost = { binary: 'definitely-not-installed-xyz', args: [] };
   fs.writeFileSync(path.join(d, '.harness', 'config.json'), JSON.stringify(cfg));
-  drop(d, { id: 'ghost', title: 'g', engine: 'ghost', subtasks: [{ id: 'w', engine: 'ghost', targetFiles: ['a'], prompt: 'x' }] });
+  drop(d, { id: 'ghost', title: 'g', engine: 'ghost', verifyCmd: 'node -e "process.exit(require(\'fs\').existsSync(\'a.txt\')?0:1)"', subtasks: [{ id: 'w', engine: 'ghost', targetFiles: ['a.txt'], prompt: 'WRITE a.txt hi' }] });
   runOnce(d);
   const s = json(path.join(d, '.harness', 'state.json'));
-  assert(s.phase === 'REJECTED' && /not installed/.test(s.lastGateStatus), s.lastGateStatus);
+  assert(s.phase === '4_COMMITTED', `${s.phase} ${s.lastGateStatus}`);
+  assert(log(d).some((e) => e.phase === 'ENGINE_FALLBACK' && /not installed/.test(e.message)), 'no fallback logged');
+});
+
+await test('engine whose --help lacks a configured flag fails the probe → fallback; doctor reports the missing flag', () => {
+  const d = sandbox();
+  const fake = path.join(d, 'fake-engine.mjs');
+  fs.writeFileSync(fake, '#!/usr/bin/env node\nconsole.log("Usage: fake [options]\\n  --other-flag   something");\n');
+  fs.chmodSync(fake, 0o755);
+  const cfg = json(path.join(d, '.harness', 'config.json'));
+  cfg.profiles.fake = { binary: fake, args: ['--needed-flag'], promptVia: 'stdin' };
+  fs.writeFileSync(path.join(d, '.harness', 'config.json'), JSON.stringify(cfg));
+  drop(d, { id: 'probe', title: 'p', engine: 'fake', subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'WRITE a.txt hi' }] });
+  runOnce(d);
+  assert(json(path.join(d, '.harness', 'state.json')).phase === '4_COMMITTED', 'did not fall back');
+  assert(log(d).some((e) => e.phase === 'ENGINE_FALLBACK' && /--needed-flag/.test(e.message)), 'probe reason not logged');
+  const doc = node(d, ['.harness/doctor.mjs']).stdout;
+  assert(/fake.*does NOT list: --needed-flag/.test(doc), doc);
+});
+
+await test('no usable engine at all → REJECTED immediately, nothing retried', () => {
+  const d = sandbox();
+  const cfg = json(path.join(d, '.harness', 'config.json'));
+  cfg.profiles.ghost = { binary: 'definitely-not-installed-xyz', args: [] };
+  cfg.autoOrder = ['ghost'];
+  fs.writeFileSync(path.join(d, '.harness', 'config.json'), JSON.stringify(cfg));
+  drop(d, { id: 'none', title: 'n', engine: 'ghost', subtasks: [{ id: 'w', targetFiles: ['a'], prompt: 'x' }] });
+  runOnce(d);
+  const s = json(path.join(d, '.harness', 'state.json'));
+  assert(s.phase === 'REJECTED' && /no other engine/.test(s.lastGateStatus), s.lastGateStatus);
   assert(log(d).filter((e) => e.phase === '1_PLANNER').length === 1, 'retried');
 });
 
@@ -165,7 +196,7 @@ await test('dispatch --wait with no daemon running processes the job and reports
 await test('dispatch without --check warns that there is no real gate', () => {
   const d = sandbox();
   const r = node(d, ['.harness/dispatch.mjs', '--goal', 'x']);
-  assert(/WARNING: no real check/.test(r.stdout), r.stdout);
+  assert(/NO real check/.test(r.stdout) && /WARNING/.test(r.stdout), r.stdout);
 });
 
 await test('dispatch refuses inside a harness worker (no agent loops)', () => {
@@ -214,6 +245,163 @@ await test('install.mjs adds the harness to an existing project without overwrit
   assert((fs.readFileSync(path.join(p, 'AGENTS.md'), 'utf8').match(/agentic-harness -->/g) || []).length === 1, 'installed twice');
   const st = spawnSync(process.execPath, ['.harness/daemon.mjs', '--self-test'], { cwd: p, env, encoding: 'utf8' });
   assert(st.status === 0, 'self-test failed in installed project');
+});
+
+// ───────────── v1.0: rollback, dead-letter, auto-verify, AI planner, memory cap ─────────────
+
+const FAIL_VERIFY = 'node -e "console.error(\'NOPE\'); process.exit(1)"';
+const existsCheck = (...files) => `node -e "const f=require('fs');process.exit([${files.map((x) => `'${x}'`).join(',')}].every(x=>f.existsSync(x))?0:1)"`;
+
+await test('dirty-file rollback: 3-cycle failure restores edited files, removes created files, restores folders', () => {
+  const d = sandbox();
+  fs.writeFileSync(path.join(d, 'a.txt'), 'ORIGINAL');
+  fs.mkdirSync(path.join(d, 'lib')); fs.writeFileSync(path.join(d, 'lib', 'keep.js'), 'KEEP');
+  fs.writeFileSync(path.join(d, 'untouched.txt'), 'SAME');
+  drop(d, { id: 'dirty', title: 'dirty', verifyCmd: FAIL_VERIFY, subtasks: [
+    { id: 'w1', targetFiles: ['a.txt', 'new.txt'], prompt: 'WRITE a.txt BROKEN\nWRITE new.txt CREATED' },
+    { id: 'w2', targetFiles: ['lib/'], prompt: 'WRITE lib/keep.js BROKEN\nWRITE lib/extra.js EXTRA' }] });
+  runOnce(d);
+  assert(json(path.join(d, '.harness', 'state.json')).phase === 'HALTED_HITL_REQUIRED', 'not halted');
+  assert(fs.readFileSync(path.join(d, 'a.txt'), 'utf8') === 'ORIGINAL', 'a.txt not restored');
+  assert(!fs.existsSync(path.join(d, 'new.txt')), 'created file not removed');
+  assert(fs.readFileSync(path.join(d, 'lib', 'keep.js'), 'utf8') === 'KEEP' && !fs.existsSync(path.join(d, 'lib', 'extra.js')), 'folder not restored');
+  assert(fs.readFileSync(path.join(d, 'untouched.txt'), 'utf8') === 'SAME', 'unrelated file touched');
+  assert(fs.readdirSync(path.join(d, '.harness', 'staging')).filter((f) => !f.startsWith('.')).length === 0, 'staging not cleaned');
+  assert(log(d).some((e) => e.phase === 'ROLLBACK_DONE'), 'no ROLLBACK_DONE event');
+});
+
+await test('successful task keeps its changes and discards the staging backup', () => {
+  const d = sandbox();
+  fs.writeFileSync(path.join(d, 'a.txt'), 'ORIGINAL');
+  drop(d, { id: 'ok', title: 'ok', subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'WRITE a.txt NEW' }] });
+  runOnce(d);
+  assert(fs.readFileSync(path.join(d, 'a.txt'), 'utf8') === 'NEW', 'change lost');
+  assert(log(d).some((e) => e.phase === 'STAGING_BACKUP'), 'no backup was taken');
+  assert(fs.readdirSync(path.join(d, '.harness', 'staging')).filter((f) => !f.startsWith('.')).length === 0, 'staging not cleaned');
+});
+
+await test('dead-letter queue: failed job → .harness/failed/<id>-<timestamp>.json + .trace.txt with every cycle error', () => {
+  const d = sandbox();
+  drop(d, { id: 'deadletter', title: 'dl', verifyCmd: FAIL_VERIFY, subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'WRITE a.txt x' }] });
+  runOnce(d);
+  const f = ls(d, 'failed');
+  assert(f.length === 1 && /^deadletter-\d+\.json$/.test(f[0]), `bad name ${f}`);
+  const body = json(path.join(d, '.harness', 'failed', f[0]));
+  assert(body.result === 'HALTED_HITL_REQUIRED' && body.errors.length === 3 && body.cyclesUsed === 3 && /restored/.test(body.rollback), JSON.stringify(body).slice(0, 300));
+  const trace = fs.readFileSync(path.join(d, '.harness', 'failed', f[0].replace('.json', '.trace.txt')), 'utf8');
+  assert((trace.match(/===== cycle/g) || []).length === 3 && trace.includes('NOPE'), 'trace incomplete');
+  assert(ls(d, 'inbox').length === 0, 'job left in inbox');
+});
+
+await test('auto-verify: detectVerifyCmd picks the strongest package.json check', async () => {
+  const { detectVerifyCmd } = await import(path.join(REPO, '.harness', 'lib', 'common.mjs'));
+  const cfg = { defaultVerifyCmd: 'NOOP' };
+  const proj = (scripts, lock) => {
+    const p = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-pkg-'));
+    if (scripts) fs.writeFileSync(path.join(p, 'package.json'), JSON.stringify({ scripts }));
+    if (lock) fs.writeFileSync(path.join(p, lock), '');
+    return detectVerifyCmd(p, cfg);
+  };
+  assert(proj({ check: 'x', test: 'y' }).cmd === 'npm run check', 'check should win');
+  assert(proj({ test: 'y', typecheck: 'z', lint: 'l' }).cmd === 'npm run typecheck && npm test', 'typecheck+test');
+  assert(proj({ build: 'b', lint: 'l' }).cmd === 'npm run build', 'build before lint');
+  assert(proj({ lint: 'l' }).cmd === 'npm run lint', 'lint last resort');
+  assert(proj({ test: 'echo "Error: no test specified" && exit 1' }).real === false, 'npm placeholder test must be ignored');
+  assert(proj(null).cmd === 'NOOP' && proj(null).real === false, 'no package.json → default');
+  assert(proj({ test: 'y' }, 'pnpm-lock.yaml').cmd === 'pnpm test', 'pnpm detection');
+});
+
+await test('auto-verify end-to-end: job with no verifyCmd runs package.json typecheck + test', () => {
+  const d = sandbox();
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: {
+    typecheck: 'node -e "require(\'fs\').writeFileSync(\'typechecked.flag\',\'1\')"',
+    test: 'node -e "process.exit(require(\'fs\').existsSync(\'a.txt\')?0:1)"' } }));
+  drop(d, { id: 'autoverify', title: 'av', subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'WRITE a.txt hi' }] });
+  runOnce(d);
+  assert(json(path.join(d, '.harness', 'state.json')).phase === '4_COMMITTED', 'not committed');
+  assert(fs.existsSync(path.join(d, 'typechecked.flag')), 'typecheck script did not run');
+  assert(log(d).some((e) => e.phase === '3_VERIFIER' && /npm run typecheck && npm test/.test(e.message) && /auto-detected/.test(e.source)), 'wrong verify command');
+});
+
+const planGoal = (plan) => `Build the thing. PLAN_JSON ${JSON.stringify(plan)}`;
+
+await test('AI planner (--auto-plan): decomposes a goal into 2 parallel workers with read-only planning tools', () => {
+  const d = sandbox();
+  const plan = { subtasks: [
+    { id: 'part-a', targetFiles: ['a.txt'], prompt: 'WRITE a.txt A' },
+    { id: 'part-b', targetFiles: ['b.txt'], prompt: 'WRITE b.txt B' }], verifySuggestion: 'rm -rf /' };
+  const r = node(d, ['.harness/dispatch.mjs', '--goal', planGoal(plan), '--auto-plan', '--check', existsCheck('a.txt', 'b.txt'), '--wait']);
+  assert(r.status === 0 && /COMMITTED/.test(r.stdout), r.stdout + r.stderr);
+  const s = json(path.join(d, '.harness', 'state.json'));
+  assert(s.mode === 'SWARM-MESH (2W)' && /AI planner → 2 worker/.test(s.planSummary), `${s.mode} ${s.planSummary}`);
+  assert(fs.readFileSync(path.join(d, '.mock-prompts', 'planner-calls.txt'), 'utf8').trim() === 'Read,Glob,Grep', 'planner was not limited to read-only tools');
+  assert(fs.readFileSync(path.join(d, '.mock-prompts', 'part-a.txt'), 'utf8').includes('[OVERALL GOAL'), 'worker missing overall goal');
+  const note = fs.readdirSync(path.join(d, '.harness', 'memory', 'sessions')).map((f) => fs.readFileSync(path.join(d, '.harness', 'memory', 'sessions', f), 'utf8')).join('');
+  assert(/suggested this check \(NOT run automatically\): `rm -rf \/`/.test(note), 'AI verify suggestion must be recorded, never run');
+});
+
+await test('AI planner: overlapping targetFiles are rejected (re-asked once with the error, then REJECTED, nothing runs)', () => {
+  const d = sandbox();
+  const plan = { subtasks: [
+    { id: 'x', targetFiles: ['src/'], prompt: 'WRITE src/x.txt X' },
+    { id: 'y', targetFiles: ['src/y.txt'], prompt: 'WRITE src/y.txt Y' }] };
+  const r = node(d, ['.harness/dispatch.mjs', '--goal', planGoal(plan), '--auto-plan', '--wait']);
+  assert(r.status === 1 && /NOT DONE/.test(r.stdout), r.stdout);
+  const s = json(path.join(d, '.harness', 'state.json'));
+  assert(s.phase === 'REJECTED' && /overlapping targetFiles/.test(s.lastGateStatus), s.lastGateStatus);
+  assert(fs.readFileSync(path.join(d, '.mock-prompts', 'planner-calls.txt'), 'utf8').trim().split('\n').length === 2, 'planner not re-asked exactly once');
+  assert(fs.readFileSync(path.join(d, '.mock-prompts', 'planner.txt'), 'utf8').includes('PREVIOUS PLAN WAS REJECTED'), 'feedback not given to planner');
+  assert(!fs.existsSync(path.join(d, 'src')), 'a worker ran');
+  assert(ls(d, 'failed').length === 1, 'not dead-lettered');
+});
+
+await test('AI planner: targets outside --files, unsafe paths, or invalid JSON are rejected', () => {
+  for (const [plan, files, re] of [
+    [{ subtasks: [{ id: 'a', targetFiles: ['other/x.txt'], prompt: 'WRITE other/x.txt 1' }] }, 'src/', /outside the allowed files/],
+    [{ subtasks: [{ id: 'a', targetFiles: ['../escape.txt'], prompt: 'x' }] }, '', /unsafe target path/],
+    [{ subtasks: [{ id: 'a', targetFiles: ['.harness/config.json'], prompt: 'x' }] }, '', /unsafe target path/],
+    [{ subtasks: [{ id: 'a', targetFiles: [], prompt: 'x' }] }, '', /no targetFiles/],
+    [null, '', /not valid JSON/]
+  ]) {
+    const d = sandbox();
+    const goal = plan ? planGoal(plan) : 'no plan here';
+    node(d, ['.harness/dispatch.mjs', '--goal', goal, '--auto-plan', '--files', files, '--wait']);
+    const s = json(path.join(d, '.harness', 'state.json'));
+    assert(s.phase === 'REJECTED' && re.test(s.lastGateStatus), `${re}: ${s.lastGateStatus}`);
+    assert(!fs.existsSync(path.join(d, 'other')), 'worker ran');
+  }
+});
+
+await test('memory: lessons are de-duplicated and capped at 50 lines in the worker prompt', () => {
+  const d = sandbox();
+  const lessons = Array.from({ length: 60 }, (_, i) => `- [L${i + 1}] (2026-01-01) Rule number ${i + 1}`).join('\n');
+  fs.writeFileSync(path.join(d, '.harness', 'memory', 'lessons.md'), `# Lessons\n\n${lessons}\n- [L61] (2026-01-01) RULE NUMBER 60!\n`);
+  fs.writeFileSync(path.join(d, '.harness', 'memory', 'auto-lessons.md'), '# Auto\n\n- [L1] (2026-01-01) rule number 59\n- [L2] (2026-01-01) An auto lesson\n');
+  drop(d, { id: 'cap', title: 'cap', subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'WRITE a.txt hi' }] });
+  runOnce(d);
+  const p = fs.readFileSync(path.join(d, '.mock-prompts', 'w.txt'), 'utf8');
+  const lessonLines = p.split('\n').filter((l) => /^- (Rule number|RULE NUMBER|rule number|An auto lesson)/.test(l));
+  assert(lessonLines.length <= 50, `${lessonLines.length} lesson lines`);
+  assert(p.includes('Rule number 60') && !p.includes('RULE NUMBER 60!') && !p.includes('- rule number 59'), 'duplicates not removed');
+  assert(!p.includes('Rule number 1\n'), 'oldest rules should be dropped first');
+});
+
+await test('memory: no double injection when the engine auto-loads it via CLAUDE.md @imports', () => {
+  const d = sandbox();
+  const cfg = json(path.join(d, '.harness', 'config.json'));
+  cfg.profiles.mock.instructionFile = 'CLAUDE.md';
+  fs.writeFileSync(path.join(d, '.harness', 'config.json'), JSON.stringify(cfg));
+  fs.copyFileSync(path.join(REPO, 'CLAUDE.md'), path.join(d, 'CLAUDE.md'));
+  fs.writeFileSync(path.join(d, '.harness', 'memory', 'profile.md'), '# User profile\n- Name: Test User\n');
+  node(d, ['.harness/memory.mjs', 'remember', 'Taught rule XYZ']);
+  node(d, ['.harness/memory.mjs', 'remember', 'Auto lesson QRS']); // goes to lessons; move one to auto:
+  fs.writeFileSync(path.join(d, '.harness', 'memory', 'auto-lessons.md'), '# Auto\n\n- [L1] (2026-01-01) Auto lesson ABC\n');
+  drop(d, { id: 'noddup', title: 'n', subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'WRITE a.txt hi' }] });
+  runOnce(d);
+  const p = fs.readFileSync(path.join(d, '.mock-prompts', 'w.txt'), 'utf8');
+  assert(!p.includes('Taught rule XYZ') && !p.includes('Test User'), 'profile/lessons injected twice');
+  assert(p.includes('Auto lesson ABC'), 'auto lessons (not in CLAUDE.md) must still be injected');
+  assert(/already loaded from the project instruction file/.test(p), 'missing auto-load notice');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

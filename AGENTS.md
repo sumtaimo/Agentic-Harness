@@ -64,8 +64,14 @@ Check it is ready: `node .harness/doctor.mjs` · current state: `node .harness/s
 node .harness/dispatch.mjs --goal "<clear instructions>" --files "path/a,path/b" --check "<command that exits 0 only when the work is right>" --wait
 ```
 
-**Swarm** (independent parts in parallel — every worker must own *different* files, otherwise
-the plan is rejected before anything runs):
+**AI planner** (let an AI split the goal into parallel workers with separate files; add
+`--files "src/"` to limit which files it may hand out):
+```bash
+node .harness/dispatch.mjs --goal "<clear instructions, incl. names/interfaces that must match>" --auto-plan --wait
+```
+
+**Swarm by hand** (independent parts in parallel — every worker must own *different* files,
+otherwise the plan is rejected before anything runs):
 ```bash
 node .harness/dispatch.mjs "<title>" --check "npm test" \
   --worker "api:src/api.ts:Implement the endpoint" \
@@ -73,14 +79,20 @@ node .harness/dispatch.mjs "<title>" --check "npm test" \
 ```
 
 Rules for you when dispatching:
-- **Always give a real `--check`** (tests, a build, a script). Without one the verifier passes
-  anything, and you must tell the user that.
-- `--files` limits what a worker may change. With `useGitWorktrees: true` in config this is
-  enforced (out-of-scope edits are discarded); otherwise it is only an instruction.
+- **Make sure there is a real check.** Without `--check`, the harness picks one from
+  `package.json` (`check` > `typecheck`+`test` > `build` > `lint`). If dispatch prints
+  "NO real check", the verifier passes anything: tell the user, and propose a test or `--check`.
+- `--files` limits what a worker may change, and lets the harness **back those files up and
+  restore them if the task fails**. With no files and no `--auto-plan`, there is no automatic
+  undo. With `useGitWorktrees: true` the scope is strictly enforced (out-of-scope edits are
+  discarded); otherwise it is an instruction plus the backup.
+- The AI planner's suggested check is only recorded, never run. Review it with the user before
+  using it as `--check`.
 - After `--wait` finishes, read the session note it prints (`.harness/memory/sessions/…`) and
   explain the outcome to the user in plain words.
-- On `HALTED_HITL_REQUIRED` or `REJECTED`: do **not** silently retry. Explain the last error
-  (from the session note / `.harness/failed/*.json`) and ask the user what to do.
+- On `HALTED_HITL_REQUIRED` or `REJECTED`: do **not** silently retry. The scoped files have
+  already been restored. Explain the last error (from the session note, or
+  `.harness/failed/<id>-<time>.trace.txt`) and ask the user what to do.
 
 ## 5. Map of the harness
 
@@ -91,11 +103,14 @@ Rules for you when dispatching:
 | `.harness/memory.mjs` | remember / list / forget / context / sessions |
 | `.harness/doctor.mjs` · `status.mjs` | setup check · current state |
 | `.harness/config.json` | engines, max cycles, timeouts, worktrees, auto git commit |
-| `.harness/memory/` | `profile.md`, `lessons.md`, `auto-lessons.md`, `sessions/` |
-| `.harness/inbox/` → `completed/` or `failed/` | job files |
+| `.harness/memory/` | `profile.md`, `lessons.md` (committed); `auto-lessons.md`, `sessions/` (git-ignored) |
+| `.harness/inbox/` → `completed/` or `failed/` | job files (`failed/` also has `.trace.txt`) |
+| `.harness/staging/` | backups of scoped files while a task runs (restored on failure) |
 | `.harness/state.json` · `telemetry.log` | live state · JSONL event log |
 | `.vscode/tasks.json` | buttons for the user (Run Task menu) |
 
 Engines marked `"verified": false` in `config.json` have command-line flags that were not tested
-against the real tool. If one fails to start, read its `"note"`, run `<tool> --help`, and propose
-a fix to the user before editing the config.
+against the real tool. `node .harness/doctor.mjs` probes `<tool> --help` and lists missing flags.
+An engine that is missing or fails the probe is replaced by `auto` (logged as `ENGINE_FALLBACK`).
+To fix one, read its `"note"`, run `<tool> --help`, and propose the change to the user before
+editing the config.

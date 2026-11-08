@@ -1,13 +1,20 @@
-# agentic-harness runtime (machine-specific; never commit)
+# agentic-harness runtime (machine-specific or personal; never commit to a public template)
 .harness/state.json
-.harness/state.json.*.tmp
+.harness/*.tmp
 .harness/telemetry.log
 .harness/daemon.pid
+.harness/engine-probe.json
 .harness/inbox/*
 .harness/completed/*
 .harness/failed/*
+.harness/staging/*
 .harness/worktrees/*
 .harness/memory/sessions/*
+.harness/memory/auto-lessons.md
+# The folder/* form (instead of folder/) keeps each folder's .gitkeep, so the folders exist in the template.
 !.harness/**/.gitkeep
-# Memory (profile.md, lessons.md, auto-lessons.md) IS committed so it travels with the project.
-# Add those three files here too if your memory is private and the repo is public.
+
+# profile.md and lessons.md ARE committed (the template ships generic starter versions).
+# In your own PUBLIC project, if they hold personal details, uncomment these two lines:
+# .harness/memory/profile.md
+# .harness/memory/lessons.md

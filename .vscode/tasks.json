@@ -6,19 +6,48 @@
       "detail": "Starts the background agentic harness and shows its live screen. Starts by itself when the folder opens (after you allow automatic tasks once).",
       "type": "process",
       "command": "node",
-      "args": [".harness/daemon.mjs", "--watch"],
+      "args": [
+        ".harness/daemon.mjs",
+        "--watch"
+      ],
       "isBackground": true,
-      "runOptions": { "runOn": "folderOpen", "instanceLimit": 1 },
-      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true, "focus": false, "group": "harness" },
+      "runOptions": {
+        "runOn": "folderOpen",
+        "instanceLimit": 1
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "focus": false,
+        "group": "harness"
+      },
       "problemMatcher": []
     },
     {
       "label": "Harness: 2. New task (type what you want)",
-      "detail": "Describe the job in plain words. The harness runs it with the AI and checks the result.",
+      "detail": "Describe the job in plain words. Optionally let the AI planner split it into parallel workers. The harness runs it and checks the result; on failure your files are restored.",
       "type": "process",
       "command": "node",
-      "args": [".harness/dispatch.mjs", "--goal", "${input:goal}", "--files", "${input:files}", "--check", "${input:check}", "--engine", "${input:engine}", "--wait"],
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "args": [
+        ".harness/dispatch.mjs",
+        "--goal",
+        "${input:goal}",
+        "--files",
+        "${input:files}",
+        "--check",
+        "${input:check}",
+        "--engine",
+        "${input:engine}",
+        "--auto-plan",
+        "${input:autoplan}",
+        "--wait"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
       "problemMatcher": []
     },
     {
@@ -26,48 +55,124 @@
       "detail": "Save a rule or preference. Every AI working in this folder will follow it.",
       "type": "process",
       "command": "node",
-      "args": [".harness/memory.mjs", "remember", "${input:lesson}"],
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "args": [
+        ".harness/memory.mjs",
+        "remember",
+        "${input:lesson}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
       "problemMatcher": []
     },
     {
       "label": "Harness: 4. Show memory",
       "type": "process",
       "command": "node",
-      "args": [".harness/memory.mjs", "list"],
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "args": [
+        ".harness/memory.mjs",
+        "list"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
       "problemMatcher": []
     },
     {
       "label": "Harness: 5. Status + recent events",
       "type": "process",
       "command": "node",
-      "args": [".harness/status.mjs", "--log", "25"],
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "args": [
+        ".harness/status.mjs",
+        "--log",
+        "25"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
       "problemMatcher": []
     },
     {
       "label": "Harness: Doctor (check my setup)",
       "type": "process",
       "command": "node",
-      "args": [".harness/doctor.mjs"],
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "args": [
+        ".harness/doctor.mjs"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
       "problemMatcher": []
     },
     {
       "label": "Harness: Run Self-Test Cycle",
       "type": "process",
       "command": "node",
-      "args": [".harness/daemon.mjs", "--self-test"],
-      "presentation": { "reveal": "always", "panel": "shared" },
+      "args": [
+        ".harness/daemon.mjs",
+        "--self-test"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
       "problemMatcher": []
     }
   ],
   "inputs": [
-    { "id": "goal", "type": "promptString", "description": "What should the AI do? Write it like you would tell a person." },
-    { "id": "files", "type": "promptString", "description": "Which files may it change? (comma separated — leave empty to let it decide)", "default": "" },
-    { "id": "check", "type": "promptString", "description": "Command that proves it worked, e.g. npm test (leave empty = use project tests if any, else NO real check)", "default": "" },
-    { "id": "engine", "type": "pickString", "description": "Which AI engine?", "options": ["auto", "claude", "antigravity", "orca", "gemini", "codex"], "default": "auto" },
-    { "id": "lesson", "type": "promptString", "description": "What should every AI remember? (e.g. Always explain changes in simple English)" }
+    {
+      "id": "goal",
+      "type": "promptString",
+      "description": "What should the AI do? Write it like you would tell a person."
+    },
+    {
+      "id": "files",
+      "type": "promptString",
+      "description": "Which files/folders may it change? (comma separated, e.g. src/ — leave empty to let it decide; needed for automatic undo)",
+      "default": ""
+    },
+    {
+      "id": "check",
+      "type": "promptString",
+      "description": "Command that proves it worked, e.g. npm test (leave empty = pick from package.json check/typecheck/test/build/lint; if none, NO real check)",
+      "default": ""
+    },
+    {
+      "id": "engine",
+      "type": "pickString",
+      "description": "Which AI engine?",
+      "options": [
+        "auto",
+        "claude",
+        "antigravity",
+        "orca",
+        "gemini",
+        "codex"
+      ],
+      "default": "auto"
+    },
+    {
+      "id": "autoplan",
+      "type": "pickString",
+      "description": "Split into parallel AI workers automatically? (AI planner)",
+      "options": [
+        "no",
+        "yes"
+      ],
+      "default": "no"
+    },
+    {
+      "id": "lesson",
+      "type": "promptString",
+      "description": "What should every AI remember? (e.g. Always explain changes in simple English)"
+    }
   ]
 }

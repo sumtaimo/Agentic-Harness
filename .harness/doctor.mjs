@@ -6,7 +6,7 @@
 
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { ROOT, FILES, ensureDirs, loadConfig, which, resolveProfile, listLessons } from './lib/common.mjs';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, listLessons, probeEngine, profileFlags, detectVerifyCmd } from './lib/common.mjs';
 
 ensureDirs();
 const ok = (m) => console.log(`  ✔ ${m}`);
@@ -27,17 +27,25 @@ try {
   catch { warn('This folder is not a git repository yet. Recommended so you can undo AI changes: run  git init && git add -A && git commit -m start'); }
 } catch { warn('Git is not installed. The harness works without it, but you cannot easily undo AI changes. Install from https://git-scm.com'); }
 
-console.log('\nAI engines (✔ = installed on this machine)');
+console.log('\nAI engines — installed? and does "<engine> --help" list every flag in config.json?');
 for (const [name, p] of Object.entries(config.profiles)) {
-  const found = which(p.binary);
-  const tag = p.verified ? '' : '  [flags unverified — see "note" in config.json]';
-  found ? ok(`${name.padEnd(12)} ${found}${tag}`) : console.log(`  · ${name.padEnd(12)} not installed`);
+  const probe = probeEngine(p, { force: true });
+  const flags = profileFlags(p);
+  if (!probe.installed) { console.log(`  · ${name.padEnd(12)} not installed`); continue; }
+  if (!probe.checked) { warn(`${name.padEnd(12)} ${probe.binPath} — flags not checked${flags.length ? ` (${probe.error})` : ' (none configured)'}`); continue; }
+  if (probe.compatible) ok(`${name.padEnd(12)} ${probe.binPath} — all ${flags.length} flag(s) found: ${flags.join(' ')}`);
+  else bad(`${name.padEnd(12)} ${probe.binPath} — --help does NOT list: ${probe.missing.join(' ')}  → will fall back to "auto". Fix "args" in config.json.`);
 }
 try {
   const active = resolveProfile(config);
-  if (which(active.binary)) ok(`Active engine: ${active.name} (config "activeProfile": "${config.activeProfile}")`);
-  else { bad(`Active engine '${active.name}' is not installed. Install one engine, e.g. Claude Code: npm install -g @anthropic-ai/claude-code  then run  claude  once to log in.`); problems++; }
-} catch (e) { bad(e.message); problems++; }
+  ok(`Engine that will be used: ${active.name}${active.fallbackFrom ? ` (fallback from '${active.fallbackFrom}': ${active.fallbackReason})` : ''}  (config "activeProfile": "${config.activeProfile}")`);
+} catch (e) {
+  bad(`${e.message} Install one engine, e.g. Claude Code: npm install -g @anthropic-ai/claude-code  then run  claude  once to log in.`); problems++;
+}
+
+console.log('\nAutomatic check (used when a task has no --check)');
+const v = detectVerifyCmd(ROOT, config);
+v.real ? ok(`${v.cmd}  (${v.source})`) : warn(`${v.source}. Add a "test" (or "check") script to package.json, or always pass --check.`);
 
 console.log('\nMemory');
 const profile = fs.existsSync(FILES.profile) ? fs.readFileSync(FILES.profile, 'utf8') : '';
@@ -49,6 +57,8 @@ try {
   const pid = Number(fs.readFileSync(FILES.pid, 'utf8')); process.kill(pid, 0);
   ok(`Background daemon is running (PID ${pid})`);
 } catch { warn('Background daemon is not running. Start it with task "Harness: 1. Start" or: node .harness/daemon.mjs'); }
+const leftovers = fs.readdirSync(DIRS.staging).filter((d) => !d.startsWith('.'));
+if (leftovers.length) warn(`Backups from interrupted tasks in .harness/staging/: ${leftovers.join(', ')} — restore by hand if needed, then delete.`);
 
 console.log(problems ? `\n${problems} problem(s) to fix above.` : '\nAll required checks passed.');
 process.exit(problems ? 1 : 0);

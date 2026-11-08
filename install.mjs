@@ -22,7 +22,8 @@ if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) { console.erro
 if (path.resolve(target) === path.resolve(SRC)) { console.error('Target is this template itself.'); process.exit(1); }
 
 const report = [];
-const RUNTIME = new Set(['state.json', 'telemetry.log', 'daemon.pid']);
+// Runtime + personal history never travels to another project.
+const RUNTIME = new Set(['state.json', 'telemetry.log', 'daemon.pid', 'engine-probe.json', 'auto-lessons.md']);
 const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|config\.json$)/;
 
 function copyDir(from, to, rel = '.harness') {
@@ -31,7 +32,7 @@ function copyDir(from, to, rel = '.harness') {
     const relPath = path.join(rel, entry.name);
     const s = path.join(from, entry.name); const d = path.join(to, entry.name);
     if (entry.isDirectory()) {
-      if (['worktrees'].includes(entry.name)) { fs.mkdirSync(d, { recursive: true }); continue; }
+      if (['worktrees', 'staging'].includes(entry.name)) { fs.mkdirSync(d, { recursive: true }); continue; }
       if (entry.name === 'sessions') { fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, '.gitkeep'), ''); continue; }
       copyDir(s, d, relPath); continue;
     }
