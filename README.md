@@ -64,6 +64,14 @@ You can use it without being able to code.
 5. **Autonomous mode is ON by default, and safe:** it acts on READY tasks you add; it plans new ones only once you describe your goals in `charter.md`; it needs a real check; it does at most `maxAutoTasksPerRun` tasks; any failure pauses it for your decision.
 6. **You always get a report.** Full detail of the rules, the two modes (editor / headless) and what is *not* enforced: [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
 
+## Try it first: a demo project
+
+```bash
+npm run demo          # creates ./demo-project (own git repo, harness installed, one READY task)
+```
+
+Open `demo-project/` in Claude Code, accept the trust dialog, restart the session, then type `/harness:doctor`, `/harness:team` and `/harness:auto`. The named agents `lead-ba`, `lead-dev`, `lead-qa` build a small `slugify` helper in front of you and the controller reports PASSED only if the real tests pass. Steps are also in the demo's own README. `npm run demo -- <folder> --force` recreates a demo (it never deletes a folder that is not a demo).
+
 ## 1. Get it
 
 Pick one:
@@ -438,7 +446,7 @@ node .harness/memory.mjs list|remember|forget|context|sessions
 node .harness/doctor.mjs                 # setup check + engine flag probe
 node .harness/status.mjs --log 25        # state + recent JSONL events
 node .harness/watch.mjs --job <id>       # live feed of every agent action until that job finishes
-node test/run-tests.mjs                  # 88 end-to-end tests with a mock engine (no AI account needed, free)
+node test/run-tests.mjs                  # 89 end-to-end tests with a mock engine (no AI account needed, free)
 npm run test:live                        # REAL Claude agents end to end, 6 scenarios (manual task, autonomous uat run, headless team, the editor workflow with named agents, autonomous editor mode, editor config); ~$2.5, needs `claude` logged in
 node .harness/visible.mjs status          # runs of the editor workflow
 node .harness/team.mjs show|validate     # the agent team and its guardrails

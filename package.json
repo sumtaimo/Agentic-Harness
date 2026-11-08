@@ -4,6 +4,7 @@
   "description": "Zero-dependency agentic workflow harness template (no packages to install)",
   "scripts": {
     "test": "node test/run-tests.mjs",
-    "test:live": "node test/live-e2e.mjs"
+    "test:live": "node test/live-e2e.mjs",
+    "demo": "node examples/make-demo.mjs"
   }
 }

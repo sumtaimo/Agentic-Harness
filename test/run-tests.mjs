@@ -1482,5 +1482,49 @@ await test('documentation matches reality: every script, sub-command and slash c
   assert(fs.existsSync(path.join(REPO, 'docs', 'WORKFLOW.md')) && /docs\/WORKFLOW\.md/.test(fs.readFileSync(path.join(REPO, 'README.md'), 'utf8')), 'README must link to docs/WORKFLOW.md');
 });
 
+await test('demo project (examples/make-demo.mjs): ready to try — harness installed, objectives filled, one READY task with a real check, own git repo; the controller can run it end to end; --force only recreates demos', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-demo-test-'));
+  const demo = path.join(base, 'demo');
+  const mk = (...a) => spawnSync(process.execPath, [path.join(REPO, 'examples', 'make-demo.mjs'), ...a], { encoding: 'utf8' });
+  const r = mk(demo);
+  assert(r.status === 0 && /Demo project created/.test(r.stdout) && /Failures: 0/.test(r.stdout), r.stdout + r.stderr);
+  for (const f of ['.harness/visible.mjs', '.claude/agents/lead-dev.md', '.claude/commands/harness/run.md', 'README.md', 'package.json']) assert(fs.existsSync(path.join(demo, f)), `demo lacks ${f}`);
+  const charter = read(demo, '.harness/charter.md');
+  assert(/^- autonomous: on$/m.test(charter) && !/describe your product goals here/.test(charter) && /text-utilities library/.test(charter), 'charter objectives not filled in / autonomy not on');
+  assert(execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: demo, encoding: 'utf8' }).trim() === '1' && execFileSync('git', ['status', '--porcelain'], { cwd: demo, encoding: 'utf8' }).trim() === '', 'demo must be its own git repo with one clean commit');
+  for (const f of ['live.log', 'state.json', 'telemetry.log']) assert(!fs.existsSync(path.join(demo, '.harness', f)), `local runtime file leaked into the demo: ${f}`);
+  const hook = spawnSync(process.execPath, ['.harness/hook-session.mjs'], { cwd: demo, encoding: 'utf8' }).stdout;
+  assert(/AUTO MODE IS ON .* 1 task\(s\) are READY; next: "Add a slugify helper"/.test(hook), hook);
+  // the controller runs the demo's READY task end to end (the agents' work is simulated by writing the files)
+  const b = spawnSync(process.execPath, ['.harness/visible.mjs', 'brief', '--next', '--auto-session', 'SDEMO'], { cwd: demo, encoding: 'utf8' });
+  const id = runIdOf(b);
+  assert(b.status === 0 && id && /Task: Add a slugify helper/.test(b.stdout) && /slugify\(text\)/.test(b.stdout) && !/NO REAL CHECK/.test(b.stdout), b.stdout + b.stderr);
+  const plan = deleg([{ lead: 'lead-ba', goal: 'spec', files: ['docs/slugify.md'] }, { lead: 'lead-dev', goal: 'code', files: ['src/slugify.js'] }, { lead: 'lead-qa', goal: 'tests', files: ['tests/slugify.test.js'] }]);
+  const a = spawnSync(process.execPath, ['.harness/visible.mjs', 'assign', id, plan], { cwd: demo, encoding: 'utf8' });
+  assert(a.status === 0 && /DELEGATION OK/.test(a.stdout), a.stdout + a.stderr);
+  fs.mkdirSync(path.join(demo, 'docs'), { recursive: true }); fs.mkdirSync(path.join(demo, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(demo, 'docs', 'slugify.md'), '# slugify\n');
+  fs.writeFileSync(path.join(demo, 'src', 'slugify.js'), "exports.slugify=(t)=>{if(typeof t!=='string')throw new TypeError('x');return t.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')}\n");
+  fs.writeFileSync(path.join(demo, 'tests', 'slugify.test.js'), "const t=require('node:test');const a=require('node:assert');const {slugify}=require('../src/slugify.js');t('x',()=>a.strictEqual(slugify('  Hello, World!  '),'hello-world'))\n");
+  const v = spawnSync(process.execPath, ['.harness/visible.mjs', 'verify', id], { cwd: demo, encoding: 'utf8' });
+  assert(v.status === 0 && /PASSED ✔/.test(v.stdout), v.stdout);
+  const tasks = json(path.join(demo, '.harness', 'backlog.json')).tasks;
+  assert(tasks[0].status === 'DONE', `backlog item is ${tasks[0].status}`);
+  // the demo's check is real: with the files present but no passing test it must fail
+  const d2 = path.join(base, 'demo2'); assert(mk(d2).status === 0, 'second demo');
+  const b2 = runIdOf(spawnSync(process.execPath, ['.harness/visible.mjs', 'brief', '--next'], { cwd: d2, encoding: 'utf8' }));
+  spawnSync(process.execPath, ['.harness/visible.mjs', 'assign', b2, plan], { cwd: d2, encoding: 'utf8' });
+  fs.mkdirSync(path.join(d2, 'docs'), { recursive: true }); fs.mkdirSync(path.join(d2, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(d2, 'docs', 'slugify.md'), 'x'); fs.writeFileSync(path.join(d2, 'src', 'slugify.js'), 'exports.slugify=()=>"wrong"\n');
+  fs.writeFileSync(path.join(d2, 'tests', 'slugify.test.js'), "const t=require('node:test');const a=require('node:assert');t('fails',()=>a.strictEqual(1,2))\n");
+  assert(spawnSync(process.execPath, ['.harness/visible.mjs', 'verify', b2], { cwd: d2, encoding: 'utf8' }).status === 1, 'a demo task with failing tests must NOT pass');
+  // safety of the script itself
+  assert(mk(demo).status === 1 && /already exists/.test(mk(demo).stderr), 'must refuse an existing non-empty folder');
+  const notDemo = path.join(base, 'mine'); fs.mkdirSync(notDemo); fs.writeFileSync(path.join(notDemo, 'important.txt'), 'keep me');
+  assert(mk(notDemo, '--force').status === 1 && fs.readFileSync(path.join(notDemo, 'important.txt'), 'utf8') === 'keep me', '--force must never delete a folder that is not a demo');
+  assert(mk(demo, '--force').status === 0 && !fs.existsSync(path.join(demo, 'src', 'slugify.js')) && json(path.join(demo, '.harness', 'backlog.json')).tasks[0].status === 'READY', '--force should recreate a clean demo');
+  assert(mk(REPO).status === 1 && mk(path.join(REPO, 'inside-the-template')).status === 0 && (fs.rmSync(path.join(REPO, 'inside-the-template'), { recursive: true, force: true }), true), 'the demo may not overwrite the template itself');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

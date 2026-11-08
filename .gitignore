@@ -26,3 +26,6 @@
 
 # Personal Claude Code overrides (never commit)
 .claude/settings.local.json
+
+# A demo project created by `npm run demo` (examples/make-demo.mjs) lives next to the template, not in it
+/demo-project/
