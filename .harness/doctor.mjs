@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, listLessons, probeEngine, profileFlags, detectVerifyCmd } from './lib/common.mjs';
-import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, readBacklog, backlogCounts, validateBacklog, listReleases } from './lib/governance.mjs';
+import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases } from './lib/governance.mjs';
 
 ensureDirs();
 const ok = (m) => console.log(`  ✔ ${m}`);
@@ -65,7 +65,7 @@ const skills = loadSkills();
 for (const s of Object.values(skills)) {
   for (const r of s.roles) if (roles[r]) { const ng = skillRulesNotGranted(roles[r], [s]); if (ng.length) warn(`skill ${s.name} asks for tool rules role ${r} does not allow (ignored): ${ng.map((x) => x.split(': ')[1]).join(', ')}`); }
   const badRoles = s.roles.filter((r) => !roles[r]);
-  badRoles.length ? warn(`skill ${s.name}: unknown role(s) ${badRoles.join(', ')}`) : ok(`skill ${s.name} → roles ${s.roles.join(', ') || 'any'}${s.allowedTools.length ? `; narrows tools to ${s.allowedTools.join(', ')}` : ''}`);
+  badRoles.length ? warn(`skill ${s.name}: unknown role(s) ${badRoles.join(', ')}`) : ok(`skill ${s.name} → roles ${s.roles.join(', ') || 'any'}${s.roles.filter((r) => roles[r]).map((r) => { const t = skillToolsFor(s, r); return t.length ? `; ${r}: ${t.join(', ')}` : ''; }).join('')}`);
 }
 try {
   validateBacklog(JSON.parse(fs.readFileSync(path.join(ROOT, '.harness', 'backlog.json'), 'utf8')));

@@ -101,6 +101,9 @@ const baseTool = (rule) => String(rule).split('(')[0].trim();
 /** Turn "dir/" into "dir/**" for permission rules. */
 const toRulePath = (t) => (t.endsWith('/') ? `${t}**` : t);
 
+/** The skill's tool list that applies to this role (its own override, else the default list). */
+export const skillToolsFor = (skill, roleName) => skill.toolsByRole?.[String(roleName).toUpperCase()] ?? skill.allowedTools ?? [];
+
 /** Does a role rule cover a skill rule? Same tool, and equal or a ":*" prefix match (Bash(npm:*) covers Bash(npm test:*)). */
 function covers(roleRule, skillRule) {
   if (roleRule === skillRule) return true;
@@ -131,10 +134,11 @@ export function computeAllowedTools(role, skills, targetFiles) {
     else rules.push(rule);
   }
   for (const s of skills) {
-    if (!Array.isArray(s.allowedTools) || s.allowedTools.length === 0) continue;
-    const bare = new Set(s.allowedTools.filter((r) => !r.includes('(')).map(baseTool));
+    const list = skillToolsFor(s, role.name);
+    if (!Array.isArray(list) || list.length === 0) continue;
+    const bare = new Set(list.filter((r) => !r.includes('(')).map(baseTool));
     const exact = new Map();
-    for (const r of s.allowedTools.filter((x) => x.includes('('))) exact.set(baseTool(r), [...(exact.get(baseTool(r)) || []), r]);
+    for (const r of list.filter((x) => x.includes('('))) exact.set(baseTool(r), [...(exact.get(baseTool(r)) || []), r]);
     const before = rules;
     const out = [];
     for (const r of before) {
@@ -154,7 +158,7 @@ export function computeAllowedTools(role, skills, targetFiles) {
 export function skillRulesNotGranted(role, skills) {
   const roleRules = role.allowedTools || [];
   const missing = [];
-  for (const s of skills) for (const r of s.allowedTools || []) {
+  for (const s of skills) for (const r of skillToolsFor(s, role.name)) {
     if (r.includes('(') && !roleRules.some((rr) => covers(rr, r))) missing.push(`${s.name}: ${r}`);
   }
   return missing;
@@ -174,7 +178,7 @@ function parseFrontmatter(text) {
   if (!m) return { meta: {}, body: text };
   const meta = {};
   for (const line of m[1].split(/\r?\n/)) {
-    const kv = line.match(/^([A-Za-z][\w-]*)\s*:\s*(.*)$/);
+    const kv = line.match(/^([A-Za-z][\w.-]*)\s*:\s*(.*)$/);
     if (!kv) continue;
     let v = kv[2].trim();
     if (/^\[.*\]$/.test(v)) {
@@ -202,6 +206,8 @@ export function loadSkills() {
         description: String(meta.description || ''),
         roles: (Array.isArray(meta.roles) ? meta.roles : []).map((r) => String(r).toUpperCase()),
         allowedTools: Array.isArray(meta.allowedTools) ? meta.allowedTools : [],
+        // optional per-role override: "allowedTools.DEV_ENGINEER: [...]" replaces the default list for that role only
+        toolsByRole: Object.fromEntries(Object.entries(meta).filter(([k, v]) => /^allowedTools\./.test(k) && Array.isArray(v)).map(([k, v]) => [k.slice('allowedTools.'.length).toUpperCase(), v])),
         keywords: Array.isArray(meta.keywords) ? meta.keywords.map(String) : [],
         autoApply: meta.autoApply === true,
         body: body.trim(),

@@ -577,8 +577,8 @@ await test('roles + skills: BA vs DEV vs QA get different engine tools; skill ru
   const denied = argsOf(d, 'dev').find((a) => a.startsWith('DENIED=')).slice(7);
   const ba = tools('ba'); const dev = tools('dev'); const qa = tools('qa');
   assert(ba.includes('Edit(docs/spec.md)') && ba.includes('Write(docs/spec.md)') && ba.includes('Bash(git status)') && !ba.some((t) => /npm|src/.test(t)), `BA: ${ba}`);
-  assert(dev.includes('Edit(src/a.js)') && dev.includes('Write(src/a.js)') && dev.includes('Bash(npm test:*)') && dev.includes('Bash(node:*)') && !dev.includes('Bash(npm:*)') && !dev.some((t) => /git/.test(t)), `DEV (narrowed by code-craft to test + node): ${dev}`);
-  assert(qa.includes('Edit(tests/a.test.js)') && qa.includes('Bash(npm test:*)') && !qa.includes('Bash(npm:*)') && !qa.includes('Bash(node:*)'), `QA (never gets node:* — its role lacks it): ${qa}`);
+  assert(dev.includes('Edit(src/a.js)') && dev.includes('Write(src/a.js)') && dev.includes('Bash(npm test:*)') && dev.includes('Bash(node --test:*)') && !dev.includes('Bash(node:*)') && !dev.includes('Bash(npm:*)') && !dev.some((t) => /git/.test(t)), `DEV (narrowed by code-craft to npm test + node --test): ${dev}`);
+  assert(qa.includes('Edit(tests/a.test.js)') && qa.includes('Bash(npm test:*)') && !qa.includes('Bash(npm:*)') && !qa.some((t) => /node/.test(t)), `QA (npm test only): ${qa}`);
   assert(/Edit\(\.env\*\)/.test(denied) && /Bash\(git push:\*\)/.test(denied), `deny rules: ${denied}`);
   assert(promptOf(d, 'dev').includes('@governed-by PO_ARCHITECT') && promptOf(d, 'dev').includes('[ROLE PERSONA — DEV_ENGINEER]'), 'skill/persona not injected for DEV');
   assert(!promptOf(d, 'ba').includes('Code Craft Skill Rules') && promptOf(d, 'ba').includes('[ROLE PERSONA — BA_ANALYST]'), 'skill wrongly injected into BA');
@@ -813,10 +813,13 @@ await test('skill exact rules: DEV gets only "npm test" + node (not npm:*), a sk
   const roles = loadRoles(); const skills = loadSkills();
   const cc = skills['code-craft'];
   const dev = computeAllowedTools(roles.DEV_ENGINEER, [cc], ['src/a.js']);
-  assert(dev.includes('Bash(npm test:*)') && dev.includes('Bash(node:*)') && dev.includes('Edit(src/a.js)') && !dev.includes('Bash(npm:*)') && !dev.some((t) => /git/.test(t)), dev.join());
+  assert(dev.includes('Bash(npm test:*)') && dev.includes('Bash(node --test:*)') && dev.includes('Edit(src/a.js)') && !dev.includes('Bash(node:*)') && !dev.includes('Bash(npm:*)') && !dev.some((t) => /git/.test(t)), dev.join());
   const qa = computeAllowedTools(roles.QA_AUDITOR, [cc], ['tests/a.test.js']);
-  assert(qa.includes('Bash(npm test:*)') && !qa.includes('Bash(node:*)') && !qa.some((t) => /npm run/.test(t)), qa.join());
-  assert(skillRulesNotGranted(roles.QA_AUDITOR, [cc]).join().includes('Bash(node:*)'), 'ungranted rule not reported');
+  assert(qa.includes('Bash(npm test:*)') && !qa.some((t) => /node/.test(t)) && !qa.some((t) => /npm run/.test(t)), qa.join());
+  assert(skillRulesNotGranted(roles.QA_AUDITOR, [cc]).length === 0 && skillRulesNotGranted(roles.DEV_ENGINEER, [cc]).length === 0, 'shipped skill asks for something its roles lack');
+  assert(skillRulesNotGranted(roles.QA_AUDITOR, [{ name: 'x', allowedTools: ['Bash(node --test:*)'] }]).join().includes('node --test'), 'ungranted rule not reported');
+  // per-role override really is per role: the same skill file gives DEV node --test but QA only npm test
+  assert(cc.toolsByRole.DEV_ENGINEER.includes('Bash(node --test:*)') && !cc.allowedTools.some((t) => /node/.test(t)), 'per-role lists not parsed');
   const evil = { name: 'evil', allowedTools: ['Read', 'Bash(rm:*)', 'Bash(git push:*)', 'Bash(npm test:*)'] };
   const d2 = computeAllowedTools(roles.DEV_ENGINEER, [evil], ['src/a.js']);
   assert(!d2.some((t) => /rm|push/.test(t)) && d2.includes('Bash(npm test:*)') && !d2.some((t) => t.startsWith('Edit')), `skill granted something: ${d2.join()}`);
@@ -831,9 +834,9 @@ await test('role + skill end-to-end: engine args for a DEV worker carry exactly 
     { id: 'qa', role: 'QA_AUDITOR', skills: ['code-craft'], targetFiles: ['tests/a.test.js'], prompt: 'WRITE tests/a.test.js t' }] });
   runOnce(d);
   const tools = (id) => argsOf(d, id).find((a) => a.startsWith('ALLOWED=')).slice(8).split(',');
-  assert(tools('dev').includes('Bash(node:*)') && tools('dev').includes('Bash(npm test:*)'), tools('dev').join());
-  assert(!tools('qa').includes('Bash(node:*)'), tools('qa').join());
-  assert(log(d).some((e) => e.phase === 'SKILL_RULE_NOT_GRANTED' && /QA_AUDITOR/.test(e.message) && /node:\*/.test(e.message)), 'no SKILL_RULE_NOT_GRANTED for QA');
+  assert(tools('dev').includes('Bash(node --test:*)') && tools('dev').includes('Bash(npm test:*)') && !tools('dev').includes('Bash(node:*)'), tools('dev').join());
+  assert(tools('qa').includes('Bash(npm test:*)') && !tools('qa').some((t) => /node/.test(t)), tools('qa').join());
+  assert(!log(d).some((e) => e.phase === 'SKILL_RULE_NOT_GRANTED'), 'the shipped skill should not ask for anything a role lacks');
   assert(promptOf(d, 'dev').includes('run the project\'s tests'), 'skill text lacks the self-test rule');
 });
 
@@ -860,6 +863,16 @@ await test('PO_ARCHITECT works from the uat version of the project (not your fol
   const cfgBacklog = backlog(d); cfgBacklog.push({ id: 'NEWIDEA', title: 'a new idea', status: 'BACKLOG' }); setBacklog(d, cfgBacklog);
   tick(d);
   assert(poCalls() === 3, `a changed backlog should trigger a new PO call, calls=${poCalls()}`);
+});
+
+await test('doctor: the shipped skill/role/tool setup produces no skill warnings; an over-asking skill still warns', () => {
+  const d = sandbox();
+  let out = node(d, ['.harness/doctor.mjs']).stdout;
+  assert(/skill code-craft → roles DEV_ENGINEER, QA_AUDITOR; DEV_ENGINEER: .*node --test.*; QA_AUDITOR: Read, Edit, Write, Bash\(npm test:\*\)/.test(out) && !/skill code-craft asks for/.test(out), out.split('\n').filter((l) => /skill/.test(l)).join('\n'));
+  fs.mkdirSync(path.join(d, '.harness', 'skills', 'greedy'), { recursive: true });
+  fs.writeFileSync(path.join(d, '.harness', 'skills', 'greedy', 'SKILL.md'), '---\nname: greedy\ndescription: d\nroles: ["QA_AUDITOR"]\nallowedTools: ["Bash(node:*)"]\n---\nx');
+  out = node(d, ['.harness/doctor.mjs']).stdout;
+  assert(/skill greedy asks for tool rules role QA_AUDITOR does not allow/.test(out), 'over-asking skill not warned');
 });
 
 await test('--status prints the harness status (read-only alias for status.mjs)', () => {

@@ -204,11 +204,17 @@ rules in plain words…
 ```
 In `allowedTools` a skill lists, per tool, either a bare name (`Edit`: keep the role's rules for it)
 or **exact rules** (`Bash(npm test:*)`: replace the role's rules for that tool by these, but only
-those the role already covers, so `Bash(npm:*)` in the role covers `Bash(npm test:*)`). The shipped
-`code-craft` skill uses this to let DEV run **only** `npm test` and `node`: DEV can test its own code,
-but not use `git`, `rm`, or any other command. The QA role lacks `node:*`, so QA never gets it
-(Doctor and the log say so). Note that `node` can write to any file in its working folder: in
-`uat` mode anything outside the worker's files is discarded before commit, and the check runs on the merged candidate.
+those the role already covers, so `Bash(npm:*)` in the role covers `Bash(npm test:*)`).
+`allowedTools` is the default list for every role the skill names; a line like
+`allowedTools.DEV_ENGINEER: [...]` replaces it for that one role. The shipped `code-craft` skill uses both:
+- **DEV_ENGINEER:** Read/Edit/Write its files, `npm test` and `node --test`, and nothing else. DEV can test its own
+  code, but cannot use `git`, `rm`, `npm run`, or `node -e` (a live Claude Code call confirmed `node --test`
+  runs and `node -e "…writeFileSync…"` is denied).
+- **QA_AUDITOR:** Read/Edit/Write its files and `npm test` only.
+
+Doctor warns if a skill asks a role for a rule the role doesn't allow, and the log records it
+(`SKILL_RULE_NOT_GRANTED`). Note that `node --test` still runs the project's test files, which is code:
+in `uat` mode anything outside the worker's files is discarded before commit, and the check runs on the merged candidate.
 
 A worker gets a skill when its task lists it (`"skills": ["code-craft"]`) or when the AI
 planner or PO picks it. A skill is only given to the roles it names, and a skill can only
@@ -315,7 +321,7 @@ node .harness/dispatch.mjs --help        # all options: --goal --files --check -
 node .harness/memory.mjs list|remember|forget|context|sessions
 node .harness/doctor.mjs                 # setup check + engine flag probe
 node .harness/status.mjs --log 25        # state + recent JSONL events
-node test/run-tests.mjs                  # 56 end-to-end tests with a mock engine (no AI account needed)
+node test/run-tests.mjs                  # 57 end-to-end tests with a mock engine (no AI account needed)
 ```
 
 Job file format (`.harness/inbox/*.json`):

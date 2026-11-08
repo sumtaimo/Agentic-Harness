@@ -1,0 +1,8 @@
+{
+  "name": "agentic-harness",
+  "private": true,
+  "description": "Zero-dependency agentic workflow harness template (no packages to install)",
+  "scripts": {
+    "test": "node test/run-tests.mjs"
+  }
+}
