@@ -1,0 +1,63 @@
+{
+  "maxCycles": 3,
+  "workerTimeoutMs": 300000,
+  "verifyTimeoutMs": 600000,
+  "useGitWorktrees": false,
+  "autoGitCommit": false,
+  "activeProfile": "auto",
+  "autoOrder": ["claude", "antigravity", "orca", "gemini", "codex"],
+  "defaultVerifyCmd": "node -e \"process.exit(0)\"",
+  "memory": {
+    "enabled": true,
+    "recordSessions": true,
+    "autoLessons": true,
+    "maxAutoLessons": 10,
+    "maxContextChars": 6000
+  },
+  "profiles": {
+    "claude": {
+      "verified": true,
+      "note": "Claude Code headless mode. Prompt is sent on stdin (passing it after --allowedTools gets swallowed by that flag).",
+      "binary": "claude",
+      "args": ["-p", "--output-format", "json", "--allowedTools", "{allowedTools}"],
+      "allowedTools": ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git:*)", "Bash(npm:*)", "Bash(node:*)"],
+      "useMcp": false,
+      "mcpArgs": ["--mcp-config", "{mcpConfig}"],
+      "mcpConfigPath": ".harness/mcp.json"
+    },
+    "antigravity": {
+      "verified": false,
+      "note": "UNVERIFIED: flags copied from the original spec, not checked against a real 'antigravity' CLI. Run 'antigravity --help' and adjust 'args'. Use {prompt} where the prompt goes; remove it to send the prompt on stdin.",
+      "binary": "antigravity",
+      "args": ["--headless", "--json", "--allowedTools", "{allowedTools}", "{prompt}"],
+      "allowedTools": ["Read", "Edit", "Write", "Bash"],
+      "useMcp": false,
+      "mcpArgs": ["--mcp-config", "{mcpConfig}"],
+      "mcpConfigPath": ".harness/mcp.json"
+    },
+    "orca": {
+      "verified": false,
+      "note": "UNVERIFIED: flags copied from the original spec, not checked against a real 'orca' CLI. Run 'orca --help' and adjust 'args'.",
+      "binary": "orca",
+      "args": ["run", "--non-interactive", "--format", "json", "--allowedTools", "{allowedTools}", "{prompt}"],
+      "allowedTools": ["Read", "Edit", "Write", "Bash"],
+      "useMcp": false,
+      "mcpArgs": ["--mcp-config", "{mcpConfig}"],
+      "mcpConfigPath": ".harness/mcp.json"
+    },
+    "gemini": {
+      "verified": false,
+      "note": "UNVERIFIED here (not installed in the test machine). Gemini CLI non-interactive mode; --yolo auto-approves every tool, so only use it in a project you trust.",
+      "binary": "gemini",
+      "args": ["--yolo", "-p", "{prompt}"],
+      "allowedTools": []
+    },
+    "codex": {
+      "verified": false,
+      "note": "UNVERIFIED here (not installed in the test machine). OpenAI Codex CLI non-interactive mode.",
+      "binary": "codex",
+      "args": ["exec", "--full-auto", "{prompt}"],
+      "allowedTools": []
+    }
+  }
+}

@@ -1,0 +1,13 @@
+# agentic-harness runtime (machine-specific; never commit)
+.harness/state.json
+.harness/state.json.*.tmp
+.harness/telemetry.log
+.harness/daemon.pid
+.harness/inbox/*
+.harness/completed/*
+.harness/failed/*
+.harness/worktrees/*
+.harness/memory/sessions/*
+!.harness/**/.gitkeep
+# Memory (profile.md, lessons.md, auto-lessons.md) IS committed so it travels with the project.
+# Add those three files here too if your memory is private and the repo is public.

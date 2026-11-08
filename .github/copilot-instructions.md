@@ -1,0 +1,6 @@
+# Copilot instructions
+
+Before answering, read and follow `AGENTS.md` at the repository root. It explains the
+`.harness/` agentic harness and requires you to read the user's memory first:
+`.harness/memory/profile.md` and `.harness/memory/lessons.md`. When the user corrects you or
+states a preference, save it with `node .harness/memory.mjs remember "<rule>"`.
