@@ -8,12 +8,14 @@
 .harness/completed/*
 .harness/failed/*
 .harness/staging/*
+.harness/releases/*
 .harness/worktrees/*
 .harness/memory/sessions/*
 .harness/memory/auto-lessons.md
 # The folder/* form (instead of folder/) keeps each folder's .gitkeep, so the folders exist in the template.
 !.harness/**/.gitkeep
 
+# charter.md, backlog.json, roles/ and skills/ ARE committed (they define the project's governance).
 # profile.md and lessons.md ARE committed (the template ships generic starter versions).
 # In your own PUBLIC project, if they hold personal details, uncomment these two lines:
 # .harness/memory/profile.md

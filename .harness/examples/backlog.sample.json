@@ -1,0 +1,56 @@
+{
+  "version": "2.0.0",
+  "project": "Autonomous Swarm Operations (sample)",
+  "maxAutoTasksPerRun": 3,
+  "tasks": [
+    {
+      "id": "SWARM-JOB-001",
+      "title": "Parallel Auth Feature: Specs, Core Logic & Unit Tests",
+      "priority": 1,
+      "status": "READY",
+      "topology": "SWARM_MESH",
+      "goal": "Token validation feature: specification, implementation and tests, built in parallel by BA, DEV and QA.",
+      "interfaceContract": "Module src/auth.js (CommonJS) exports exactly: module.exports = { validateToken }.\nToken format: \"<userId>.<expiresAtMs>\" — userId is 1-64 chars of [A-Za-z0-9_-]; expiresAtMs is a positive integer (milliseconds since epoch).\nvalidateToken(token, nowMs = Date.now()) returns { valid: true, userId } for a good token, otherwise { valid: false, reason } where reason is one of:\n  \"NOT_A_STRING\" (token is not a string), \"MALFORMED\" (wrong shape, bad userId, bad or non-positive expiresAtMs), \"EXPIRED\" (expiresAtMs <= nowMs).\nChecks run in that order. The function never throws.",
+      "acceptanceCriteria": [
+        "docs/auth-spec.md documents the token format, every reason code, and edge cases.",
+        "src/auth.js implements the interface contract exactly and validates its inputs.",
+        "tests/auth.test.js covers valid, NOT_A_STRING, MALFORMED and EXPIRED cases and passes with node --test.",
+        "src/auth.js and tests/auth.test.js start with a JSDoc block containing @governed-by PO_ARCHITECT (code-craft skill)."
+      ],
+      "verifyCmd": "node -e \"const f=require('fs');for(const p of ['docs/auth-spec.md','src/auth.js','tests/auth.test.js'])if(!f.existsSync(p)){console.error('missing '+p);process.exit(1)}for(const p of ['src/auth.js','tests/auth.test.js']){const t=f.readFileSync(p,'utf8').trimStart();if(!t.startsWith('/**')||!t.slice(0,t.indexOf('*/')).includes('@governed-by PO_ARCHITECT')){console.error(p+' lacks the code-craft JSDoc header');process.exit(1)}}\" && node --test tests/auth.test.js",
+      "subtasks": [
+        {
+          "id": "worker-ba",
+          "role": "BA_ANALYST",
+          "targetFiles": [
+            "docs/auth-spec.md"
+          ],
+          "skills": [],
+          "prompt": "Write the token validation specification into docs/auth-spec.md: token format, each reason code, validation order, and edge cases, following the shared interface contract."
+        },
+        {
+          "id": "worker-dev",
+          "role": "DEV_ENGINEER",
+          "targetFiles": [
+            "src/auth.js"
+          ],
+          "skills": [
+            "code-craft"
+          ],
+          "prompt": "Implement validateToken in src/auth.js exactly as the shared interface contract says."
+        },
+        {
+          "id": "worker-qa",
+          "role": "QA_AUDITOR",
+          "targetFiles": [
+            "tests/auth.test.js"
+          ],
+          "skills": [
+            "code-craft"
+          ],
+          "prompt": "Write tests/auth.test.js using node:test and node:assert that require(\"../src/auth.js\") and cover every case in the shared interface contract. Do not create or edit src/auth.js."
+        }
+      ]
+    }
+  ]
+}

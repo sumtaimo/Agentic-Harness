@@ -24,7 +24,8 @@ if (path.resolve(target) === path.resolve(SRC)) { console.error('Target is this 
 const report = [];
 // Runtime + personal history never travels to another project.
 const RUNTIME = new Set(['state.json', 'telemetry.log', 'daemon.pid', 'engine-probe.json', 'auto-lessons.md']);
-const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|config\.json$)/;
+// The target project's own data wins: memory, config, charter, backlog, roles, skills.
+const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|roles[\\/]|skills[\\/]|config\.json$|charter\.md$|backlog\.json$)/;
 
 function copyDir(from, to, rel = '.harness') {
   fs.mkdirSync(to, { recursive: true });
@@ -32,7 +33,7 @@ function copyDir(from, to, rel = '.harness') {
     const relPath = path.join(rel, entry.name);
     const s = path.join(from, entry.name); const d = path.join(to, entry.name);
     if (entry.isDirectory()) {
-      if (['worktrees', 'staging'].includes(entry.name)) { fs.mkdirSync(d, { recursive: true }); continue; }
+      if (['worktrees', 'staging', 'releases'].includes(entry.name)) { fs.mkdirSync(d, { recursive: true }); continue; } // never copy history
       if (entry.name === 'sessions') { fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, '.gitkeep'), ''); continue; }
       copyDir(s, d, relPath); continue;
     }

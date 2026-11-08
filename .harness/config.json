@@ -6,14 +6,27 @@
   "rollbackOnFailure": true,
   "autoGitCommit": false,
   "activeProfile": "auto",
-  "autoOrder": ["claude", "antigravity", "orca", "gemini", "codex"],
+  "autoOrder": [
+    "claude",
+    "antigravity",
+    "orca",
+    "gemini",
+    "codex"
+  ],
   "defaultVerifyCmd": "node -e \"process.exit(0)\"",
+  "autonomous": {
+    "intervalSeconds": 300
+  },
   "planner": {
     "defaultAutoPlan": false,
     "maxWorkers": 4,
     "maxAttempts": 2,
     "maxFilesListed": 400,
-    "allowedTools": ["Read", "Glob", "Grep"]
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep"
+    ]
   },
   "memory": {
     "enabled": true,
@@ -26,37 +39,77 @@
   "profiles": {
     "claude": {
       "verified": true,
-      "note": "Claude Code headless mode. Prompt goes on stdin. CLAUDE.md @imports profile.md + lessons.md, so the harness does not inject those twice.",
+      "note": "Claude Code headless mode. Prompt goes on stdin. Role tools -> --allowedTools; charter forbiddenPaths/forbiddenTools -> --disallowedTools. CLAUDE.md @imports profile.md + lessons.md, so the harness does not inject those twice.",
       "binary": "claude",
-      "args": ["-p", "--output-format", "json", "--allowedTools", "{allowedTools}"],
+      "args": [
+        "-p",
+        "--output-format",
+        "json",
+        "--allowedTools",
+        "{allowedTools}",
+        "--disallowedTools",
+        "{disallowedTools}"
+      ],
       "promptVia": "stdin",
       "instructionFile": "CLAUDE.md",
-      "allowedTools": ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git:*)", "Bash(npm:*)", "Bash(node:*)"],
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "Bash(git:*)",
+        "Bash(npm:*)",
+        "Bash(node:*)"
+      ],
       "useMcp": false,
-      "mcpArgs": ["--mcp-config", "{mcpConfig}"],
+      "mcpArgs": [
+        "--mcp-config",
+        "{mcpConfig}"
+      ],
       "mcpConfigPath": ".harness/mcp.json"
     },
     "antigravity": {
       "verified": false,
       "note": "UNVERIFIED: flags from the original spec. 'Harness: Doctor' runs 'antigravity --help' and checks every flag below; if any is missing the harness falls back to 'auto'. Prompt goes on stdin; set promptVia to 'arg' (+ '{prompt}' in args) or 'after--' if the real CLI needs it.",
       "binary": "antigravity",
-      "args": ["--headless", "--json"],
+      "args": [
+        "--headless",
+        "--json"
+      ],
       "promptVia": "stdin",
-      "allowedTools": ["Read", "Edit", "Write", "Bash"]
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Bash"
+      ]
     },
     "orca": {
       "verified": false,
       "note": "UNVERIFIED: flags from the original spec. Doctor probes 'orca run --help'; falls back to 'auto' if a flag is missing. Prompt goes on stdin.",
       "binary": "orca",
-      "args": ["run", "--non-interactive", "--format", "json"],
+      "args": [
+        "run",
+        "--non-interactive",
+        "--format",
+        "json"
+      ],
       "promptVia": "stdin",
-      "allowedTools": ["Read", "Edit", "Write", "Bash"]
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Bash"
+      ]
     },
     "gemini": {
       "verified": false,
       "note": "UNVERIFIED here (not installed on the test machine). Gemini CLI reads a piped prompt non-interactively; --yolo auto-approves every tool, so only use it in a project you trust.",
       "binary": "gemini",
-      "args": ["--yolo"],
+      "args": [
+        "--yolo"
+      ],
       "promptVia": "stdin",
       "instructionFile": "GEMINI.md",
       "allowedTools": []
@@ -65,7 +118,11 @@
       "verified": false,
       "note": "UNVERIFIED here (not installed on the test machine). OpenAI Codex CLI; '-' means read the prompt from stdin.",
       "binary": "codex",
-      "args": ["exec", "--full-auto", "-"],
+      "args": [
+        "exec",
+        "--full-auto",
+        "-"
+      ],
       "promptVia": "stdin",
       "allowedTools": []
     }

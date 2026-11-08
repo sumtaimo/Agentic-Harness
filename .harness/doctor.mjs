@@ -5,8 +5,10 @@
  */
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, listLessons, probeEngine, profileFlags, detectVerifyCmd } from './lib/common.mjs';
+import { readCharter, loadRoles, loadSkills, readBacklog, backlogCounts, validateBacklog, listReleases } from './lib/governance.mjs';
 
 ensureDirs();
 const ok = (m) => console.log(`  ✔ ${m}`);
@@ -46,6 +48,31 @@ try {
 console.log('\nAutomatic check (used when a task has no --check)');
 const v = detectVerifyCmd(ROOT, config);
 v.real ? ok(`${v.cmd}  (${v.source})`) : warn(`${v.source}. Add a "test" (or "check") script to package.json, or always pass --check.`);
+
+console.log('\nGovernance (v2: charter, backlog, roles, skills)');
+const charter = readCharter();
+if (!charter.exists) warn('No .harness/charter.md — autonomous mode is off. Copy it from the template to enable it.');
+else {
+  ok(`charter.md: autonomous ${charter.autonomous ? 'ON' : 'off'}, maxAutoTasksPerRun ${charter.maxAutoTasksPerRun}, requireRealCheck ${charter.requireRealCheck ? 'yes' : 'no'}`);
+  ok(`allowedPaths: ${charter.allowedPaths.join(', ') || '(any)'} | forbiddenPaths: ${charter.forbiddenPaths.join(', ')}`);
+  if (charter.autonomous && charter.requireRealCheck && !v.real) { bad('Autonomous is ON but the project has no real check: the controller will pause. Add a "test" script to package.json.'); problems++; }
+  if (charter.autonomous && /\(describe your product goals here/.test(charter.text)) warn('charter.md still has the placeholder objectives — the PO_ARCHITECT will have little to go on.');
+}
+const roles = loadRoles();
+const roleNames = Object.keys(roles);
+roleNames.length ? ok(`roles: ${roleNames.join(', ')}`) : warn('No roles in .harness/roles/ — workers run without personas or per-role tool limits.');
+const skills = loadSkills();
+for (const s of Object.values(skills)) {
+  const badRoles = s.roles.filter((r) => !roles[r]);
+  badRoles.length ? warn(`skill ${s.name}: unknown role(s) ${badRoles.join(', ')}`) : ok(`skill ${s.name} → roles ${s.roles.join(', ') || 'any'}${s.allowedTools.length ? `; narrows tools to ${s.allowedTools.join(', ')}` : ''}`);
+}
+try {
+  validateBacklog(JSON.parse(fs.readFileSync(path.join(ROOT, '.harness', 'backlog.json'), 'utf8')));
+  const c = backlogCounts(readBacklog());
+  ok(`backlog.json: READY ${c.READY}, IN_PROGRESS ${c.IN_PROGRESS}, DONE ${c.DONE}, BLOCKED ${c.BLOCKED}, BACKLOG ${c.BACKLOG}`);
+  if (c.IN_PROGRESS) warn(`${c.IN_PROGRESS} item(s) IN_PROGRESS — if no task is running, an interrupted run left them; set them READY with: node .harness/backlog.mjs ready <id>`);
+} catch (e) { if (fs.existsSync(path.join(ROOT, '.harness', 'backlog.json'))) { bad(`backlog.json is invalid: ${e.message}`); problems++; } else warn('No backlog.json yet.'); }
+ok(`${listReleases().length} release snapshot(s) in .harness/releases/`);
 
 console.log('\nMemory');
 const profile = fs.existsSync(FILES.profile) ? fs.readFileSync(FILES.profile, 'utf8') : '';

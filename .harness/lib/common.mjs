@@ -21,6 +21,7 @@ export const DIRS = {
   completed: path.join(HARNESS_DIR, 'completed'),
   failed: path.join(HARNESS_DIR, 'failed'),
   staging: path.join(HARNESS_DIR, 'staging'),
+  releases: path.join(HARNESS_DIR, 'releases'),
   worktrees: path.join(HARNESS_DIR, 'worktrees'),
   memory: path.join(HARNESS_DIR, 'memory'),
   sessions: path.join(HARNESS_DIR, 'memory', 'sessions')

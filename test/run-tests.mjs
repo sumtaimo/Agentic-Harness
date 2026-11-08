@@ -21,7 +21,7 @@ function sandbox({ worktrees = false } = {}) {
     filter: (src) => !/(state\.json|telemetry\.log|daemon\.pid)$/.test(src) && !/[\\/](inbox|completed|failed|sessions)[\\/][^.]/.test(src)
   });
   const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.harness', 'config.json'), 'utf8'));
-  cfg.profiles.mock = { verified: true, binary: process.execPath, args: [MOCK, '{allowedTools}'], promptVia: 'stdin', allowedTools: [] };
+  cfg.profiles.mock = { verified: true, binary: process.execPath, args: [MOCK, 'ALLOWED={allowedTools}', 'DENIED={disallowedTools}'], promptVia: 'stdin', allowedTools: [] };
   cfg.activeProfile = 'mock';
   cfg.autoOrder = ['mock'];
   cfg.useGitWorktrees = worktrees;
@@ -334,7 +334,7 @@ await test('AI planner (--auto-plan): decomposes a goal into 2 parallel workers 
   assert(r.status === 0 && /COMMITTED/.test(r.stdout), r.stdout + r.stderr);
   const s = json(path.join(d, '.harness', 'state.json'));
   assert(s.mode === 'SWARM-MESH (2W)' && /AI planner → 2 worker/.test(s.planSummary), `${s.mode} ${s.planSummary}`);
-  assert(fs.readFileSync(path.join(d, '.mock-prompts', 'planner-calls.txt'), 'utf8').trim() === 'Read,Glob,Grep', 'planner was not limited to read-only tools');
+  assert(fs.readFileSync(path.join(d, '.mock-prompts', 'planner-calls.txt'), 'utf8').includes('ALLOWED=Read,Glob,Grep '), 'planner was not limited to read-only tools');
   assert(fs.readFileSync(path.join(d, '.mock-prompts', 'part-a.txt'), 'utf8').includes('[OVERALL GOAL'), 'worker missing overall goal');
   const note = fs.readdirSync(path.join(d, '.harness', 'memory', 'sessions')).map((f) => fs.readFileSync(path.join(d, '.harness', 'memory', 'sessions', f), 'utf8')).join('');
   assert(/suggested this check \(NOT run automatically\): `rm -rf \/`/.test(note), 'AI verify suggestion must be recorded, never run');
@@ -402,6 +402,247 @@ await test('memory: no double injection when the engine auto-loads it via CLAUDE
   assert(!p.includes('Taught rule XYZ') && !p.includes('Test User'), 'profile/lessons injected twice');
   assert(p.includes('Auto lesson ABC'), 'auto lessons (not in CLAUDE.md) must still be injected');
   assert(/already loaded from the project instruction file/.test(p), 'missing auto-load notice');
+});
+
+
+// ───────────── v2.0: autonomous controller, backlog, roles + skills, release snapshots ─────────────
+
+function setCharter(d, policy = {}, extra = '') {
+  const f = path.join(d, '.harness', 'charter.md');
+  let t = fs.readFileSync(f, 'utf8');
+  for (const [k, v] of Object.entries(policy)) t = t.replace(new RegExp(`^- ${k}: .*$`, 'm'), `- ${k}: ${v}`);
+  fs.writeFileSync(f, t + (extra ? `\n${extra}\n` : ''));
+}
+const setBacklog = (d, tasks) => fs.writeFileSync(path.join(d, '.harness', 'backlog.json'), JSON.stringify({ version: '2.0.0', tasks }, null, 2));
+const backlog = (d) => json(path.join(d, '.harness', 'backlog.json')).tasks;
+const byId = (d, id) => backlog(d).find((t) => t.id === id);
+const PASS = 'node -e "process.exit(0)"';
+const tick = (d) => node(d, ['.harness/daemon.mjs', '--tick']);
+const argsOf = (d, id) => json(path.join(d, '.mock-prompts', `${id}.args.json`));
+const promptOf = (d, id) => fs.readFileSync(path.join(d, '.mock-prompts', `${id}.txt`), 'utf8');
+const realTest = (d) => fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: PASS } }));
+const waitFor = async (fn, ms = 20000) => { const end = Date.now() + ms; while (Date.now() < end) { if (fn()) return true; await new Promise((r) => setTimeout(r, 200)); } return false; };
+
+await test('autonomous tick: empty inbox promotes the highest-priority READY item; backlog item → DONE', () => {
+  const d = sandbox(); setCharter(d, { autonomous: 'on' });
+  setBacklog(d, [
+    { id: 'A', title: 'low', priority: 2, status: 'READY', verifyCmd: PASS, subtasks: [{ id: 'wa', role: 'DEV_ENGINEER', targetFiles: ['src/a.js'], prompt: 'WRITE src/a.js A' }] },
+    { id: 'B', title: 'high', priority: 1, status: 'READY', verifyCmd: existsCheck('src/b.js'), subtasks: [{ id: 'wb', role: 'DEV_ENGINEER', targetFiles: ['src/b.js'], prompt: 'WRITE src/b.js B' }] },
+    { id: 'C', title: 'idea', priority: 0, status: 'BACKLOG', goal: 'not groomed yet' }]);
+  const r = tick(d);
+  assert(/Autonomous tick: dispatched/.test(r.stdout), r.stdout + r.stderr);
+  assert(byId(d, 'B').status === 'DONE' && byId(d, 'A').status === 'READY' && byId(d, 'C').status === 'BACKLOG', JSON.stringify(backlog(d).map((t) => t.status)));
+  const job = json(path.join(d, '.harness', 'completed', ls(d, 'completed')[0]));
+  assert(job.backlogId === 'B' && job.autonomous === true, 'job not linked to backlog item');
+  assert(log(d).some((e) => e.phase === 'AUTO_DISPATCH' && e.backlogId === 'B'), 'no AUTO_DISPATCH');
+});
+
+await test('autonomous off in charter.md → tick does nothing', () => {
+  const d = sandbox();
+  setBacklog(d, [{ id: 'A', title: 'x', status: 'READY', verifyCmd: PASS, subtasks: [{ id: 'w', targetFiles: ['src/a.js'], prompt: 'WRITE src/a.js A' }] }]);
+  const r = tick(d);
+  assert(/off/.test(r.stdout) && byId(d, 'A').status === 'READY' && ls(d, 'completed').length === 0, r.stdout);
+});
+
+await test('empty backlog → PO_ARCHITECT (read-only) generates ≤ maxAutoTasksPerRun READY tasks from charter; first one runs', () => {
+  const d = sandbox(); realTest(d);
+  const tasks = [1, 2, 3, 4].map((n) => ({ title: `Task ${n}`, priority: n, goal: `g${n}`, acceptanceCriteria: [`ac${n}`], verifySuggestion: 'rm -rf /',
+    subtasks: [{ id: `w${n}`, role: 'DEV_ENGINEER', targetFiles: [`src/t${n}.js`], prompt: `WRITE src/t${n}.js ${n}` }] }));
+  setCharter(d, { autonomous: 'on', maxAutoTasksPerRun: 2 }, `PO_JSON ${JSON.stringify({ tasks })}`);
+  setBacklog(d, []);
+  tick(d);
+  const b = backlog(d);
+  assert(b.length === 2 && b.every((t) => t.source === 'PO_ARCHITECT'), `expected 2 PO tasks, got ${b.length}`);
+  assert(b[0].status === 'DONE' && b[1].status === 'READY', b.map((t) => t.status).join());
+  assert(fs.existsSync(path.join(d, 'src', 't1.js')) && !fs.existsSync(path.join(d, 'src', 't2.js')), 'wrong task ran');
+  const po = fs.readFileSync(path.join(d, '.mock-prompts', 'po-calls.txt'), 'utf8');
+  assert(/ALLOWED=Read,Glob,Grep,Bash\(git status\),Bash\(git log:\*\) /.test(po) && !/Edit|Write/.test(po.split('DENIED=')[0]), `PO not read-only: ${po}`);
+  assert(promptOf(d, 'po-architect').includes('Autonomous Controller Charter'), 'charter not given to PO');
+  assert(b[0].verifyCmd === undefined && b[0].verifySuggestion === 'rm -rf /', 'AI-suggested check must be recorded, never used');
+  assert(promptOf(d, 'w1').includes('[ACCEPTANCE CRITERIA]:\n- ac1'), 'acceptance criteria not passed to worker');
+});
+
+await test('PO_ARCHITECT tasks that break the charter or role scopes are dropped', () => {
+  const d = sandbox(); realTest(d);
+  const t = (title, sub) => ({ title, subtasks: [sub] });
+  const tasks = [
+    t('env', { id: 'a', role: 'DEV_ENGINEER', targetFiles: ['.env.local'], prompt: 'x' }),
+    t('ba-on-src', { id: 'b', role: 'BA_ANALYST', targetFiles: ['src/x.js'], prompt: 'x' }),
+    t('outside', { id: 'c', role: 'DEV_ENGINEER', targetFiles: ['lib/x.js'], prompt: 'x' }),
+    t('no-role-skill', { id: 'd', role: 'DEV_ENGINEER', skills: ['nope'], targetFiles: ['src/d.js'], prompt: 'x' }),
+    t('good', { id: 'e', role: 'DEV_ENGINEER', targetFiles: ['src/e.js'], prompt: 'WRITE src/e.js ok' })];
+  setCharter(d, { autonomous: 'on', maxAutoTasksPerRun: 5 }, `PO_JSON ${JSON.stringify({ tasks })}`);
+  setBacklog(d, []);
+  tick(d);
+  assert(backlog(d).map((x) => x.title).join() === 'good', backlog(d).map((x) => x.title).join());
+  const rej = log(d).filter((e) => e.phase === '0_PO_TASK_REJECTED').map((e) => e.message).join('\n');
+  assert(/forbids/.test(rej) && /BA_ANALYST may only own docs/.test(rej) && /outside charter allowedPaths/.test(rej) && /unknown skill/.test(rej), rej);
+});
+
+await test('requireRealCheck: no real check in the project → autonomy pauses instead of generating work', () => {
+  const d = sandbox(); setCharter(d, { autonomous: 'on' }, 'PO_JSON {"tasks":[]}'); setBacklog(d, []);
+  const r = tick(d);
+  assert(/paused/.test(r.stdout) && !fs.existsSync(path.join(d, '.mock-prompts', 'po-calls.txt')), r.stdout);
+  assert(log(d).some((e) => e.phase === 'AUTO_PAUSED' && /real check/.test(e.message)), 'no AUTO_PAUSED');
+});
+
+await test('autonomous daemon: budget maxAutoTasksPerRun=2 with 4 READY items → exactly 2 run, then it stops', async () => {
+  const d = sandbox(); setCharter(d, { autonomous: 'on', maxAutoTasksPerRun: 2 });
+  setBacklog(d, [1, 2, 3, 4].map((n) => ({ id: `T${n}`, title: `t${n}`, priority: n, status: 'READY', verifyCmd: PASS, subtasks: [{ id: `w${n}`, targetFiles: [`src/${n}.js`], prompt: `WRITE src/${n}.js x` }] })));
+  const daemon = spawn(process.execPath, ['.harness/daemon.mjs', '--autonomous', '--interval', '1'], { cwd: d, env, stdio: 'ignore' });
+  await waitFor(() => backlog(d).filter((t) => t.status === 'DONE').length >= 2);
+  await new Promise((r) => setTimeout(r, 3000)); // two more interval ticks: must not start a 3rd task
+  daemon.kill('SIGTERM'); await new Promise((r) => daemon.on('close', r));
+  const st = backlog(d).map((t) => t.status).join();
+  assert(st === 'DONE,DONE,READY,READY', st);
+  assert(log(d).some((e) => e.phase === 'AUTO_BUDGET_USED'), 'budget stop not logged');
+  assert(json(path.join(d, '.harness', 'state.json')).autonomous.used === 2, 'state.autonomous.used != 2');
+});
+
+await test('failed autonomous task → files restored, item BLOCKED with reason, autonomy pauses (next READY not started)', async () => {
+  const d = sandbox(); setCharter(d, { autonomous: 'on' });
+  fs.mkdirSync(path.join(d, 'src')); fs.writeFileSync(path.join(d, 'src', 'f.js'), 'ORIGINAL');
+  setBacklog(d, [
+    { id: 'BAD', title: 'bad', priority: 1, status: 'READY', verifyCmd: FAIL_VERIFY, subtasks: [{ id: 'w1', targetFiles: ['src/f.js'], prompt: 'WRITE src/f.js BROKEN' }] },
+    { id: 'NEXT', title: 'next', priority: 2, status: 'READY', verifyCmd: PASS, subtasks: [{ id: 'w2', targetFiles: ['src/n.js'], prompt: 'WRITE src/n.js x' }] }]);
+  const daemon = spawn(process.execPath, ['.harness/daemon.mjs', '--autonomous', '--interval', '1'], { cwd: d, env, stdio: 'ignore' });
+  await waitFor(() => byId(d, 'BAD').status === 'BLOCKED');
+  await new Promise((r) => setTimeout(r, 2500));
+  daemon.kill('SIGTERM'); await new Promise((r) => daemon.on('close', r));
+  assert(byId(d, 'BAD').status === 'BLOCKED' && /HALTED_HITL_REQUIRED/.test(byId(d, 'BAD').blockedReason), JSON.stringify(byId(d, 'BAD')));
+  assert(byId(d, 'NEXT').status === 'READY', `NEXT is ${byId(d, 'NEXT').status} — autonomy should pause`);
+  assert(fs.readFileSync(path.join(d, 'src', 'f.js'), 'utf8') === 'ORIGINAL', 'file not restored');
+  assert(log(d).some((e) => e.phase === 'AUTO_PAUSED'), 'no AUTO_PAUSED');
+});
+
+await test('import new backlog → old charter/backlog/summary + unstarted inbox jobs saved to releases/, lessons kept', () => {
+  const d = sandbox();
+  setBacklog(d, [{ id: 'OLD-1', title: 'shipped thing', status: 'DONE' }, { id: 'OLD-2', title: 'half', status: 'IN_PROGRESS' }]);
+  node(d, ['.harness/memory.mjs', 'remember', 'Keep this rule']);
+  drop(d, { id: 'ghost-job', title: 'queued under old backlog', subtasks: [{ id: 'w', targetFiles: ['a'], prompt: 'x' }] });
+  const nb = path.join(d, 'new-backlog.json');
+  fs.writeFileSync(nb, JSON.stringify({ project: 'v2', tasks: [{ id: 'NEW-1', title: 'fresh', status: 'READY' }] }));
+  const r = node(d, ['.harness/backlog.mjs', 'import', 'new-backlog.json']);
+  assert(r.status === 0, r.stdout + r.stderr);
+  const rel = fs.readdirSync(path.join(d, '.harness', 'releases')).filter((x) => x.startsWith('release-'));
+  assert(rel.length === 1, `releases: ${rel}`);
+  const R = path.join(d, '.harness', 'releases', rel[0]);
+  for (const f of ['charter.md', 'backlog.json', 'completed-summary.md', 'inbox/ghost-job.json']) assert(fs.existsSync(path.join(R, f)), `missing ${f} in snapshot`);
+  assert(/OLD-1: shipped thing/.test(fs.readFileSync(path.join(R, 'completed-summary.md'), 'utf8')), 'summary lacks DONE item');
+  assert(json(path.join(R, 'backlog.json')).tasks.length === 2, 'old backlog not preserved');
+  assert(ls(d, 'inbox').length === 0, 'ghost job left in inbox');
+  assert(backlog(d)[0].id === 'NEW-1', 'new backlog not active');
+  assert(/Keep this rule/.test(fs.readFileSync(path.join(d, '.harness', 'memory', 'lessons.md'), 'utf8')), 'lessons lost');
+  // charter upload, then a memory reset upload
+  fs.writeFileSync(path.join(d, 'charter-v2.md'), '# New charter\n- autonomous: off\n');
+  assert(node(d, ['.harness/backlog.mjs', 'import', 'charter-v2.md']).status === 0, 'charter import failed');
+  assert(fs.readFileSync(path.join(d, '.harness', 'charter.md'), 'utf8').startsWith('# New charter'), 'charter not replaced');
+  assert(node(d, ['.harness/backlog.mjs', 'import', 'new-backlog.json', '--reset-memory']).status === 0, 'reset import failed');
+  const rels = fs.readdirSync(path.join(d, '.harness', 'releases')).filter((x) => x.startsWith('release-')).sort();
+  assert(rels.length === 3, `expected 3 releases, got ${rels.length}`);
+  assert(/Keep this rule/.test(fs.readFileSync(path.join(d, '.harness', 'releases', rels[2], 'memory', 'lessons.md'), 'utf8')), 'memory not saved before reset');
+  assert(!/Keep this rule/.test(fs.readFileSync(path.join(d, '.harness', 'memory', 'lessons.md'), 'utf8')), 'memory not reset');
+});
+
+await test('import: invalid backlog changes nothing; import while a task runs is refused; skills pack replaced with snapshot', () => {
+  const d = sandbox();
+  setBacklog(d, [{ id: 'KEEP', title: 'k', status: 'READY' }]);
+  fs.writeFileSync(path.join(d, 'bad.json'), JSON.stringify({ tasks: [{ id: 'x', title: 'a', status: 'WEIRD' }] }));
+  const bad = node(d, ['.harness/backlog.mjs', 'import', 'bad.json']);
+  assert(bad.status === 1 && /unknown status/.test(bad.stderr) && byId(d, 'KEEP'), bad.stderr);
+  assert(!fs.readdirSync(path.join(d, '.harness', 'releases')).some((x) => x.startsWith('release-')), 'snapshot made for a rejected upload');
+  fs.writeFileSync(path.join(d, '.harness', 'daemon.pid'), String(process.pid));
+  fs.writeFileSync(path.join(d, '.harness', 'state.json'), JSON.stringify({ currentTaskFile: 'x.json', taskTitle: 'busy' }));
+  fs.writeFileSync(path.join(d, 'ok.json'), JSON.stringify({ tasks: [] }));
+  assert(node(d, ['.harness/backlog.mjs', 'import', 'ok.json']).status === 2, 'import during a running task must be refused');
+  fs.rmSync(path.join(d, '.harness', 'daemon.pid'));
+  fs.mkdirSync(path.join(d, 'pack', 'new-skill'), { recursive: true });
+  fs.writeFileSync(path.join(d, 'pack', 'new-skill', 'SKILL.md'), '---\nname: new-skill\ndescription: d\nroles: ["DEV_ENGINEER"]\n---\nRule.');
+  const r = node(d, ['.harness/backlog.mjs', 'import', 'pack']);
+  assert(r.status === 0 && /Skills now: new-skill/.test(r.stdout), r.stdout + r.stderr);
+  const rel = fs.readdirSync(path.join(d, '.harness', 'releases')).filter((x) => x.startsWith('release-'));
+  assert(fs.existsSync(path.join(d, '.harness', 'releases', rel[0], 'skills', 'code-craft', 'SKILL.md')), 'old skills not in snapshot');
+});
+
+await test('roles + skills: BA vs DEV vs QA get different engine tools; skill rules injected only where allowed', () => {
+  const d = sandbox();
+  drop(d, { id: 'roles', title: 'roles', verifyCmd: PASS, subtasks: [
+    { id: 'ba', role: 'BA_ANALYST', skills: ['code-craft'], targetFiles: ['docs/spec.md'], prompt: 'WRITE docs/spec.md s' },
+    { id: 'dev', role: 'DEV_ENGINEER', skills: ['code-craft'], targetFiles: ['src/a.js'], prompt: 'WRITE src/a.js a' },
+    { id: 'qa', role: 'QA_AUDITOR', targetFiles: ['tests/a.test.js'], prompt: 'WRITE tests/a.test.js t' }] });
+  runOnce(d);
+  assert(json(path.join(d, '.harness', 'state.json')).phase === '4_COMMITTED', 'not committed');
+  const tools = (id) => argsOf(d, id).find((a) => a.startsWith('ALLOWED=')).slice(8).split(',');
+  const denied = argsOf(d, 'dev').find((a) => a.startsWith('DENIED=')).slice(7);
+  const ba = tools('ba'); const dev = tools('dev'); const qa = tools('qa');
+  assert(ba.includes('Edit(docs/spec.md)') && ba.includes('Write(docs/spec.md)') && ba.includes('Bash(git status)') && !ba.some((t) => /npm|src/.test(t)), `BA: ${ba}`);
+  assert(dev.includes('Edit(src/a.js)') && dev.includes('Write(src/a.js)') && !dev.some((t) => t.startsWith('Bash')), `DEV (narrowed by code-craft): ${dev}`);
+  assert(qa.includes('Edit(tests/a.test.js)') && qa.includes('Bash(npm test:*)') && !qa.includes('Bash(npm:*)'), `QA: ${qa}`);
+  assert(/Edit\(\.env\*\)/.test(denied) && /Bash\(git push:\*\)/.test(denied), `deny rules: ${denied}`);
+  assert(promptOf(d, 'dev').includes('@governed-by PO_ARCHITECT') && promptOf(d, 'dev').includes('[ROLE PERSONA — DEV_ENGINEER]'), 'skill/persona not injected for DEV');
+  assert(!promptOf(d, 'ba').includes('Code Craft Skill Rules') && promptOf(d, 'ba').includes('[ROLE PERSONA — BA_ANALYST]'), 'skill wrongly injected into BA');
+  assert(log(d).some((e) => e.phase === 'SKILL_ROLE_MISMATCH' && /code-craft/.test(e.message)), 'mismatch not logged');
+  const arch = json(path.join(d, '.harness', 'completed', ls(d, 'completed')[0]));
+  assert(arch.plan.find((s) => s.id === 'dev').resolvedSkills[0] === 'code-craft', 'audit trail lacks resolved skills');
+});
+
+await test('role write-scope, forbidden paths, unknown role and unknown skill are rejected before any worker runs', () => {
+  for (const [sub, re] of [
+    [{ id: 'w', role: 'BA_ANALYST', targetFiles: ['src/x.js'], prompt: 'WRITE src/x.js x' }, /BA_ANALYST may only own docs/],
+    [{ id: 'w', role: 'QA_AUDITOR', targetFiles: ['src/x.js'], prompt: 'WRITE src/x.js x' }, /QA_AUDITOR may only own/],
+    [{ id: 'w', targetFiles: ['.env'], prompt: 'WRITE .env x' }, /charter\.md forbids/],
+    [{ id: 'w', targetFiles: ['node_modules/x/index.js'], prompt: 'WRITE x x' }, /charter\.md forbids/],
+    [{ id: 'w', role: 'HACKER', targetFiles: ['src/x.js'], prompt: 'x' }, /unknown role/],
+    [{ id: 'w', role: 'DEV_ENGINEER', skills: ['ghost'], targetFiles: ['src/x.js'], prompt: 'x' }, /unknown skill/]
+  ]) {
+    const d = sandbox();
+    drop(d, { id: 'scope', title: 's', subtasks: [sub] });
+    runOnce(d);
+    const s = json(path.join(d, '.harness', 'state.json'));
+    assert(s.phase === 'REJECTED' && re.test(s.lastGateStatus), `${re}: ${s.lastGateStatus}`);
+    assert(!fs.existsSync(path.join(d, '.mock-prompts', 'w.txt')), 'worker ran');
+  }
+});
+
+await test('true parallel swarm: BA, DEV and QA workers all start before any finishes', () => {
+  const d = sandbox();
+  drop(d, { id: 'par', title: 'par', verifyCmd: PASS, subtasks: [
+    { id: 'p-ba', role: 'BA_ANALYST', targetFiles: ['docs/a.md'], prompt: 'SLEEP 800\nWRITE docs/a.md a' },
+    { id: 'p-dev', role: 'DEV_ENGINEER', targetFiles: ['src/a.js'], prompt: 'SLEEP 800\nWRITE src/a.js a' },
+    { id: 'p-qa', role: 'QA_AUDITOR', targetFiles: ['tests/a.test.js'], prompt: 'SLEEP 800\nWRITE tests/a.test.js a' }] });
+  runOnce(d);
+  const tl = fs.readFileSync(path.join(d, '.mock-prompts', 'timeline.txt'), 'utf8').trim().split('\n').map((l) => l.split(' '));
+  const lastStart = Math.max(...tl.filter((x) => x[1] === 'start').map((x) => +x[0]));
+  const firstEnd = Math.min(...tl.filter((x) => x[1] === 'end').map((x) => +x[0]));
+  assert(tl.filter((x) => x[1] === 'start').length === 3 && lastStart < firstEnd, `not parallel: ${JSON.stringify(tl)}`);
+});
+
+await test('AI planner assigns roles: valid roles accepted, role/path mismatch rejected', () => {
+  const d = sandbox();
+  const good = { interfaceContract: 'add(a,b)', subtasks: [
+    { id: 'spec', role: 'BA_ANALYST', targetFiles: ['docs/add.md'], prompt: 'WRITE docs/add.md spec' },
+    { id: 'impl', role: 'DEV_ENGINEER', skills: ['code-craft'], targetFiles: ['src/add.js'], prompt: 'WRITE src/add.js impl' }] };
+  const r = node(d, ['.harness/dispatch.mjs', '--goal', planGoal(good), '--auto-plan', '--check', existsCheck('docs/add.md', 'src/add.js'), '--wait']);
+  assert(r.status === 0, r.stdout);
+  assert(promptOf(d, 'impl').includes('[SHARED INTERFACE CONTRACT') && promptOf(d, 'impl').includes('add(a,b)'), 'interface contract not passed');
+  assert(fs.readFileSync(path.join(d, '.mock-prompts', 'planner.txt'), 'utf8').includes('[WORKER ROLES'), 'planner not told about roles');
+  const d2 = sandbox();
+  const bad = { subtasks: [{ id: 'x', role: 'BA_ANALYST', targetFiles: ['src/x.js'], prompt: 'x' }] };
+  node(d2, ['.harness/dispatch.mjs', '--goal', planGoal(bad), '--auto-plan', '--wait']);
+  assert(/BA_ANALYST may only own/.test(json(path.join(d2, '.harness', 'state.json')).lastGateStatus), 'role mismatch not rejected');
+});
+
+await test('backlog CLI: add / list / ready / pop', () => {
+  const d = sandbox();
+  const add = node(d, ['.harness/backlog.mjs', 'add', 'Write docs', '--role', 'BA_ANALYST', '--files', 'docs/x.md', '--check', PASS, '--priority', '2']);
+  const id = (add.stdout.match(/Added (\S+)/) || [])[1];
+  assert(id && byId(d, id).status === 'BACKLOG' && byId(d, id).role === 'BA_ANALYST', add.stdout);
+  assert(/Next to run: \(nothing READY\)/.test(node(d, ['.harness/backlog.mjs', 'list']).stdout), 'list wrong');
+  node(d, ['.harness/backlog.mjs', 'ready', id]);
+  const pop = node(d, ['.harness/backlog.mjs', 'pop']);
+  assert(/Promoted/.test(pop.stdout) && byId(d, id).status === 'IN_PROGRESS' && ls(d, 'inbox').length === 1, pop.stdout);
+  runOnce(d);
+  assert(byId(d, id).status === 'DONE', `status ${byId(d, id).status}`);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -2,8 +2,9 @@
 
 A reusable, **zero-dependency** harness that runs AI coding agents in the background of your
 editor (VS Code, Antigravity, Cursor, Windsurf), checks their work automatically, **undoes their
-changes if they fail**, and keeps a **memory** of how you like to work. You can use it without
-being able to code.
+changes if they fail**, keeps a **memory** of how you like to work, and can **work through a
+backlog on its own** as a governed "act as me" controller with PO / BA / DEV / QA roles.
+You can use it without being able to code.
 
 ```
  you ──► "New task" ──► 1 PLANNER ──► 2 EXECUTOR (1 or many AI workers) ──► 3 VERIFIER ──pass──► 4 COMMITTED
@@ -71,6 +72,11 @@ Everything is in **Command Palette → Tasks: Run Task**:
 | **Harness: 3. Teach the AI something** | Saves a rule, e.g. *"Always explain changes in simple English"*. Every AI in this folder follows it from then on. |
 | **Harness: 4. Show memory** | Lists what the AI remembers. |
 | **Harness: 5. Status + recent events** | What is happening now and the last events. |
+| **Harness: 6. Start Autonomous Controller** | Works through the backlog on a schedule (see section 4). Stop task 1 first: one controller per folder. |
+| **Harness: 7. Run Autonomous Controller Tick** | Does one autonomous step now (works with or without task 1 running). |
+| **Harness: 8. View Backlog & Releases** | The backlog by status, and the saved release snapshots. |
+| **Harness: 9. Import New Goal/Backlog with Snapshot** | Replace the backlog (.json), charter (.md) or skills (folder). The old one is saved first. |
+| **Harness: 10. Add a goal to the backlog** | Add one item, READY to run or as an idea. |
 | **Harness: Run Self-Test Cycle** | Proves the harness itself works (no AI needed). |
 
 Or just **talk to your editor's AI chat**. It reads `AGENTS.md`, so you can say things like:
@@ -106,7 +112,75 @@ automatically**.
   that holds the error from every cycle (a "dead-letter queue").
 - **No runaway loops.** It stops after 3 cycles, and workers cannot start new jobs.
 
-## 4. The memory ("brain")
+## 4. Autonomous controller ("act as me")
+
+The controller works **on your behalf**, but only inside the rules you write in
+**`.harness/charter.md`**. The first bullets of that file are read by the harness:
+
+```
+- autonomous: off            ← switch to "on" when the objectives below describe your project
+- maxAutoTasksPerRun: 3      ← most tasks it may start in one run (one start of task 6, or one tick)
+- allowedPaths: src/**, docs/**, tests/**, test/**
+- forbiddenPaths: .git/**, .harness/**, node_modules/**, .env*, production-credentials/**
+- forbiddenTools: Bash(git push:*), Bash(git remote:*), Bash(rm -rf:*), Bash(npm publish:*)
+- requireRealCheck: yes      ← never run autonomous work that nothing can check
+```
+
+**How it decides what to do** (on every interval, and whenever the queue empties):
+1. If `.harness/backlog.json` has a **READY** item, it runs the highest-priority one
+   (lowest `priority` number first).
+2. If nothing is READY, the **PO_ARCHITECT** reads the charter, the project and the backlog,
+   with **read-only** tools, and writes the next tasks: at most the remaining budget, each with
+   roles, files, acceptance criteria and an interface contract. Tasks that break the charter or a
+   role's limits are dropped. Then it runs the first one.
+3. It stops when the budget is used. If an autonomous task **fails**, its files are restored, the
+   item becomes **BLOCKED** with the reason, and autonomy **pauses**: you decide. Fix it, run
+   `node .harness/backlog.mjs ready <id>`, and start again.
+
+**Backlog states:** `BACKLOG` (an idea) → `READY` → `IN_PROGRESS` → `DONE` or `BLOCKED`.
+Add items with task 10 or `node .harness/backlog.mjs add "…"`; see them with task 8.
+Try it with the BA + DEV + QA sample: task 9 with `.harness/examples/backlog.sample.json`.
+
+### Roles and skills
+| Role | Does | May own files | Engine tools (Claude Code) |
+|---|---|---|---|
+| `PO_ARCHITECT` | plans the backlog from the charter | none (read-only) | Read, Glob, Grep, `git status`/`git log` |
+| `BA_ANALYST` | requirements, edge cases, acceptance criteria | `docs/**` | Read + Edit/Write **only its own files** |
+| `DEV_ENGINEER` | implements code | anything allowed | Read + Edit/Write its own files, `npm`, `node`, read-only git |
+| `QA_AUDITOR` | writes/runs tests against the criteria | `tests/**`, `test/**`, `*.test.*`, `*.spec.*` | Read + Edit/Write its own files, `npm test` |
+
+Roles live in `.harness/roles/*.json` (persona, tools, allowed paths), so you can edit them or add
+new ones. With Claude Code, the file limits are **enforced by the engine**: a live Claude Code call
+with the BA role's exact rules had its write to `src/` denied (`permission_denials`). The charter's forbidden paths
+and tools are added as deny rules for every worker.
+
+**Skills** are folders `.harness/skills/<name>/SKILL.md` with a small header:
+```
+---
+name: code-craft
+description: …
+roles: ["DEV_ENGINEER", "QA_AUDITOR"]
+allowedTools: ["Read", "Edit", "Write"]
+---
+rules in plain words…
+```
+A worker gets a skill when its task lists it (`"skills": ["code-craft"]`) or when the AI
+planner or PO picks it. A skill is only given to the roles it names, and a skill can only
+**narrow** a role's tools, never add to them. The sample `code-craft` skill requires a
+`@governed-by PO_ARCHITECT` JSDoc header in generated files.
+
+### Uploading a new backlog, charter or skills (release snapshots)
+`node .harness/backlog.mjs import <file-or-folder>` (task 9) never just overwrites:
+- The upload is checked first; a broken file changes nothing.
+- The current `charter.md`, `backlog.json` (and the skills, for a skills upload), plus a
+  `completed-summary.md` of what was done, are saved to `.harness/releases/release-<time>/`.
+- **Unstarted inbox jobs** from the old upload are moved into that snapshot, so the new upload
+  starts clean.
+- Memory (`lessons.md`, `auto-lessons.md`) is **kept**, so lessons compound. Add `--reset-memory`
+  to save it in the snapshot and start fresh.
+- An import is refused while a task is running.
+
+## 5. The memory ("brain")
 
 All memory is plain text in `.harness/memory/`, which you can open and edit yourself:
 
@@ -138,7 +212,7 @@ How it reaches each AI:
 > `profile.md` and `lessons.md` are committed. If your project is **public** and they hold
 > personal details, uncomment the two lines at the bottom of `.gitignore`.
 
-## 5. AI engines
+## 6. AI engines
 
 Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; you can also force
 `"claude"`, `"antigravity"`, `"orca"`, `"gemini"` or `"codex"`, per task or globally.
@@ -161,7 +235,7 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 | `gemini` (Gemini CLI) | ⚠️ not verified here (uses `--yolo`, which auto-approves everything) |
 | `codex` (OpenAI Codex CLI) | ⚠️ not verified here |
 
-## 6. Settings (`.harness/config.json`)
+## 7. Settings (`.harness/config.json`)
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -175,17 +249,21 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 | `planner.allowedTools` | Read, Glob, Grep | tools the planner may use (read-only) |
 | `defaultVerifyCmd` | always passes | the check used when there is no `--check` and no usable package.json script |
 | `memory.maxLessonLines` | 50 | most lesson lines put into a worker prompt |
+| `autonomous.intervalSeconds` | 300 | how often the autonomous controller wakes (`--interval <s>` or `--schedule <min>` override) |
 | `memory.*` | on | turn memory injection, session notes and auto lessons on/off |
 
-## 7. For developers
+## 8. For developers
 
 ```bash
 node .harness/daemon.mjs                 # watch mode with live HUD (also: --once, --self-test)
+node .harness/daemon.mjs --autonomous --interval 300   # scheduled autonomous controller
+node .harness/daemon.mjs --tick          # one autonomous step, then exit
+node .harness/backlog.mjs overview|add|ready|block|pop|import|releases
 node .harness/dispatch.mjs --help        # all options: --goal --files --check --engine --auto-plan --wait, swarm --worker id:files:prompt
 node .harness/memory.mjs list|remember|forget|context|sessions
 node .harness/doctor.mjs                 # setup check + engine flag probe
 node .harness/status.mjs --log 25        # state + recent JSONL events
-node test/run-tests.mjs                  # 28 end-to-end tests with a mock engine (no AI account needed)
+node test/run-tests.mjs                  # 42 end-to-end tests with a mock engine (no AI account needed)
 ```
 
 Job file format (`.harness/inbox/*.json`):
@@ -212,6 +290,17 @@ Or let the AI plan it: `{ "id": "job-2", "title": "…", "autoPlan": true, "goal
 - The check is auto-detected from `package.json`.
 - Memory is de-duplicated, capped, and never injected twice.
 - State is written atomically, only one daemon runs per folder, and workers cannot dispatch jobs.
+- Autonomous mode (v2):
+  - READY items are promoted in priority order and marked DONE or BLOCKED.
+  - The PO_ARCHITECT is read-only and capped by the budget, and its tasks are validated against
+    the charter and roles.
+  - The run budget is enforced, a failure pauses autonomy and restores the files, and
+    `requireRealCheck` blocks autonomous work that nothing can check.
+- Role and skill handling (v2): each role gets its own tool list, skills only reach the roles they
+  name and can only narrow tools, and a role's write paths, the forbidden paths, unknown roles and
+  unknown skills are all rejected before any worker starts. BA, DEV and QA truly run in parallel.
+- Uploads (v2): the old state and unstarted inbox jobs are snapshotted, memory is kept (or reset
+  on request), invalid uploads are rejected, and an upload during a running task is refused.
 
 ### Changes from the original master prompt
 The original `setup-harness.mjs` was run first, unchanged, and passed its own self-audit. These
@@ -230,6 +319,20 @@ problems were then found and fixed:
    background task is visible instead of hidden.
 6. v1.0 added: the AI planner, undo on failure, the dead-letter queue, check auto-detection, the
    engine probe and fallback, memory de-duplication and cap, and a privacy-safe `.gitignore`.
+7. v2.0 added the autonomous controller, backlog, roles, skills and release snapshots. The v2
+   master prompt's `setup-harness-v2.mjs` was first run unchanged in a throwaway copy. It passed
+   its own gate, but:
+   - All **18 of its 18 generated QA tests failed** against the DEV code. The two agents ran in
+     parallel without a shared interface contract, and the check only tested that the files
+     existed.
+   - The backlog item stayed `IN_PROGRESS` forever.
+   - It had no PO generation, no budget, and no inbox move on import.
+   - It would have replaced the v1.0 daemon (memory, planner, probe, rollback of folders, tests).
+
+   v2 was therefore built into v1.0, not over it. The sample now carries an interface contract,
+   and its check runs the tests. Role tool rules use valid Claude Code syntax (`Bash(git status)`,
+   not `Bash(git:status)`), with git narrowed to read-only because the charter forbids pushes and
+   remote changes.
 
 ## License
 

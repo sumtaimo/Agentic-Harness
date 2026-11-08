@@ -7,6 +7,7 @@
 
 import fs from 'node:fs';
 import { FILES, DIRS, readJsonSafe } from './lib/common.mjs';
+import { readBacklog, backlogCounts } from './lib/governance.mjs';
 
 const s = readJsonSafe(FILES.state, null);
 if (!s) { console.log('The harness has not run yet in this folder. Start it with: node .harness/daemon.mjs'); process.exit(0); }
@@ -22,6 +23,9 @@ console.log(`Task:       ${s.taskTitle || '-'}`);
 console.log(`Workers:    ${s.workerSummary || '-'}`);
 console.log(`Check:      ${s.lastGateStatus || '-'}`);
 console.log(`Inbox: ${count(DIRS.inbox)} waiting | Completed: ${count(DIRS.completed)} | Failed/halted: ${count(DIRS.failed)}`);
+const c = backlogCounts(readBacklog());
+console.log(`Backlog:    READY ${c.READY} | IN_PROGRESS ${c.IN_PROGRESS} | DONE ${c.DONE} | BLOCKED ${c.BLOCKED} | BACKLOG ${c.BACKLOG}`);
+console.log(`Autonomous: ${s.autoStatus || 'off'}`);
 console.log(`Updated:    ${s.updatedAt}`);
 
 const i = process.argv.indexOf('--log');

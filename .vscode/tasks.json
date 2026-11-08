@@ -113,6 +113,95 @@
       "problemMatcher": []
     },
     {
+      "label": "Harness: 6. Start Autonomous Controller (acts on charter.md)",
+      "detail": "Background controller that works through the backlog and, when it is empty, lets the PO_ARCHITECT plan new tasks — only if charter.md says autonomous: on. Stop the normal Start task first (only one controller per folder).",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/daemon.mjs",
+        "--autonomous"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "group": "harness"
+      },
+      "problemMatcher": [],
+      "isBackground": true,
+      "runOptions": {
+        "instanceLimit": 1
+      }
+    },
+    {
+      "label": "Harness: 7. Run Autonomous Controller Tick",
+      "detail": "One step of the autonomous controller now: run the next READY backlog item (or let the PO_ARCHITECT plan one). Works whether or not the controller is running.",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/daemon.mjs",
+        "--tick"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: 8. View Backlog & Releases",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/backlog.mjs",
+        "overview"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: 9. Import New Goal/Backlog with Snapshot",
+      "detail": "Replace the backlog (.json), the charter (.md) or the skills (folder). The old version is saved to .harness/releases/ first; memory is kept.",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/backlog.mjs",
+        "import",
+        "${input:importPath}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: 10. Add a goal to the backlog",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/backlog.mjs",
+        "add",
+        "${input:goal}",
+        "--files",
+        "${input:files}",
+        "--status",
+        "${input:backlogStatus}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "Harness: Run Self-Test Cycle",
       "type": "process",
       "command": "node",
@@ -173,6 +262,21 @@
       "id": "lesson",
       "type": "promptString",
       "description": "What should every AI remember? (e.g. Always explain changes in simple English)"
+    },
+    {
+      "id": "importPath",
+      "type": "promptString",
+      "description": "Path of the new backlog .json, charter .md, or skills folder (e.g. .harness/examples/backlog.sample.json)"
+    },
+    {
+      "id": "backlogStatus",
+      "type": "pickString",
+      "description": "Ready to run now, or just an idea for the PO to groom later?",
+      "options": [
+        "READY",
+        "BACKLOG"
+      ],
+      "default": "READY"
     }
   ]
 }

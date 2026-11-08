@@ -4,6 +4,7 @@
 //   WRITE <file> <text>        always write the file
 //   FIX <file> <text>          write the file only if the prompt contains a previous verifier error
 //   FAIL                       exit 1
+//   SLEEP <ms>                 wait (to prove workers run in parallel)
 // It also saves the full prompt it received to .mock-prompts/<worker-id>.txt
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,6 +14,18 @@ for await (const chunk of process.stdin) prompt += chunk;
 const id = process.env.HARNESS_WORKER_ID || 'unknown';
 fs.mkdirSync('.mock-prompts', { recursive: true });
 fs.writeFileSync(path.join('.mock-prompts', `${id}.txt`), prompt);
+
+fs.writeFileSync(path.join('.mock-prompts', `${id}.args.json`), JSON.stringify(process.argv.slice(2)));
+fs.appendFileSync(path.join('.mock-prompts', 'timeline.txt'), `${Date.now()} start ${id}\n`);
+
+// PO_ARCHITECT mode: echo back the task list embedded in charter.md as "PO_JSON {...}" (one line).
+if (prompt.startsWith('[HARNESS PO_ARCHITECT]')) {
+  fs.appendFileSync(path.join('.mock-prompts', 'po-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);
+  fs.writeFileSync(path.join('.mock-prompts', 'po.txt'), prompt);
+  const plan = (prompt.match(/PO_JSON (\{.*\})/) || [])[1] || 'not json';
+  console.log(JSON.stringify({ type: 'result', is_error: false, result: plan }));
+  process.exit(0);
+}
 
 // Planner mode: echo back the plan embedded in the goal as "PLAN_JSON {...}" (one line).
 if (prompt.startsWith('[HARNESS PLANNER]')) {
@@ -28,9 +41,11 @@ const hasError = prompt.includes('[PREVIOUS VERIFIER ERROR TO FIX]');
 for (const line of task.split('\n')) {
   const [cmd, file, ...rest] = line.trim().split(' ');
   if (cmd === 'FAIL') { console.error('mock agent asked to fail'); process.exit(1); }
+  if (cmd === 'SLEEP') await new Promise((r) => setTimeout(r, Number(file)));
   if (cmd === 'WRITE' || (cmd === 'FIX' && hasError)) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, rest.join(' '));
   }
 }
+fs.appendFileSync(path.join('.mock-prompts', 'timeline.txt'), `${Date.now()} end ${id}\n`);
 console.log(JSON.stringify({ type: 'result', is_error: false, result: `mock ${id} done` }));

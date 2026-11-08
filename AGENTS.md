@@ -16,9 +16,11 @@ only point here.
 
 ## 0. Are you a harness worker?
 
-If your prompt starts with `[HARNESS WORKER ID: …]` you were started BY the harness.
-Do the task in that prompt directly, stay inside your scoped files, and **never** run
-`.harness/dispatch.mjs` (it will refuse anyway). Skip the rest of this file except section 2.
+If your prompt starts with `[HARNESS WORKER ID: …]`, `[HARNESS PLANNER]` or
+`[HARNESS PO_ARCHITECT]`, you were started BY the harness. Do the task in that prompt directly,
+act as the role persona it gives you, follow any injected skill contract and shared interface
+contract, stay inside your scoped files, and **never** run `.harness/dispatch.mjs` or
+`.harness/backlog.mjs` (dispatch refuses anyway). Skip the rest of this file except section 2.
 
 ---
 
@@ -94,7 +96,34 @@ Rules for you when dispatching:
   already been restored. Explain the last error (from the session note, or
   `.harness/failed/<id>-<time>.trace.txt`) and ask the user what to do.
 
-## 5. Map of the harness
+## 5. Autonomous controller, backlog, roles and skills (v2)
+
+The harness can also work **on the user's behalf** from a backlog, inside the limits of
+`.harness/charter.md`:
+
+- `charter.md` — the user's rules for autonomous work. The bullets in its section 0 are
+  machine-read (`autonomous: on|off`, `maxAutoTasksPerRun`, `allowedPaths`, `forbiddenPaths`,
+  `forbiddenTools`, `requireRealCheck`). **Never switch `autonomous` on or widen these limits
+  without the user's explicit OK.** To replace the charter, use the import command below.
+- `backlog.json` — tasks with status `BACKLOG → READY → IN_PROGRESS → DONE | BLOCKED`.
+  Add work: `node .harness/backlog.mjs add "<title>" --goal "<details>" --files "src/x.js" --role DEV_ENGINEER --check "npm test" --status READY`.
+  See it: `node .harness/backlog.mjs overview`. Unblock after a human decision: `node .harness/backlog.mjs ready <id>`.
+- Roles (`.harness/roles/*.json`): `PO_ARCHITECT` (plans, read-only), `BA_ANALYST` (owns `docs/**`),
+  `DEV_ENGINEER` (code), `QA_AUDITOR` (tests). A worker's role sets its persona **and** its
+  engine permissions: with Claude Code it can only edit its own targetFiles.
+- Skills (`.harness/skills/<name>/SKILL.md`, frontmatter `name`, `description`, `roles`,
+  `allowedTools`): rules injected into matching workers. A skill can narrow tools, never add.
+- One step now: `node .harness/daemon.mjs --tick`. Scheduled: `node .harness/daemon.mjs --autonomous`
+  (only one daemon per folder). When READY items run out, the PO_ARCHITECT proposes new ones
+  (≤ budget); its suggested checks are recorded, never run.
+- Uploading a new backlog (.json), charter (.md) or skills folder:
+  `node .harness/backlog.mjs import <path>` — the old state and unstarted inbox jobs are saved to
+  `.harness/releases/release-<time>/` first; memory is kept unless `--reset-memory`.
+  **Never edit or delete anything in `.harness/releases/`.**
+- A failed autonomous task is BLOCKED, its files are restored, and autonomy pauses: explain
+  why (session note / `failed/*.trace.txt`) and let the user decide.
+
+## 6. Map of the harness
 
 | Path | What it is |
 |---|---|
@@ -106,6 +135,11 @@ Rules for you when dispatching:
 | `.harness/memory/` | `profile.md`, `lessons.md` (committed); `auto-lessons.md`, `sessions/` (git-ignored) |
 | `.harness/inbox/` → `completed/` or `failed/` | job files (`failed/` also has `.trace.txt`) |
 | `.harness/staging/` | backups of scoped files while a task runs (restored on failure) |
+| `.harness/charter.md` · `backlog.json` | autonomous limits · task backlog |
+| `.harness/backlog.mjs` | backlog list / add / ready / pop / import (with snapshot) / releases |
+| `.harness/roles/` · `skills/` | role personas + tool limits · skill rules |
+| `.harness/releases/` | snapshots made before every upload (git-ignored, never edit) |
+| `.harness/examples/backlog.sample.json` | a BA + DEV + QA parallel sample to import |
 | `.harness/state.json` · `telemetry.log` | live state · JSONL event log |
 | `.vscode/tasks.json` | buttons for the user (Run Task menu) |
 

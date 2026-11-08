@@ -32,6 +32,10 @@ import {
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd,
   listProjectFiles, safeTarget
 } from './lib/common.mjs';
+import {
+  readCharter, loadRoles, loadSkills, matchSkills, computeAllowedTools, computeDisallowedTools,
+  matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, backlogCounts, itemToJob
+} from './lib/governance.mjs';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -45,6 +49,7 @@ const queue = [];
 const queued = new Set();
 let draining = false;
 let state = {};
+let lastFinished = null; // { autonomous, backlogId, title, ok } of the last job
 
 // ───────────────────────────── state + telemetry ─────────────────────────────
 
@@ -92,8 +97,10 @@ function nextStepHint(s) {
   if (p === 'HALTED_HITL_REQUIRED') return 'STOPPED: the AI could not pass the check. Your files were restored. Read the newest note in .harness/memory/sessions/.';
   if (p === 'REJECTED') return 'REJECTED before start (see VERIFY line). Fix the task and dispatch it again.';
   if (p.startsWith('4')) return 'Done. The task passed the check. Drop or dispatch the next task.';
+  if ((s.autonomous || {}).paused) return `Autonomous mode PAUSED: ${s.autonomous.paused}. Fix it, then restart the controller.`;
   if (p.startsWith('3')) return 'Checking the work with the verify command…';
   if (p.startsWith('2')) return 'AI workers are working. Their files are locked so they cannot collide.';
+  if (p === '0_PO_ARCHITECT') return 'Acting as PO_ARCHITECT: reading charter.md and writing the next backlog tasks…';
   if (p === '1_AI_PLANNER') return 'The AI planner is splitting your goal into parallel workers…';
   if (p.startsWith('1')) return 'Reading the task and checking which files each worker owns…';
   return 'Ready. Run task "Harness: 2. New task" (Ctrl/Cmd+Shift+P > Run Task) or ask your AI chat.';
@@ -113,7 +120,7 @@ function renderHUD(s) {
     : p.startsWith('4') || p.startsWith('3_VERIFIED') ? C.green
       : p.startsWith('IDLE') ? C.cyan : C.yellow;
   const taught = listLessons(FILES.lessons).length;
-  const auto = listLessons(FILES.autoLessons).length;
+  const autoL = listLessons(FILES.autoLessons).length;
   const out = [
     '\x1b[2J\x1b[H', // clear screen, keep scrollback
     `${C.bold}  AGENTIC HARNESS${C.reset}${C.dim}  — square loop + swarm mesh · ${ROOT}${C.reset}`,
@@ -126,7 +133,8 @@ function renderHUD(s) {
     row(`PLAN:    ${s.planSummary || '-'}`),
     row(`SWARM:   ${s.workerSummary || 'No active swarm workers'}`),
     row(`VERIFY:  ${s.lastGateStatus || 'READY'}`, '', color),
-    row(`QUEUE:   ${queue.length} waiting  |  MEMORY: ${taught} taught rule(s), ${auto} auto lesson(s)`),
+    row(`QUEUE:   ${queue.length} waiting  |  MEMORY: ${taught} taught rule(s), ${autoL} auto lesson(s)`),
+    row(`AUTO:    ${s.autoStatus || 'off'}`),
     sep(),
     row(`ENGINES: ${engineList()}   (✓ installed)`),
     row('LOGS: .harness/telemetry.log', 'MEMORY: .harness/memory/'),
@@ -148,13 +156,17 @@ const winQuote = (a) => (/[\s"&|<>^()]/.test(a) ? `"${a.replace(/"/g, '""')}"` :
  *   "arg"             — substituted where "{prompt}" appears in args
  *   "after--"         — appended after a "--" separator
  */
-function buildArgs(profile, prompt, allowedTools) {
+function buildArgs(profile, prompt, allowedTools, disallowedTools = []) {
   const allowed = (allowedTools || profile.allowedTools || []).join(',');
+  const disallowed = (disallowedTools || []).join(',');
   const via = profile.promptVia || ((profile.args || []).includes('{prompt}') ? 'arg' : 'stdin');
   const args = [];
   for (const a of profile.args || []) {
     if (a === '{prompt}') { if (via === 'arg') args.push(prompt); continue; }
-    args.push(a.replace('{allowedTools}', allowed));
+    const v = a.replace('{allowedTools}', allowed).replace('{disallowedTools}', disallowed);
+    // A placeholder that expands to nothing drops itself AND the flag before it (e.g. "--disallowedTools" "").
+    if (v === '' && a !== '' && /^-/.test(args[args.length - 1] || '')) { args.pop(); continue; }
+    args.push(v);
   }
   const mcpFile = profile.mcpConfigPath && path.join(ROOT, profile.mcpConfigPath);
   if (profile.useMcp && mcpFile && fs.existsSync(mcpFile)) {
@@ -165,7 +177,7 @@ function buildArgs(profile, prompt, allowedTools) {
 }
 
 /** Spawn an AI engine with a prompt. Resolves { engine, output }. */
-function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools }) {
+function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallowedTools }) {
   return new Promise((resolve, reject) => {
     let profile;
     try { profile = resolveProfile(config, engine); } catch (e) { return reject(e); }
@@ -174,7 +186,7 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools }) {
       writeState({ engine: profile.name.toUpperCase(), history: pushHistory(`! ${profile.fallbackFrom} unavailable → using ${profile.name}`) });
     }
     const binPath = which(profile.binary);
-    const { args, viaStdin } = buildArgs(profile, prompt, allowedTools);
+    const { args, viaStdin } = buildArgs(profile, prompt, allowedTools, disallowedTools);
     const isWin = process.platform === 'win32';
     const env = { ...process.env, HARNESS_WORKER: '1', HARNESS_WORKER_ID: id };
     const child = spawn(isWin ? winQuote(binPath) : binPath, isWin ? args.map(winQuote) : args, { cwd, env, shell: isWin, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -226,22 +238,48 @@ function autoLoadedMemory(profile, cwd) {
   return skip;
 }
 
-function buildWorkerPrompt(subtask, profileName, cwd, errorContext) {
+function buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov = {}) {
   let skip = [];
   try { skip = autoLoadedMemory(config.profiles[profileName] || {}, cwd); } catch { /* inject everything */ }
   const memory = memoryContext(config, { skip });
   const scoped = (subtask.targetFiles || []).length > 0;
+  const role = gov.role;
+  const ac = subtask.acceptanceCriteria;
   return [
-    `[HARNESS WORKER ID: ${subtask.id} | ENGINE: ${String(profileName).toUpperCase()}]`,
+    `[HARNESS WORKER ID: ${subtask.id} | ENGINE: ${String(profileName).toUpperCase()}${role ? ` | ROLE: ${role.name}` : ''}]`,
     '[YOU ARE A HARNESS WORKER: do the task below directly. Do NOT dispatch new harness tasks.]',
+    role ? `[ROLE PERSONA — ${role.name}]:\n${role.mission || role.description || ''}` : '',
     scoped
-      ? `[SCOPED TARGET FILES: ${subtask.targetFiles.join(', ')}]\n[STRICT CONSTRAINT: Only modify your scoped target files. Do not touch unrelated files.]`
+      ? `[SCOPED TARGET FILES: ${subtask.targetFiles.join(', ')}]\n[STRICT CONSTRAINT: Only modify your scoped target files. Do not touch unrelated files.${role ? ' Your engine permissions are limited to these paths; other edits will be denied.' : ''}]`
       : '[SCOPE: whole project — change only what the task needs.]',
+    gov.skills?.length ? `[INJECTED SKILL CONTRACTS — mandatory rules for this task]:\n${gov.skills.map((s) => `### Skill: ${s.name}\n${s.body}`).join('\n\n')}` : '',
     memory ? `[USER MEMORY — follow these preferences and rules]:\n${memory}` : '',
     subtask.goal ? `[OVERALL GOAL (other workers handle the other parts in parallel)]:\n${subtask.goal}` : '',
+    subtask.interfaceContract ? `[SHARED INTERFACE CONTRACT — other workers build against exactly this; do not deviate]:\n${subtask.interfaceContract}` : '',
+    Array.isArray(ac) && ac.length ? `[ACCEPTANCE CRITERIA]:\n${ac.map((c) => `- ${c}`).join('\n')}` : '',
     errorContext ? `[PREVIOUS VERIFIER ERROR TO FIX]:\n${String(errorContext).slice(0, 6000)}` : '',
     `[TASK INSTRUCTIONS]:\n${subtask.prompt}`
   ].filter(Boolean).join('\n\n');
+}
+
+/**
+ * Node 1 helper: attach role persona, matched skills and the engine tool lists to a subtask.
+ * Writes resolvedRole / resolvedSkills / resolvedTools / deniedTools (kept in the job archive = audit trail).
+ */
+function resolveGovernance(sub, gov) {
+  const roleName = sub.role ? String(sub.role).toUpperCase() : null;
+  const role = roleName ? gov.roles[roleName] : null;
+  const m = matchSkills(sub, roleName || 'NONE', gov.skills);
+  if (m.unknown.length) throw fatal(`Worker '${sub.id}' asks for unknown skill(s): ${m.unknown.join(', ')} (installed: ${Object.keys(gov.skills).join(', ') || 'none'}).`);
+  if (m.mismatched.length) logTelemetry('SKILL_ROLE_MISMATCH', `Skill(s) ${m.mismatched.join(', ')} not allowed for role ${roleName || '(none)'}; not injected`, { worker: sub.id });
+  sub.resolvedRole = role ? role.name : null;
+  sub.resolvedSkills = m.chosen.map((s) => s.name);
+  sub.resolvedTools = role ? computeAllowedTools(role, m.chosen, sub.targetFiles) : (sub.allowedTools || null);
+  sub.deniedTools = computeDisallowedTools(gov.charter);
+  if (role || m.chosen.length) {
+    logTelemetry('1_ROLE_SKILL_MATCH', `${sub.id}: role ${sub.resolvedRole || '-'}, skills [${sub.resolvedSkills.join(', ')}]`, { worker: sub.id, role: sub.resolvedRole, skills: sub.resolvedSkills, allowedTools: sub.resolvedTools });
+  }
+  return sub;
 }
 
 function runWorker(subtask, cwd, errorContext) {
@@ -257,9 +295,16 @@ function runWorker(subtask, cwd, errorContext) {
   }
   let profileName;
   try { profileName = resolveProfile(config, subtask.engine).name; } catch (e) { return Promise.reject(e); }
-  const prompt = buildWorkerPrompt(subtask, profileName, cwd, errorContext);
-  return spawnEngine({ id: subtask.id, engine: subtask.engine, prompt, cwd, timeoutMs, allowedTools: subtask.allowedTools })
-    .then((r) => ({ id: subtask.id, ...r }));
+  const roles = loadRoles(); const skills = loadSkills();
+  const gov = {
+    role: subtask.resolvedRole ? roles[subtask.resolvedRole] : null,
+    skills: (subtask.resolvedSkills || []).map((n) => skills[n]).filter(Boolean)
+  };
+  const prompt = buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov);
+  return spawnEngine({
+    id: subtask.id, engine: subtask.engine, prompt, cwd, timeoutMs,
+    allowedTools: subtask.resolvedTools || subtask.allowedTools, disallowedTools: subtask.deniedTools
+  }).then((r) => ({ id: subtask.id, role: subtask.resolvedRole, ...r }));
 }
 
 // ───────────────────────────── git helpers ─────────────────────────────
@@ -344,7 +389,7 @@ function discardBackup(backup) {
  * Validate subtasks: safe paths, unique ids, and the Swarm Conflict Invariant
  *   LockedFiles(A) ∩ LockedFiles(B) = ∅  (a folder also conflicts with any file inside it).
  */
-function validateSubtasks(subtasks, { source = 'task', allowed = [], requireScope = false } = {}) {
+function validateSubtasks(subtasks, { source = 'task', allowed = [], requireScope = false, gov = null, autonomous = false } = {}) {
   const owner = new Map();
   const ids = new Set();
   for (const sub of subtasks) {
@@ -366,6 +411,22 @@ function validateSubtasks(subtasks, { source = 'task', allowed = [], requireScop
       const outside = sub.targetFiles.filter((f) => !inScope(f.replace(/\/$/, ''), allowed));
       if (outside.length) throw fatal(`${source}: worker '${sub.id}' targets ${outside.join(', ')}, outside the allowed files (${allowed.join(', ')}).`);
     }
+    if (gov) { // v2 governance: charter + role write-scopes
+      const forbidden = sub.targetFiles.filter((f) => matchesAny(f, gov.charter.forbiddenPaths));
+      if (forbidden.length) throw fatal(`${source}: worker '${sub.id}' targets ${forbidden.join(', ')}, which charter.md forbids (forbiddenPaths: ${gov.charter.forbiddenPaths.join(', ')}).`);
+      if (autonomous && gov.charter.allowedPaths.length) {
+        const outside = sub.targetFiles.filter((f) => !withinAll(f, gov.charter.allowedPaths));
+        if (outside.length) throw fatal(`${source}: autonomous worker '${sub.id}' targets ${outside.join(', ')}, outside charter allowedPaths (${gov.charter.allowedPaths.join(', ')}).`);
+      }
+      if (autonomous && sub.prompt && sub.targetFiles.length === 0) throw fatal(`${source}: autonomous worker '${sub.id}' must declare targetFiles.`);
+      if (sub.role) {
+        const role = gov.roles[String(sub.role).toUpperCase()];
+        if (!role) throw fatal(`${source}: worker '${sub.id}' has unknown role '${sub.role}' (known: ${Object.keys(gov.roles).join(', ') || 'none — add .harness/roles/*.json'}).`);
+        const wp = role.writablePaths || [];
+        const notAllowed = sub.targetFiles.filter((f) => !withinAll(f, wp));
+        if (notAllowed.length) throw fatal(`${source}: role ${role.name} may only own ${wp.join(', ') || 'no files (read-only role)'}, but worker '${sub.id}' targets ${notAllowed.join(', ')}.`);
+      }
+    }
     for (const f of sub.targetFiles) {
       const key = f.replace(/\/$/, '');
       for (const [other, by] of owner) {
@@ -386,13 +447,32 @@ function extractJson(text) {
 }
 
 /** Ask the AI to split a goal into parallel workers with disjoint files. Re-asks once on an invalid plan. */
-async function aiDecompose(task) {
+/** Charter + roles + skills, loaded fresh for every task so edits apply without a restart. */
+function loadGov() {
+  return { charter: readCharter(), roles: loadRoles(), skills: loadSkills() };
+}
+
+/** Text block listing roles (with what they may own) and skills — shown to the AI planner and PO. */
+function catalog(gov) {
+  const roles = Object.values(gov.roles).filter((r) => (r.writablePaths || []).length)
+    .map((r) => `- ${r.name}: ${r.description} May own files matching: ${r.writablePaths.join(', ')}`);
+  const skills = Object.values(gov.skills).map((s) => `- ${s.name} (roles: ${s.roles.join(', ') || 'any'}): ${s.description}`);
+  return [
+    roles.length ? `[WORKER ROLES — give every worker one "role"]:\n${roles.join('\n')}` : '',
+    skills.length ? `[SKILLS — optional "skills" list per worker, only for the listed roles]:\n${skills.join('\n')}` : '',
+    gov.charter.forbiddenPaths.length ? `[FORBIDDEN PATHS — never target]: ${gov.charter.forbiddenPaths.join(', ')}` : ''
+  ].filter(Boolean).join('\n');
+}
+
+/** Ask the AI to split a goal into parallel workers with disjoint files. Re-asks once on an invalid plan. */
+async function aiDecompose(task, gov) {
   const pc = config.planner || {};
   const maxWorkers = pc.maxWorkers || 4;
   const allowed = (task.targetFiles || []).map(safeTarget).filter(Boolean);
   const { files, total } = listProjectFiles(ROOT, pc.maxFilesListed || 400);
   const scripts = readJsonSafe(path.join(ROOT, 'package.json'), null)?.scripts;
   const memory = memoryContext(config);
+  const hasRoles = Object.keys(gov.roles).length > 0;
   let feedback = '';
   const attempts = pc.maxAttempts || 2;
 
@@ -407,9 +487,11 @@ async function aiDecompose(task) {
       '- Never use absolute paths, "..", ".", ".git/" or ".harness/".',
       allowed.length ? `- Workers may ONLY own paths inside: ${allowed.join(', ')}` : '',
       '- If the work cannot be split safely, return exactly ONE worker.',
-      '- Each worker prompt must be self-contained: what to build in its files AND the exact names/exports/interfaces it shares with the other workers.',
+      '- Each worker prompt must be self-contained. Put the exact names/exports/signatures/return values that workers share in "interfaceContract"; every worker receives it.',
+      hasRoles ? '- Give each worker a "role" whose allowed paths cover its targetFiles, and the "skills" that apply.' : '',
       'Reply with ONLY this JSON object, no other text:',
-      '{"subtasks":[{"id":"short-kebab-id","targetFiles":["path/file.ext"],"prompt":"instructions"}],"verifySuggestion":"optional shell command that would prove the goal works"}',
+      `{"interfaceContract":"shared names, signatures, return values","subtasks":[{"id":"short-kebab-id",${hasRoles ? '"role":"DEV_ENGINEER","skills":[],' : ''}"targetFiles":["path/file.ext"],"prompt":"instructions"}],"verifySuggestion":"optional shell command that would prove the goal works"}`,
+      hasRoles ? `\n${catalog(gov)}` : '',
       `\n[GOAL]:\n${task.goal || task.prompt || task.title}`,
       `\n[PROJECT FILES (${files.length} of ${total})]:\n${files.join('\n') || '(empty project)'}`,
       scripts ? `\n[package.json scripts]:\n${JSON.stringify(scripts, null, 2)}` : '',
@@ -420,17 +502,26 @@ async function aiDecompose(task) {
     logTelemetry('1_AI_PLANNER', `AI planner attempt ${attempt}/${attempts}`, { goal: (task.goal || '').slice(0, 300) });
     const { output, engine } = await spawnEngine({
       id: 'ai-planner', engine: task.engine, prompt, cwd: ROOT,
-      timeoutMs: pc.timeoutMs || config.workerTimeoutMs, allowedTools: pc.allowedTools || ['Read', 'Glob', 'Grep']
+      timeoutMs: pc.timeoutMs || config.workerTimeoutMs, allowedTools: pc.allowedTools || ['Read', 'Glob', 'Grep'],
+      disallowedTools: computeDisallowedTools(gov.charter)
     });
     try {
       let plan;
       try { plan = extractJson(output); } catch { throw new Error(`Reply was not valid JSON: ${output.slice(0, 300)}`); }
       if (!Array.isArray(plan.subtasks) || plan.subtasks.length === 0) throw new Error('JSON has no "subtasks" list.');
       if (plan.subtasks.length > maxWorkers) throw new Error(`Too many workers (${plan.subtasks.length}); the maximum is ${maxWorkers}.`);
-      const subtasks = plan.subtasks.map((s) => ({ id: s.id, targetFiles: s.targetFiles, prompt: String(s.prompt || '').trim(), engine: task.engine, goal: task.goal }));
-      validateSubtasks(subtasks, { source: 'AI planner', allowed, requireScope: true });
-      logTelemetry('1_AI_PLANNED', `AI planner produced ${subtasks.length} worker(s)`, { engine, subtasks: subtasks.map((s) => ({ id: s.id, targetFiles: s.targetFiles })) });
-      return { subtasks, verifySuggestion: typeof plan.verifySuggestion === 'string' ? plan.verifySuggestion.slice(0, 300) : '' };
+      const subtasks = plan.subtasks.map((s) => ({
+        id: s.id, role: s.role || undefined, skills: Array.isArray(s.skills) ? s.skills : undefined,
+        targetFiles: s.targetFiles, prompt: String(s.prompt || '').trim(), engine: task.engine, goal: task.goal
+      }));
+      validateSubtasks(subtasks, { source: 'AI planner', allowed, requireScope: true, gov, autonomous: !!task.autonomous });
+      subtasks.forEach((sub) => resolveGovernance(sub, gov)); // unknown skills are a plan error too
+      logTelemetry('1_AI_PLANNED', `AI planner produced ${subtasks.length} worker(s)`, { engine, subtasks: subtasks.map((s) => ({ id: s.id, role: s.resolvedRole, targetFiles: s.targetFiles })) });
+      return {
+        subtasks,
+        interfaceContract: typeof plan.interfaceContract === 'string' ? plan.interfaceContract.slice(0, 4000) : '',
+        verifySuggestion: typeof plan.verifySuggestion === 'string' ? plan.verifySuggestion.slice(0, 300) : ''
+      };
     } catch (e) {
       feedback = e.message;
       logTelemetry('1_AI_PLAN_INVALID', e.message, { attempt });
@@ -452,35 +543,48 @@ async function runPlanner(task, errorTrace = null, previous = null) {
     return { ...previous, errorContext: errorTrace };
   }
 
+  const gov = loadGov();
   const given = Array.isArray(task.subtasks) && task.subtasks.length > 0;
   writeState({ phase: '1_PLANNER', engine: engineLabel(given ? task.subtasks : [{ prompt: 'x' }]), taskTitle: task.title, planSummary: given ? `${task.subtasks.length} worker(s) given by the task` : 'single worker' });
-  logTelemetry('1_PLANNER', 'Validating task and checking file-lock boundaries', { engine: task.engine || 'auto', errorTrace });
+  logTelemetry('1_PLANNER', 'Validating task and checking file-lock boundaries', { engine: task.engine || 'auto', errorTrace, autonomous: !!task.autonomous, backlogId: task.backlogId });
 
-  let subtasks; let planSummary; let verifySuggestion = '';
+  let subtasks; let planSummary; let verifySuggestion = task.verifySuggestion || ''; let interfaceContract = task.interfaceContract || '';
+  const vOpts = { gov, autonomous: !!task.autonomous, requireScope: !!task.autonomous };
   if (given) {
     subtasks = task.subtasks.map((s) => ({ ...s, engine: s.engine || task.engine }));
-    validateSubtasks(subtasks);
+    validateSubtasks(subtasks, vOpts);
+    subtasks.forEach((sub) => resolveGovernance(sub, gov));
     planSummary = `${subtasks.length} worker(s) given by the task`;
   } else if (task.autoPlan) {
-    const r = await aiDecompose(task);
-    subtasks = r.subtasks; verifySuggestion = r.verifySuggestion;
-    planSummary = `AI planner → ${subtasks.length} worker(s): ${subtasks.map((s) => `${s.id}[${s.targetFiles.join(',')}]`).join('  ')}`;
+    const r = await aiDecompose(task, gov);
+    subtasks = r.subtasks; verifySuggestion = r.verifySuggestion || verifySuggestion;
+    interfaceContract = [interfaceContract, r.interfaceContract].filter(Boolean).join('\n');
+    planSummary = `AI planner → ${subtasks.length} worker(s): ${subtasks.map((s) => `${s.resolvedRole ? `${s.resolvedRole}:` : ''}${s.id}[${s.targetFiles.join(',')}]`).join('  ')}`;
   } else {
     subtasks = validateSubtasks([{
-      id: 'worker-primary', engine: task.engine, targetFiles: task.targetFiles || [],
+      id: 'worker-primary', engine: task.engine, role: task.role, skills: task.skills, targetFiles: task.targetFiles || [],
       prompt: task.goal || task.prompt || null, cliCommand: task.cliCommand || (task.goal || task.prompt ? null : 'node -v')
-    }]);
+    }], vOpts);
+    subtasks.forEach((sub) => resolveGovernance(sub, gov));
     planSummary = 'single worker';
   }
+  for (const sub of subtasks) { // task-level contract + acceptance criteria reach every worker
+    if (interfaceContract && !sub.interfaceContract) sub.interfaceContract = interfaceContract;
+    if (task.acceptanceCriteria && !sub.acceptanceCriteria) sub.acceptanceCriteria = task.acceptanceCriteria;
+  }
+  if (subtasks.some((s) => s.resolvedRole)) planSummary += `  | roles: ${subtasks.map((s) => s.resolvedRole || '-').join(', ')}`;
 
-  let verifyCmd = task.verifyCmd; let verifySource = 'given by task';
-  if (!verifyCmd) { const d = detectVerifyCmd(ROOT, config); verifyCmd = d.cmd; verifySource = d.source; }
+  let verifyCmd = task.verifyCmd; let verifySource = 'given by task'; let verifyReal = !!task.verifyCmd;
+  if (!verifyCmd) { const d = detectVerifyCmd(ROOT, config); verifyCmd = d.cmd; verifySource = d.source; verifyReal = d.real; }
+  if (task.autonomous && gov.charter.requireRealCheck && !verifyReal) {
+    throw fatal('Autonomous task has no real check (charter requireRealCheck). Add a "test" script to package.json or a human-approved "verifyCmd" to the backlog item.');
+  }
   const mode = subtasks.length > 1 ? `SWARM-MESH (${subtasks.length}W)` : 'SQUARE-4-NODE';
   writeState({ engine: engineLabel(subtasks), mode, planSummary, lastGateStatus: `Check: ${verifyCmd}  (${verifySource})` });
   return {
     taskId: task.id || `job-${Date.now()}`,
     title: task.title || 'Unnamed Harness Task',
-    engine: engineLabel(subtasks), mode, subtasks, verifyCmd, verifySource, verifySuggestion, planSummary,
+    engine: engineLabel(subtasks), mode, subtasks, verifyCmd, verifySource, verifySuggestion, planSummary, interfaceContract,
     errorContext: errorTrace
   };
 }
@@ -488,7 +592,7 @@ async function runPlanner(task, errorTrace = null, previous = null) {
 // ───────────────────────────── Node 2: executor swarm ─────────────────────────────
 
 async function runExecutorSwarm(plan) {
-  writeState({ phase: '2_EXECUTOR_SWARM', mode: plan.mode, workerSummary: `Spawning ${plan.subtasks.length} worker(s): ${plan.subtasks.map((s) => s.id).join(', ')}` });
+  writeState({ phase: '2_EXECUTOR_SWARM', mode: plan.mode, workerSummary: `Spawning ${plan.subtasks.length} parallel worker(s): ${plan.subtasks.map((s) => `${s.resolvedRole ? `${s.resolvedRole}:` : ''}${s.id}`).join(' | ')}` });
   logTelemetry('2_EXECUTOR', `Dispatching ${plan.subtasks.length} worker(s)`, { mode: plan.mode, engine: plan.engine });
 
   const useWorktrees = config.useGitWorktrees && plan.subtasks.some((s) => s.prompt);
@@ -508,7 +612,8 @@ async function runExecutorSwarm(plan) {
       const result = await runWorker(sub, workerCwd, plan.errorContext);
       if (useWorktrees) result.sync = await syncWorktree(wtPath, sub);
       finished++;
-      writeState({ workerSummary: `${finished}/${plan.subtasks.length} worker(s) finished (last: ${sub.id})` });
+      writeState({ workerSummary: `${finished}/${plan.subtasks.length} worker(s) finished (last: ${sub.resolvedRole ? `${sub.resolvedRole}:` : ''}${sub.id})` });
+      logTelemetry('2_WORKER_DONE', `Worker ${sub.id} finished`, { worker: sub.id, role: sub.resolvedRole });
       return result;
     } finally {
       for (const f of sub.targetFiles) activeFileLocks.delete(f);
@@ -606,7 +711,12 @@ async function executeSquareCycle(taskFile) {
   const errors = [];
   let plan = null; let outputs = []; let cycle = 1; let lastErrorTrace = null; let haltReason = null; let backup = null;
   const title = task.title || path.basename(taskFile);
-  writeState({ planSummary: '-', workerSummary: '-' });
+  writeState({ planSummary: '-', workerSummary: '-', currentTaskFile: taskFile });
+  lastFinished = { autonomous: !!task.autonomous, backlogId: task.backlogId, title, ok: false };
+  if (task.backlogId) {
+    const item = updateBacklogItem(task.backlogId, { status: 'IN_PROGRESS', startedAt: new Date().toISOString(), lastJobId: task.id });
+    if (!item) logTelemetry('BACKLOG_ITEM_MISSING', `Job references backlog item ${task.backlogId}, which is not in backlog.json`);
+  }
 
   while (cycle <= MAX_CYCLES) {
     writeState({ cycle, taskId: task.id, taskTitle: title, lastGateStatus: cycle > 1 ? `Retrying with previous error (cycle ${cycle})` : 'Planning…' });
@@ -619,7 +729,9 @@ async function executeSquareCycle(taskFile) {
         await runCommitter(plan, task, taskFile);
         discardBackup(backup);
         finishSession(task, plan, 'COMMITTED', cycle, errors, outputs);
-        writeState({ history: pushHistory(`✔ COMMITTED  ${title} (cycle ${cycle}/${MAX_CYCLES})`) });
+        if (task.backlogId) updateBacklogItem(task.backlogId, { status: 'DONE', completedAt: new Date().toISOString(), result: 'COMMITTED', cyclesUsed: cycle });
+        lastFinished.ok = true;
+        writeState({ history: pushHistory(`✔ COMMITTED  ${title} (cycle ${cycle}/${MAX_CYCLES})`), currentTaskFile: null });
         return true;
       }
       lastErrorTrace = verification.trace;
@@ -649,6 +761,8 @@ async function executeSquareCycle(taskFile) {
     history: pushHistory(`✖ ${phase}  ${title} → ${path.relative(ROOT, dest)}`)
   });
   logTelemetry(phase, reason.slice(0, 4000), { taskId: task.id, rollback, deadLetter: path.relative(ROOT, dest) });
+  if (task.backlogId) updateBacklogItem(task.backlogId, { status: 'BLOCKED', blockedReason: `${phase}: ${reason.slice(0, 500)}`, deadLetter: path.relative(ROOT, dest) });
+  writeState({ currentTaskFile: null });
   return false;
 }
 
@@ -688,9 +802,14 @@ async function drain() {
     while (queue.length) {
       const file = queue.shift();
       try { await executeSquareCycle(file); } finally { queued.delete(file); }
+      if (lastFinished?.autonomous && !lastFinished.ok) {
+        auto.paused = `autonomous task "${lastFinished.title}" failed — human decision needed`;
+        logTelemetry('AUTO_PAUSED', auto.paused, { backlogId: lastFinished.backlogId });
+      }
     }
   } finally {
     draining = false;
+    if (auto.enabled) { refreshAutoStatus(); setTimeout(() => autonomousTick('queue-empty').catch((e) => logTelemetry('AUTO_ERROR', e.message)), 1000); }
     if (!onceMode && !selfTestMode) setTimeout(() => !draining && writeState({ phase: 'IDLE_WATCHING', mode: 'SQUARE + SWARM', cycle: 0, workerSummary: 'Idle — waiting for the next task', activeLocks: [] }), 1500);
   }
 }
@@ -703,11 +822,152 @@ function daemonAlive() {
   try { process.kill(pid, 0); return pid; } catch { return 0; }
 }
 
+// ───────────────────────────── autonomous controller ("act as me") ─────────────────────────────
+// Wakes on an interval or when the queue empties. Acting as PO_ARCHITECT inside charter.md limits:
+//   READY backlog item → promote highest priority into the inbox
+//   no READY item      → ask the PO_ARCHITECT (read-only AI) for the next tasks (≤ budget), then promote
+// Budget: at most charter maxAutoTasksPerRun dispatches per run (a run = one --autonomous session or one --tick).
+// Any autonomous task that fails pauses autonomy for the rest of the run: a human decides.
+
+const auto = { enabled: false, intervalSec: 300, used: 0, paused: null, ticking: false, lastTick: null, lastResult: '-' };
+
+function inboxCount() { return fs.readdirSync(DIRS.inbox).filter((f) => f.endsWith('.json')).length; }
+
+function refreshAutoStatus(note) {
+  if (note) auto.lastResult = note;
+  const charter = readCharter();
+  const c = backlogCounts(readBacklog());
+  const mode = !auto.enabled ? 'off (start with --autonomous)' : !charter.autonomous ? 'OFF in charter.md' : auto.paused ? 'PAUSED' : `ON every ${auto.intervalSec}s`;
+  writeState({
+    autoStatus: `${mode} | budget ${auto.used}/${charter.maxAutoTasksPerRun} | backlog R${c.READY} P${c.IN_PROGRESS} D${c.DONE} B${c.BLOCKED} | ${auto.lastResult}`,
+    autonomous: { enabled: auto.enabled, charterAllows: charter.autonomous, intervalSec: auto.intervalSec, used: auto.used, max: charter.maxAutoTasksPerRun, paused: auto.paused, lastTick: auto.lastTick, lastResult: auto.lastResult, backlog: c }
+  });
+}
+
+/** PO_ARCHITECT: read charter + repo + backlog, propose ≤ max tasks, validate, add them as READY. */
+async function poGenerate(gov, max) {
+  const po = gov.roles.PO_ARCHITECT || { name: 'PO_ARCHITECT', description: 'Product Owner and System Architect.', allowedTools: ['Read', 'Glob', 'Grep'] };
+  const b = readBacklog();
+  const { files, total } = listProjectFiles(ROOT, (config.planner || {}).maxFilesListed || 400);
+  const scripts = readJsonSafe(path.join(ROOT, 'package.json'), null)?.scripts;
+  const maxWorkers = (config.planner || {}).maxWorkers || 4;
+  const prompt = [
+    '[HARNESS PO_ARCHITECT]',
+    `[ROLE PERSONA — PO_ARCHITECT]:\n${po.mission || po.description}`,
+    'You act on behalf of the project owner, strictly inside the CHARTER below. Do NOT create, edit or delete any file — only read. The harness writes the backlog for you.',
+    `Propose AT MOST ${max} next task(s) that move the charter objectives forward, most important first. Rules:`,
+    '- Each task is small, independently verifiable by the project\'s existing check (package.json scripts), and does not repeat a DONE or IN_PROGRESS task.',
+    `- Each task has 1 to ${maxWorkers} parallel workers; every worker has a "role", explicit "targetFiles" inside the charter allowedPaths and its role's paths, and no file/folder overlap with another worker of the same task.`,
+    '- Write "acceptanceCriteria" a reviewer can check, and an "interfaceContract" (exact names, signatures, return values) whenever workers must agree.',
+    '- If the objectives are already met, return {"tasks":[]}.',
+    'Reply with ONLY this JSON, no other text:',
+    '{"tasks":[{"title":"...","priority":1,"goal":"...","acceptanceCriteria":["..."],"interfaceContract":"...","subtasks":[{"id":"short-id","role":"DEV_ENGINEER","skills":[],"targetFiles":["src/x.js"],"prompt":"..."}],"verifySuggestion":"optional"}]}',
+    `\n${catalog(gov)}`,
+    gov.charter.allowedPaths.length ? `[ALLOWED PATHS for autonomous work]: ${gov.charter.allowedPaths.join(', ')}` : '',
+    `\n[CHARTER]:\n${gov.charter.text}`,
+    `\n[CURRENT BACKLOG]:\n${b.tasks.map((t) => `- ${t.id} [${t.status}] ${t.title || t.goal}`).join('\n') || '(empty)'}`,
+    `\n[PROJECT FILES (${files.length} of ${total})]:\n${files.join('\n') || '(empty project)'}`,
+    scripts ? `\n[package.json scripts]:\n${JSON.stringify(scripts, null, 2)}` : '',
+    memoryContext(config) ? `\n[USER MEMORY]:\n${memoryContext(config)}` : ''
+  ].filter(Boolean).join('\n');
+
+  writeState({ phase: '0_PO_ARCHITECT', taskTitle: 'PO_ARCHITECT is grooming the backlog from charter.md', planSummary: `generating ≤ ${max} task(s)` });
+  logTelemetry('0_PO_ARCHITECT', `Backlog has no READY items; asking PO_ARCHITECT for up to ${max} task(s)`);
+  let parsed = null; let lastErr = '';
+  for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
+    const { output } = await spawnEngine({
+      id: 'po-architect', prompt: attempt === 1 ? prompt : `${prompt}\n\n[YOUR PREVIOUS REPLY WAS NOT VALID JSON — reply with the JSON object only]: ${lastErr}`,
+      cwd: ROOT, timeoutMs: config.workerTimeoutMs,
+      allowedTools: computeAllowedTools(po, [], []), disallowedTools: computeDisallowedTools(gov.charter)
+    });
+    try { parsed = extractJson(output); if (!Array.isArray(parsed.tasks)) throw new Error('no "tasks" list'); } catch (e) { parsed = null; lastErr = `${e.message}: ${output.slice(0, 200)}`; }
+  }
+  if (!parsed) { logTelemetry('0_PO_INVALID', `PO_ARCHITECT reply unusable: ${lastErr}`); throw fatal(`PO_ARCHITECT reply was not valid JSON twice: ${lastErr}`); }
+
+  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  const norm = (t) => String(t || '').toLowerCase().replace(/\W+/g, ' ').trim();
+  const existing = new Set(b.tasks.map((t) => norm(t.title || t.goal)));
+  const added = [];
+  for (const [i, t] of parsed.tasks.slice(0, max).entries()) {
+    const subs = Array.isArray(t.subtasks) && t.subtasks.length ? t.subtasks
+      : [{ id: 'worker-main', role: t.role, skills: t.skills, targetFiles: t.targetFiles || [], prompt: t.goal || t.title }];
+    const item = {
+      id: `AUTO-${stamp}-${i + 1}`, title: String(t.title || t.goal || '').slice(0, 200), priority: Number(t.priority) || i + 1,
+      status: 'READY', source: 'PO_ARCHITECT', createdAt: new Date().toISOString(), goal: t.goal || t.title,
+      acceptanceCriteria: Array.isArray(t.acceptanceCriteria) ? t.acceptanceCriteria.map(String) : [],
+      interfaceContract: typeof t.interfaceContract === 'string' ? t.interfaceContract : '',
+      // AI-invented checks are recorded only — never executed (approved v1.0 decision).
+      verifySuggestion: typeof t.verifySuggestion === 'string' ? t.verifySuggestion.slice(0, 300) : '',
+      subtasks: subs.map((s) => ({ id: s.id, role: s.role, skills: Array.isArray(s.skills) ? s.skills : [], targetFiles: s.targetFiles, prompt: String(s.prompt || '') }))
+    };
+    try {
+      if (!item.title) throw new Error('task has no title');
+      if (existing.has(norm(item.title))) throw new Error('duplicate of an existing backlog item');
+      if (item.subtasks.length > maxWorkers) throw new Error(`more than ${maxWorkers} workers`);
+      const probe = JSON.parse(JSON.stringify(item.subtasks));
+      validateSubtasks(probe, { source: 'PO_ARCHITECT', requireScope: true, gov, autonomous: true });
+      probe.forEach((sub) => resolveGovernance(sub, gov));
+      item.subtasks = probe.map(({ resolvedRole, resolvedSkills, resolvedTools, deniedTools, ...rest }) => rest);
+      added.push(item); existing.add(norm(item.title));
+    } catch (e) {
+      logTelemetry('0_PO_TASK_REJECTED', `PO_ARCHITECT task "${item.title}" rejected: ${e.message}`);
+    }
+  }
+  if (added.length) { const fresh = readBacklog(); fresh.tasks.push(...added); writeBacklog(fresh); }
+  logTelemetry('0_PO_GENERATED', `PO_ARCHITECT added ${added.length} READY task(s)`, { ids: added.map((t) => t.id), proposed: parsed.tasks.length });
+  return added;
+}
+
+/** One controller tick. Returns a short result code. */
+async function autonomousTick(reason = 'interval') {
+  if (auto.ticking) return 'busy';
+  auto.ticking = true; auto.lastTick = new Date().toISOString();
+  try {
+    if (draining || queue.length || inboxCount() > 0) return 'busy';
+    const gov = loadGov();
+    if (!gov.charter.autonomous) { refreshAutoStatus('charter says autonomous: off'); return 'off'; }
+    if (auto.paused) { refreshAutoStatus(`paused: ${auto.paused}`); return 'paused'; }
+    const remaining = gov.charter.maxAutoTasksPerRun - auto.used;
+    if (remaining <= 0) { refreshAutoStatus('run budget used — restart to continue'); logTelemetry('AUTO_BUDGET_USED', `maxAutoTasksPerRun (${gov.charter.maxAutoTasksPerRun}) reached`); return 'budget'; }
+
+    let item = nextReady();
+    if (!item) {
+      if (gov.charter.requireRealCheck && !detectVerifyCmd(ROOT, config).real) {
+        auto.paused = 'no real check for PO-generated tasks (add a package.json test script)';
+        logTelemetry('AUTO_PAUSED', auto.paused); refreshAutoStatus(); return 'paused';
+      }
+      let added = [];
+      try { added = await poGenerate(gov, remaining); } catch (e) {
+        auto.paused = `PO_ARCHITECT failed: ${e.message.slice(0, 120)}`; logTelemetry('AUTO_PAUSED', auto.paused); refreshAutoStatus(); return 'paused';
+      }
+      if (!added.length) { refreshAutoStatus('PO_ARCHITECT: nothing left to do for the charter'); return 'empty'; }
+      item = nextReady();
+    }
+    if (!item) { refreshAutoStatus('no READY items'); return 'empty'; }
+
+    const job = itemToJob(item, { autonomous: true });
+    const file = path.join(DIRS.inbox, `${job.id}.json`);
+    updateBacklogItem(item.id, { status: 'IN_PROGRESS', startedAt: new Date().toISOString(), lastJobId: job.id });
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify(job, null, 2));
+    fs.renameSync(`${file}.tmp`, file);
+    auto.used++;
+    logTelemetry('AUTO_DISPATCH', `Promoted backlog ${item.id} → inbox (${auto.used}/${gov.charter.maxAutoTasksPerRun})`, { backlogId: item.id, jobId: job.id, trigger: reason });
+    refreshAutoStatus(`dispatched ${item.id}`);
+    writeState({ history: pushHistory(`▶ AUTO  ${item.id} ${item.title || ''}`) });
+    if (!process.argv.includes('--tick') || !daemonAlive()) enqueue(file);
+    return 'dispatched';
+  } finally { auto.ticking = false; }
+}
+
 // ───────────────────────────── entry point ─────────────────────────────
 
 const args = process.argv.slice(2);
 const selfTestMode = args.includes('--self-test');
-const onceMode = args.includes('--once');
+const tickMode = args.includes('--tick');
+const onceMode = args.includes('--once') || tickMode;
+const argVal = (flag) => { const i = args.indexOf(flag); return i > -1 ? args[i + 1] : undefined; };
+auto.enabled = args.includes('--autonomous') && !tickMode;
+auto.intervalSec = Number(argVal('--interval')) || (Number(argVal('--schedule')) * 60) || (config.autonomous || {}).intervalSeconds || 300;
 
 if (selfTestMode) {
   const testTaskFile = path.join(DIRS.inbox, 'self-test-swarm.json');
@@ -743,6 +1003,12 @@ if (selfTestMode) {
   process.exit(ok ? 0 : 1);
 } else {
   const other = daemonAlive();
+  if (tickMode && other) {
+    // A daemon owns the inbox: this tick only promotes/generates one task; the daemon runs it.
+    const r = await autonomousTick('manual-tick');
+    console.log(`Autonomous tick: ${r}. ${auto.lastResult}. The running daemon (PID ${other}) will process it.`);
+    process.exit(0);
+  }
   if (other) {
     console.log(`Another harness daemon is already running for this folder (PID ${other}). Not starting a second one.`);
     process.exit(0);
@@ -772,6 +1038,12 @@ if (selfTestMode) {
   if (onceMode) {
     scanInbox();
     while (draining || queue.length) await new Promise((r) => setTimeout(r, 100));
+    if (tickMode) {
+      const r = await autonomousTick('manual-tick');
+      while (draining || queue.length) await new Promise((res) => setTimeout(res, 100));
+      const c = backlogCounts(readBacklog());
+      console.log(`Autonomous tick: ${r} — ${auto.lastResult}. Backlog now: READY ${c.READY}, IN_PROGRESS ${c.IN_PROGRESS}, DONE ${c.DONE}, BLOCKED ${c.BLOCKED}.`);
+    }
     process.exit(0);
   }
 
@@ -784,4 +1056,11 @@ if (selfTestMode) {
   });
   setInterval(scanInbox, 3000).unref?.(); // fallback for file systems where fs.watch is unreliable
   setInterval(() => { if (!draining) writeState({}); }, 5000); // keep uptime + engine list fresh
+  if (auto.enabled) {
+    logTelemetry('AUTO_START', `Autonomous controller on, every ${auto.intervalSec}s`);
+    writeState({ mode: 'AUTONOMOUS CONTROLLER' });
+    refreshAutoStatus('starting');
+    setTimeout(() => autonomousTick('startup').catch((e) => logTelemetry('AUTO_ERROR', e.message)), 500);
+    setInterval(() => { if (!draining) autonomousTick('interval').catch((e) => logTelemetry('AUTO_ERROR', e.message)); }, auto.intervalSec * 1000);
+  } else refreshAutoStatus();
 }
