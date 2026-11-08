@@ -22,3 +22,6 @@
 # In your own PUBLIC project, if they hold personal details, uncomment these two lines:
 # .harness/memory/profile.md
 # .harness/memory/lessons.md
+
+# Personal Claude Code overrides (never commit)
+.claude/settings.local.json

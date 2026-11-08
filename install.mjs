@@ -78,6 +78,48 @@ else {
   }
 }
 
+// Claude Code project config: slash commands are copied if missing; settings.json is MERGED (union of
+// permission rules, hook added once), never overwritten. A project's own rules and hooks stay.
+{
+  const srcClaude = path.join(SRC, '.claude');
+  if (fs.existsSync(srcClaude)) {
+    const walk = (dir, rel = '') => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name), path.join(rel, e.name)) : [path.join(rel, e.name)]));
+    for (const rel of walk(srcClaude).filter((f) => f !== 'settings.json' && !f.startsWith('settings.local'))) {
+      const d = path.join(target, '.claude', rel);
+      fs.mkdirSync(path.dirname(d), { recursive: true });
+      if (fs.existsSync(d)) report.push(`kept   .claude/${rel} (already existed)`);
+      else { fs.copyFileSync(path.join(srcClaude, rel), d); report.push(`wrote  .claude/${rel}`); }
+    }
+    const srcSet = JSON.parse(fs.readFileSync(path.join(srcClaude, 'settings.json'), 'utf8'));
+    const setPath = path.join(target, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(setPath), { recursive: true });
+    if (!fs.existsSync(setPath)) { fs.writeFileSync(setPath, JSON.stringify(srcSet, null, 2) + '\n'); report.push('wrote  .claude/settings.json'); }
+    else {
+      try {
+        const mine = JSON.parse(fs.readFileSync(setPath, 'utf8'));
+        mine.permissions = mine.permissions || {};
+        for (const k of ['allow', 'ask', 'deny']) {
+          // a rule the project already puts in a stricter list is not added to a looser one
+          const stricter = { allow: ['ask', 'deny'], ask: ['deny'], deny: [] }[k];
+          const have = new Set([...(mine.permissions[k] || [])]);
+          for (const r of srcSet.permissions[k] || []) if (!stricter.some((o) => (mine.permissions[o] || []).includes(r))) have.add(r);
+          mine.permissions[k] = [...have];
+        }
+        mine.hooks = mine.hooks || {};
+        mine.hooks.SessionStart = mine.hooks.SessionStart || [];
+        const cmd = (srcSet.hooks.SessionStart[0].hooks[0] || {}).command;
+        const present = JSON.stringify(mine.hooks.SessionStart).includes('hook-session.mjs');
+        if (!present) mine.hooks.SessionStart.push(srcSet.hooks.SessionStart[0]);
+        fs.writeFileSync(setPath, JSON.stringify(mine, null, 2) + '\n');
+        report.push(`merged harness rules${present ? '' : ' + SessionStart hook'} into existing .claude/settings.json`);
+      } catch {
+        fs.writeFileSync(path.join(target, '.claude', 'settings.harness.json'), JSON.stringify(srcSet, null, 2) + '\n');
+        report.push('! .claude/settings.json is not valid JSON — wrote .claude/settings.harness.json; merge it by hand');
+      }
+    }
+  }
+}
+
 const gi = path.join(target, '.gitignore');
 const giBlock = fs.readFileSync(path.join(SRC, '.gitignore'), 'utf8');
 const existing = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : '';

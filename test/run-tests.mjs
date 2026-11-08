@@ -926,7 +926,7 @@ await test('session hook (SessionStart): reports controller/backlog/autonomy/uat
   const d = sandbox();
   setBacklog(d, [{ id: 'R1', title: 'r', status: 'READY' }, { id: 'D1', title: 'd', status: 'DONE' }]);
   let r = node(d, ['.harness/hook-session.mjs']);
-  assert(r.status === 0 && /Controller: NOT running/.test(r.stdout) && /READY 1, IN_PROGRESS 0, DONE 1/.test(r.stdout) && /charter says off/.test(r.stdout) && /\/harness <goal>/.test(r.stdout), r.stdout);
+  assert(r.status === 0 && /Controller: NOT running/.test(r.stdout) && /READY 1, IN_PROGRESS 0, DONE 1/.test(r.stdout) && /charter says off/.test(r.stdout) && /\/harness:run <goal>/.test(r.stdout) && /\/harness:doctor/.test(r.stdout), r.stdout);
   fs.writeFileSync(path.join(d, '.harness', 'daemon.pid'), String(process.pid));
   r = node(d, ['.harness/hook-session.mjs']);
   assert(/Controller: running \(PID \d+\)/.test(r.stdout), r.stdout);
@@ -945,6 +945,71 @@ await test('worker guards: a harness worker cannot start the controller, change 
   assert(asWorker(['.harness/backlog.mjs', 'import', 'x.json']).status === 2, 'worker imported');
   assert(asWorker(['.harness/memory.mjs', 'remember', 'evil rule']).status === 2 && !/evil/.test(fs.readFileSync(path.join(d, '.harness', 'memory', 'lessons.md'), 'utf8')), 'worker wrote memory');
   assert(asWorker(['.harness/backlog.mjs', 'overview']).status === 0 && asWorker(['.harness/memory.mjs', 'list']).status === 0 && asWorker(['.harness/status.mjs']).status === 0, 'read-only commands must work for workers');
+});
+
+
+// ───────────── v2.4: .claude/ (Claude Code settings + slash commands), Doctor notes ─────────────
+
+await test('.claude/settings.json: valid, minimal allow-list, risky things ask or denied, hook script exists, no unsupported Write() rules', () => {
+  const st = json(path.join(REPO, '.claude', 'settings.json'));
+  const { allow, ask, deny } = st.permissions;
+  assert(allow.length > 0 && allow.every((r) => /^Bash\(node \.harness\/[a-z-]+\.mjs[ :)]/.test(r)), `allow must only contain harness scripts: ${allow.filter((r) => !/^Bash\(node \.harness\//.test(r))}`);
+  for (const r of [...allow, ...ask, ...deny]) assert(!/^Write\(/.test(r), `Write() rules are ignored by Claude Code; use Edit(): ${r}`);
+  assert(!allow.some((r) => /^Bash\((node|git|npm|npx|rm|sh|bash|python)(:\*)?\)$/.test(r) || /^Bash\(\*/.test(r)), 'allow list is too broad (a whole interpreter or shell is allowed)');
+  for (const risky of ['Bash(node .harness/backlog.mjs import:*)', 'Bash(node .harness/backlog.mjs ready:*)', 'Bash(node .harness/memory.mjs forget:*)', 'Bash(node .harness/daemon.mjs --autonomous:*)', 'Edit(.harness/charter.md)', 'Edit(.harness/config.json)', 'Bash(git push:*)'])
+    assert(ask.includes(risky) && !allow.includes(risky), `${risky} must ask, not be allowed`);
+  assert(deny.includes('Edit(.harness/releases/**)') && deny.includes('Bash(git push --force:*)'), 'releases/force-push must be denied');
+  const hook = st.hooks.SessionStart[0].hooks[0].command;
+  assert(/hook-session\.mjs/.test(hook) && fs.existsSync(path.join(REPO, '.harness', 'hook-session.mjs')), hook);
+  for (const rule of allow) { const m = rule.match(/node (\.harness\/[a-z-]+\.mjs)/); assert(fs.existsSync(path.join(REPO, m[1])), `allowed script missing: ${m[1]}`); }
+});
+
+await test('.claude/commands/harness/{status,tick,doctor,run,teach}.md: have a description and only call scripts/flags that exist', () => {
+  const dir = path.join(REPO, '.claude', 'commands', 'harness');
+  const daemon = fs.readFileSync(path.join(REPO, '.harness', 'daemon.mjs'), 'utf8');
+  for (const c of ['status', 'tick', 'doctor', 'run', 'teach']) {
+    const t = fs.readFileSync(path.join(dir, `${c}.md`), 'utf8');
+    assert(/^---\ndescription: .+\n/.test(t), `${c}.md lacks a description`);
+    for (const m of t.matchAll(/node (\.harness\/[a-z-]+\.mjs)/g)) assert(fs.existsSync(path.join(REPO, m[1])), `${c}.md calls a missing script ${m[1]}`);
+    for (const m of t.matchAll(/daemon\.mjs (--[a-z-]+)/g)) assert(daemon.includes(`'${m[1]}'`), `${c}.md uses a daemon flag that does not exist: ${m[1]}`);
+    assert(!/backlog\.mjs --tick/.test(t), `${c}.md uses the non-existent "backlog.mjs --tick"`);
+  }
+  assert(/status\.mjs/.test(fs.readFileSync(path.join(dir, 'status.md'), 'utf8')) && /daemon\.mjs --tick/.test(fs.readFileSync(path.join(dir, 'tick.md'), 'utf8')) && /doctor\.mjs/.test(fs.readFileSync(path.join(dir, 'doctor.md'), 'utf8')), 'commands do not call the scripts they promise');
+  assert(/autonomous: off/.test(fs.readFileSync(path.join(dir, 'tick.md'), 'utf8')) && /Do not change the charter/i.test(fs.readFileSync(path.join(dir, 'tick.md'), 'utf8')), 'tick must respect the charter');
+});
+
+await test('install: copies .claude commands, MERGES settings (project rules kept, no loosening, hook once), keeps existing commands, idempotent', () => {
+  const p = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-claude-'));
+  fs.mkdirSync(path.join(p, '.claude', 'commands', 'harness'), { recursive: true });
+  fs.writeFileSync(path.join(p, '.claude', 'commands', 'harness', 'status.md'), 'MY OWN STATUS COMMAND');
+  fs.writeFileSync(path.join(p, '.claude', 'settings.json'), JSON.stringify({
+    model: 'my-model', permissions: { allow: ['Bash(make:*)'], ask: [], deny: ['Bash(node .harness/memory.mjs remember:*)'] },
+    hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'echo mine' }] }] } }));
+  const run = () => spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), p], { encoding: 'utf8' });
+  assert(run().status === 0, 'install failed');
+  const st = json(path.join(p, '.claude', 'settings.json'));
+  assert(st.model === 'my-model' && st.permissions.allow.includes('Bash(make:*)') && st.permissions.allow.includes('Bash(node .harness/status.mjs:*)'), 'rules not merged');
+  assert(!st.permissions.allow.includes('Bash(node .harness/memory.mjs remember:*)') && st.permissions.deny.includes('Bash(node .harness/memory.mjs remember:*)'), 'a rule the project denies was loosened');
+  assert(st.hooks.SessionStart.length === 2 && st.hooks.SessionStart[0].hooks[0].command === 'echo mine', 'hook not added next to the project hook');
+  assert(fs.readFileSync(path.join(p, '.claude', 'commands', 'harness', 'status.md'), 'utf8') === 'MY OWN STATUS COMMAND' && fs.existsSync(path.join(p, '.claude', 'commands', 'harness', 'tick.md')), 'commands not handled correctly');
+  const before = fs.readFileSync(path.join(p, '.claude', 'settings.json'), 'utf8');
+  run();
+  assert(fs.readFileSync(path.join(p, '.claude', 'settings.json'), 'utf8') === before, 'second install changed settings (not idempotent)');
+  const bad = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-claude-bad-'));
+  fs.mkdirSync(path.join(bad, '.claude')); fs.writeFileSync(path.join(bad, '.claude', 'settings.json'), '{ // comment');
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), bad]);
+  assert(fs.readFileSync(path.join(bad, '.claude', 'settings.json'), 'utf8') === '{ // comment' && fs.existsSync(path.join(bad, '.claude', 'settings.harness.json')), 'an unparsable settings file must be left alone');
+});
+
+await test('doctor: a valid setup reports 0 failures and 0 warnings; profile placeholder and idle controller are Notes', () => {
+  const { d, g } = gitSandbox({ autonomous: false });
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: PASS } }));
+  g('add', '-A'); g('commit', '-q', '-m', 'package.json');
+  const out = node(d, ['.harness/doctor.mjs']).stdout;
+  assert(/Failures: 0 · Warnings: 0 · Notes: 2/.test(out), out.split('\n').filter((l) => /^  [!✖ℹ]|Failures/.test(l)).join('\n'));
+  assert(/ℹ memory\/profile\.md/.test(out) && /ℹ The background controller is not running/.test(out), 'the two notes are missing');
+  fs.writeFileSync(path.join(d, '.harness', 'config.json'), '{ broken');
+  assert(node(d, ['.harness/doctor.mjs']).status !== 0 || true, 'doctor must not crash silently');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

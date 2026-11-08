@@ -1,0 +1,49 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node .harness/status.mjs:*)",
+      "Bash(node .harness/doctor.mjs:*)",
+      "Bash(node .harness/watch.mjs:*)",
+      "Bash(node .harness/dispatch.mjs:*)",
+      "Bash(node .harness/daemon.mjs)",
+      "Bash(node .harness/daemon.mjs --status:*)",
+      "Bash(node .harness/daemon.mjs --tick:*)",
+      "Bash(node .harness/backlog.mjs list:*)",
+      "Bash(node .harness/backlog.mjs overview:*)",
+      "Bash(node .harness/backlog.mjs releases:*)",
+      "Bash(node .harness/backlog.mjs add:*)",
+      "Bash(node .harness/memory.mjs list:*)",
+      "Bash(node .harness/memory.mjs context:*)",
+      "Bash(node .harness/memory.mjs sessions:*)",
+      "Bash(node .harness/memory.mjs remember:*)"
+    ],
+    "ask": [
+      "Bash(node .harness/daemon.mjs --autonomous:*)",
+      "Bash(node .harness/backlog.mjs import:*)",
+      "Bash(node .harness/backlog.mjs ready:*)",
+      "Bash(node .harness/backlog.mjs block:*)",
+      "Bash(node .harness/memory.mjs forget:*)",
+      "Edit(.harness/charter.md)",
+      "Edit(.harness/config.json)",
+      "Bash(git push:*)"
+    ],
+    "deny": [
+      "Edit(.harness/releases/**)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.harness/hook-session.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

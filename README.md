@@ -122,8 +122,32 @@ Three ways to see the agents work, all fed by the same plain-text feed (`.harnes
    it to start the controller in the background, dispatch, and stream `watch.mjs` with its `Monitor` tool,
    so each agent action arrives in the chat as it happens, ending with the result.
 
-`.harness/hook-session.mjs` prints a short harness status (controller running? backlog? autonomy?) for
-an editor AI when a session starts. It is designed to run as a Claude Code `SessionStart` hook.
+### Claude Code: slash commands, permission rules and start-up hook (`.claude/`)
+The template ships a project config for Claude Code (VS Code extension, terminal, desktop):
+
+| Command | What it does |
+|---|---|
+| `/harness:run <goal>` | starts the controller in the background, dispatches your goal, and **streams every agent action into the chat**, then explains the result |
+| `/harness:status` | runs `node .harness/status.mjs` + the backlog overview and summarises them in plain words |
+| `/harness:tick` | one autonomous step (`node .harness/daemon.mjs --tick`). It first checks the charter: if `autonomous: off` it stops and asks, and never edits the charter itself |
+| `/harness:doctor` | runs `node .harness/doctor.mjs` and explains every failure, warning and note |
+| `/harness:teach <rule>` | saves a rule to memory for every AI in the project |
+
+`.claude/settings.json` adds permission rules and the hook:
+- **Allowed without asking:** only the harness scripts (`status`, `doctor`, `watch`, `dispatch`, `daemon` plain/`--status`/`--tick`,
+  read-only `backlog`/`memory` commands, `backlog add`, `memory remember`). Never a whole interpreter (`node`, `git`, `npm`).
+- **Always asks:** `daemon --autonomous`, `backlog import/ready/block`, `memory forget`, editing `charter.md` or `config.json`, `git push`.
+- **Denied:** editing `.harness/releases/**`, force-pushing.
+- **Hook:** at the start of every session the AI is told the harness state (controller running? backlog? autonomy? `uat`?).
+
+**One-time step for you:** Claude Code ignores a project's permission rules until you *trust the folder*. The first time
+you open the project in Claude Code, accept the trust dialog. Until then the commands work but ask for approval each time.
+A few details: `Write(...)` rules are not used (Claude Code only honours `Edit(...)`, which covers writes too);
+`.claude/settings.local.json` is for your personal overrides and is git-ignored; harness workers get the same rules
+but the scripts refuse to run for them (`HARNESS_WORKER`).
+`install.mjs` copies these to your project and **merges** with your own `.claude/settings.json` (your rules stay, nothing is loosened).
+
+`.harness/hook-session.mjs` is the hook script: it prints a short status for the AI and stays silent for harness workers.
 
 ## 4. Autonomous controller ("act as me")
 
@@ -335,7 +359,8 @@ node .harness/memory.mjs list|remember|forget|context|sessions
 node .harness/doctor.mjs                 # setup check + engine flag probe
 node .harness/status.mjs --log 25        # state + recent JSONL events
 node .harness/watch.mjs --job <id>       # live feed of every agent action until that job finishes
-node test/run-tests.mjs                  # 61 end-to-end tests with a mock engine (no AI account needed)
+node test/run-tests.mjs                  # 65 end-to-end tests with a mock engine (no AI account needed, free)
+npm run test:live                        # REAL Claude agents end to end (manual task, autonomous uat run, editor config); ~$0.5, needs `claude` logged in
 ```
 
 Job file format (`.harness/inbox/*.json`):

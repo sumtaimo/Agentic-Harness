@@ -12,7 +12,10 @@ import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor
 
 ensureDirs();
 const ok = (m) => console.log(`  ✔ ${m}`);
-const warn = (m) => console.log(`  ! ${m}`);
+let warnings = 0; let notes = 0;
+const warn = (m) => { warnings++; console.log(`  ! ${m}`); };
+// A note is information, not a problem: something you may want to do, but the setup is valid without it.
+const note = (m) => { notes++; console.log(`  ℹ ${m}`); };
 const bad = (m) => console.log(`  ✖ ${m}`);
 let problems = 0;
 
@@ -34,7 +37,8 @@ for (const [name, p] of Object.entries(config.profiles)) {
   const probe = probeEngine(p, { force: true });
   const flags = profileFlags(p);
   if (!probe.installed) { console.log(`  · ${name.padEnd(12)} not installed`); continue; }
-  if (!probe.checked) { warn(`${name.padEnd(12)} ${probe.binPath} — flags not checked${flags.length ? ` (${probe.error})` : ' (none configured)'}`); continue; }
+  if (!probe.checked && !flags.length) { ok(`${name.padEnd(12)} ${probe.binPath} — no command-line flags to check`); continue; }
+  if (!probe.checked) { warn(`${name.padEnd(12)} ${probe.binPath} — flags not checked (${probe.error})`); continue; }
   if (probe.compatible) ok(`${name.padEnd(12)} ${probe.binPath} — all ${flags.length} flag(s) found: ${flags.join(' ')}`);
   else bad(`${name.padEnd(12)} ${probe.binPath} — --help does NOT list: ${probe.missing.join(' ')}  → will fall back to "auto". Fix "args" in config.json.`);
 }
@@ -108,16 +112,16 @@ console.log('\nGit integration branch (where autonomous work lands)');
 
 console.log('\nMemory');
 const profile = fs.existsSync(FILES.profile) ? fs.readFileSync(FILES.profile, 'utf8') : '';
-/\(fill me\)/i.test(profile) ? warn('memory/profile.md still has "(fill me)" placeholders — tell your AI about yourself so it can fill them') : ok('memory/profile.md is filled in');
+/\(fill me\)/i.test(profile) ? note('memory/profile.md still has "(fill me)" placeholders. Optional: tell your AI "Read AGENTS.md and fill in my profile". The shared template keeps it generic on purpose.') : ok('memory/profile.md is filled in');
 ok(`${listLessons(FILES.lessons).length} taught rule(s), ${listLessons(FILES.autoLessons).length} auto lesson(s)`);
 
 console.log('\nDaemon');
 try {
   const pid = Number(fs.readFileSync(FILES.pid, 'utf8')); process.kill(pid, 0);
   ok(`Background daemon is running (PID ${pid})`);
-} catch { warn('Background daemon is not running. Start it with task "Harness: 1. Start" or: node .harness/daemon.mjs'); }
+} catch { note('The background controller is not running (normal when idle). To start it: task "Harness: 1. Start", /harness:run in Claude Code, or: node .harness/daemon.mjs'); }
 const leftovers = fs.readdirSync(DIRS.staging).filter((d) => !d.startsWith('.'));
 if (leftovers.length) warn(`Backups from interrupted tasks in .harness/staging/: ${leftovers.join(', ')} — restore by hand if needed, then delete.`);
 
-console.log(problems ? `\n${problems} problem(s) to fix above.` : '\nAll required checks passed.');
+console.log(`\n${problems ? `${problems} problem(s) to fix above.` : 'All required checks passed.'}  Failures: ${problems} · Warnings: ${warnings} · Notes: ${notes}`);
 process.exit(problems ? 1 : 0);

@@ -26,12 +26,12 @@ try {
 
   const lines = [
     '[Agentic Harness] This folder has an agentic harness (.harness/). Instructions: AGENTS.md.',
-    `- Controller: ${pid ? `running (PID ${pid}), phase ${st.phase || '?'}${st.taskTitle ? `, task "${st.taskTitle}"` : ''}` : 'NOT running (start it in the background to work through the harness; see /harness)'}`,
+    `- Controller: ${pid ? `running (PID ${pid}), phase ${st.phase || '?'}${st.taskTitle ? `, task "${st.taskTitle}"` : ''}` : 'NOT running (start it in the background to work through the harness; see /harness:run)'}`,
     `- Backlog: READY ${c.READY}, IN_PROGRESS ${c.IN_PROGRESS}, DONE ${c.DONE}, BLOCKED ${c.BLOCKED} | inbox ${count(DIRS.inbox)} | failed jobs ${count(DIRS.failed)}`,
     `- Autonomous mode: charter says ${charter.autonomous ? 'ON' : 'off'}${git.integrationBranch && git.integrationMode !== 'off' ? `; autonomous work lands on the '${git.integrationBranch}' branch, never main` : ''}`,
     `- Memory: ${listLessons(FILES.lessons).length} taught rule(s) (already loaded via CLAUDE.md)`
   ];
   if (/\(fill me/i.test(profile)) lines.push('- profile.md is not filled in yet: ask the user a few simple questions and fill it (see AGENTS.md section 1).');
-  lines.push('- To run work visibly in this chat: use /harness <goal>. Status: /harness-status. Teach a rule: /harness-teach <rule>.');
+  lines.push('- To run work visibly in this chat: use /harness:run <goal>. Status: /harness:status. Health check: /harness:doctor. One autonomous step: /harness:tick. Teach a rule: /harness:teach <rule>.');
   console.log(lines.join('\n'));
 } catch { /* never block the session */ }
