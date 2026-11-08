@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "description": "The agent team for hierarchical tasks (dispatch --hierarchy, or \"hierarchy\": true on a backlog item). Level 1: the orchestrator plans and delegates (read-only). Level 2: each lead plans its own slice and starts workers. Level 3: workers do the work (created by leads at run time, with the lead's role). Rules enforced by the controller: lead scopes can only narrow their role's writable paths and never overlap, budgets only shrink downwards, a lead may only hand out files inside its scope, and every plan is validated before any worker starts.",
+  "members": [
+    {
+      "id": "orchestrator",
+      "level": "orchestrator",
+      "role": "PO_ARCHITECT",
+      "reports_to": null,
+      "canDelegateTo": ["lead-ba", "lead-dev", "lead-qa"],
+      "budget": { "maxCostUsd": 2.0, "maxMinutes": 30 }
+    },
+    {
+      "id": "lead-ba",
+      "level": "lead",
+      "role": "BA_ANALYST",
+      "reports_to": "orchestrator",
+      "scope": ["docs/**"],
+      "maxWorkers": 2,
+      "budget": { "maxCostUsd": 0.4, "maxMinutes": 10 }
+    },
+    {
+      "id": "lead-dev",
+      "level": "lead",
+      "role": "DEV_ENGINEER",
+      "reports_to": "orchestrator",
+      "scope": ["src/**"],
+      "maxWorkers": 3,
+      "budget": { "maxCostUsd": 0.7, "maxMinutes": 15 }
+    },
+    {
+      "id": "lead-qa",
+      "level": "lead",
+      "role": "QA_AUDITOR",
+      "reports_to": "orchestrator",
+      "scope": ["tests/**", "test/**"],
+      "maxWorkers": 2,
+      "budget": { "maxCostUsd": 0.4, "maxMinutes": 10 }
+    }
+  ]
+}

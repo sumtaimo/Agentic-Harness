@@ -18,6 +18,10 @@
  *     --worker "w1:src/api.ts:Implement endpoint" \
  *     --worker "w2:src/api.test.ts:Write tests"
  *
+ * Team hierarchy (orchestrator → leads → workers, as defined in .harness/team.json):
+ *   node .harness/dispatch.mjs --goal "Build a login feature with spec, code and tests" --hierarchy [--max-cost 1.5] [--wait]
+ *   (--max-cost: the controller stops the task if the agents spend more than this many dollars)
+ *
  * --branch uat   build on its own git branches, verify, then merge into 'uat' only if the check passes
  *                (your working folder and main are not touched)
  * --wait   block until the job finishes and print the result (exit 0 = committed).
@@ -49,6 +53,8 @@ let files = [];
 let wait = false;
 let autoPlan = !!config.planner?.defaultAutoPlan;
 let branch;
+let hierarchy = false;
+let maxCost;
 const subtasks = [];
 
 for (let i = 0; i < args.length; i++) {
@@ -60,6 +66,11 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--files' && v !== undefined) { files = args[++i].split(',').map((f) => f.trim()).filter(Boolean); }
   else if (a === '--wait') { wait = true; }
   else if (a === '--branch' && v !== undefined) { branch = args[++i].trim() || undefined; }
+  else if (a === '--hierarchy') { hierarchy = true; }
+  else if (a === '--max-cost' && v !== undefined) {
+    maxCost = Number(args[++i]);
+    if (!Number.isFinite(maxCost) || maxCost < 0) { console.error('--max-cost must be a number of dollars, e.g. --max-cost 1.5'); process.exit(1); }
+  }
   else if (a === '--auto-plan') {
     autoPlan = true;
     if (/^(yes|no|true|false|on|off)$/i.test(v || '')) autoPlan = /^(yes|true|on)$/i.test(args[++i]);
@@ -98,7 +109,10 @@ const job = {
   ...(verifyCmd ? { verifyCmd } : {}),
   ...(branch ? { integrationBranch: branch } : {}),
   createdAt: new Date().toISOString(),
-  ...(usePlanner
+  ...(maxCost !== undefined ? { maxCostUsd: maxCost } : {}),
+  ...(hierarchy && subtasks.length === 0
+    ? { hierarchy: true, goal, targetFiles: files }
+    : usePlanner
     ? { autoPlan: true, goal, targetFiles: files }
     : {
         subtasks: subtasks.length > 0
@@ -111,7 +125,7 @@ ensureDirs();
 const inboxPath = path.join(DIRS.inbox, `${job.id}.json`);
 fs.writeFileSync(`${inboxPath}.tmp`, JSON.stringify(job, null, 2)); // atomic hand-off:
 fs.renameSync(`${inboxPath}.tmp`, inboxPath);                       // the daemon never sees half a file
-console.log(`Dispatched [${(engine || config.activeProfile).toUpperCase()}] job ${job.id} (${usePlanner ? 'AI planner will choose the workers' : `${job.subtasks.length} worker[s]`}) -> ${path.relative(ROOT, inboxPath)}`);
+console.log(`Dispatched [${(engine || config.activeProfile).toUpperCase()}] job ${job.id} (${job.hierarchy ? 'orchestrator → leads → workers, per team.json' : usePlanner ? 'AI planner will choose the workers' : `${job.subtasks.length} worker[s]`}) -> ${path.relative(ROOT, inboxPath)}`);
 console.log(`Check: ${checkLine}`);
 console.log(`JOB_ID=${job.id}`);
 console.log(`LIVE_FROM=${(() => { try { return fs.statSync(path.join(ROOT, '.harness', 'live.log')).size; } catch { return 0; } })()}`);

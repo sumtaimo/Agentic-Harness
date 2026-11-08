@@ -80,6 +80,19 @@ node .harness/dispatch.mjs "<title>" --check "npm test" \
   --worker "tests:src/api.test.ts:Write tests for the endpoint" --wait
 ```
 
+**Agent team** (a big goal that needs a spec, code and tests: orchestrator → leads → workers, defined in
+`.harness/team.json`; real agents at every level):
+```bash
+node .harness/team.mjs show        # who is on the team, what each may own, budgets
+node .harness/dispatch.mjs --goal "<clear goal incl. exact names/formats>" --hierarchy --max-cost <dollars> --check "<check>"
+```
+- The orchestrator and the leads only plan (read-only). Workers do the work inside their lead's scope, in parallel.
+  The controller validates every level; a lead that cannot produce a valid plan is **escalated to the user**.
+- **Always agree a money cap with the user first** (`--max-cost`). The controller counts the real cost of every
+  agent and stops the task (files restored) when it is over; never raise it without the user's OK.
+- Never edit `team.json` to widen a scope, add overlap or raise a budget without the user's explicit OK.
+  `node .harness/team.mjs validate` must pass; Doctor checks it too.
+
 Rules for you when dispatching:
 - **Make sure there is a real check.** Without `--check`, the harness picks one from
   `package.json` (`check` > `typecheck`+`test` > `build` > `lint`). If dispatch prints
@@ -156,6 +169,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/charter.md` · `backlog.json` | autonomous limits · task backlog |
 | `.harness/backlog.mjs` | backlog list / add / ready / pop / import (with snapshot) / releases |
 | `.harness/roles/` · `skills/` | role personas + tool limits · skill rules |
+| `.harness/team.json` · `team.mjs` | the agent team (orchestrator → leads → workers): scopes, limits, budgets · show / validate it |
 | `.harness/releases/` | snapshots made before every upload (git-ignored, never edit) |
 | `.harness/examples/backlog.sample.json` | a BA + DEV + QA parallel sample to import |
 | `.harness/state.json` · `telemetry.log` | live state · JSONL event log |

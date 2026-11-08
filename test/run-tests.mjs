@@ -967,7 +967,7 @@ await test('.claude/settings.json: valid, minimal allow-list, risky things ask o
 await test('.claude/commands/harness/{status,tick,doctor,run,teach}.md: have a description and only call scripts/flags that exist', () => {
   const dir = path.join(REPO, '.claude', 'commands', 'harness');
   const daemon = fs.readFileSync(path.join(REPO, '.harness', 'daemon.mjs'), 'utf8');
-  for (const c of ['status', 'tick', 'doctor', 'run', 'teach']) {
+  for (const c of ['status', 'tick', 'doctor', 'run', 'teach', 'team']) {
     const t = fs.readFileSync(path.join(dir, `${c}.md`), 'utf8');
     assert(/^---\ndescription: .+\n/.test(t), `${c}.md lacks a description`);
     for (const m of t.matchAll(/node (\.harness\/[a-z-]+\.mjs)/g)) assert(fs.existsSync(path.join(REPO, m[1])), `${c}.md calls a missing script ${m[1]}`);
@@ -1010,6 +1010,237 @@ await test('doctor: a valid setup reports 0 failures and 0 warnings; profile pla
   assert(/ℹ memory\/profile\.md/.test(out) && /ℹ The background controller is not running/.test(out), 'the two notes are missing');
   fs.writeFileSync(path.join(d, '.harness', 'config.json'), '{ broken');
   assert(node(d, ['.harness/doctor.mjs']).status !== 0 || true, 'doctor must not crash silently');
+});
+
+await test('template for other teams: install into a project keeps its own team/charter, never copies this repo\'s local runtime files, and prints how to prompt it', () => {
+  const made = [];
+  for (const f of ['live.log', 'auto-state.json', 'state.json', 'telemetry.log']) {
+    const p = path.join(REPO, '.harness', f);
+    if (!fs.existsSync(p)) { fs.writeFileSync(p, 'LOCAL-RUNTIME-DATA'); made.push(p); }
+  }
+  try {
+    const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-team-fresh-'));
+    const r = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), fresh], { encoding: 'utf8' });
+    assert(r.status === 0, r.stderr);
+    for (const f of ['live.log', 'auto-state.json', 'state.json', 'telemetry.log']) assert(!fs.existsSync(path.join(fresh, '.harness', f)), `local runtime file leaked into the target: ${f}`);
+    assert(fs.existsSync(path.join(fresh, '.harness', 'team.json')) && fs.existsSync(path.join(fresh, '.harness', 'team.mjs')) && fs.existsSync(path.join(fresh, '.claude', 'commands', 'harness', 'team.md')), 'team files not installed');
+    assert(/\/harness:run/.test(r.stdout) && /dispatch\.mjs --goal .* --hierarchy/.test(r.stdout) && /doctor\.mjs/.test(r.stdout), `next steps not printed:\n${r.stdout}`);
+    const mine = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-team-own-'));
+    fs.mkdirSync(path.join(mine, '.harness'), { recursive: true });
+    const own = { version: 1, members: [{ id: 'boss', level: 'orchestrator', role: 'PO_ARCHITECT', reports_to: null }] };
+    fs.writeFileSync(path.join(mine, '.harness', 'team.json'), JSON.stringify(own));
+    spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), mine]);
+    assert(JSON.stringify(json(path.join(mine, '.harness', 'team.json'))) === JSON.stringify(own), 'the project\'s own team.json was overwritten');
+    const again = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), mine], { encoding: 'utf8' });
+    assert(again.status === 0, 're-running the installer must be safe');
+    // the installed copy works on its own: doctor + team commands run inside the new project
+    const ok = spawnSync(process.execPath, ['.harness/team.mjs', 'show'], { cwd: fresh, encoding: 'utf8' });
+    assert(ok.status === 0 && /L2  lead-dev/.test(ok.stdout), ok.stdout + ok.stderr);
+  } finally { for (const p of made) fs.rmSync(p, { force: true }); }
+});
+
+await test('/harness:team and /harness:run: the editor commands know the team mode, and team.mjs is allowed without a prompt (read-only)', () => {
+  const dir = path.join(REPO, '.claude', 'commands', 'harness');
+  const team = fs.readFileSync(path.join(dir, 'team.md'), 'utf8'); const run = fs.readFileSync(path.join(dir, 'run.md'), 'utf8');
+  assert(/^---\ndescription: .+\n/.test(team) && /team\.mjs show/.test(team) && /team\.mjs validate/.test(team) && /Do not change any file/.test(team), 'team.md');
+  assert(/--hierarchy/.test(run) && /--max-cost/.test(run) && /team\.mjs show/.test(run) && /orchestrator/.test(run) && /lead-dev\.impl/.test(run), 'run.md does not explain the team mode');
+  const st = json(path.join(REPO, '.claude', 'settings.json')).permissions;
+  assert(st.allow.includes('Bash(node .harness/team.mjs:*)') && !st.ask.includes('Bash(node .harness/team.mjs:*)'), 'team.mjs must be allowed');
+  assert(fs.readFileSync(path.join(REPO, '.harness', 'hook-session.mjs'), 'utf8').includes('/harness:run'), 'hook text');
+});
+
+// ───────────── v3.0: hierarchical orchestration (orchestrator → leads → workers), team guardrails, budgets ─────────────
+
+const gov = await import(path.join(REPO, '.harness', 'lib', 'governance.mjs'));
+const hierGoal = (orch, prefix = '') => `${prefix}Build the slug feature. ORCH_JSON ${JSON.stringify(orch)}`;
+const leadJson = (subtasks, prefix = '') => `${prefix}LEAD_JSON ${JSON.stringify({ subtasks })}`;
+const happyPlan = (cost = '') => ({
+  interfaceContract: 'slugify(text) -> lowercase-dashed string',
+  assignments: [
+    { lead: 'lead-ba', files: ['docs/slug.md'], goal: leadJson([{ id: 'spec', targetFiles: ['docs/slug.md'], prompt: `${cost}\nSLEEP 600\nWRITE docs/slug.md spec` }]) },
+    { lead: 'lead-dev', files: ['src/'], goal: leadJson([
+      { id: 'impl', targetFiles: ['src/slug.js'], prompt: `${cost}\nSLEEP 600\nWRITE src/slug.js code` },
+      { id: 'util', targetFiles: ['src/util.js'], prompt: `${cost}\nSLEEP 600\nWRITE src/util.js util` }]) },
+    { lead: 'lead-qa', files: ['tests/slug.test.js'], goal: leadJson([{ id: 'tests', targetFiles: ['tests/slug.test.js'], prompt: `${cost}\nSLEEP 600\nWRITE tests/slug.test.js t` }]) }]
+});
+const ALL4 = existsCheck('docs/slug.md', 'src/slug.js', 'src/util.js', 'tests/slug.test.js');
+const hierJob = (d, id, goal, extra = {}) => drop(d, { id, title: id, hierarchy: true, goal, verifyCmd: ALL4, ...extra });
+const stateOf = (d) => json(path.join(d, '.harness', 'state.json'));
+const calls = (d, f) => { try { return fs.readFileSync(path.join(d, '.mock-prompts', f), 'utf8').trim().split('\n').filter(Boolean); } catch { return []; } };
+const ranWorkers = (d) => fs.existsSync(path.join(d, '.mock-prompts')) && fs.readdirSync(path.join(d, '.mock-prompts')).some((f) => /^lead-[a-z]+\.[\w-]+\.txt$/.test(f));
+
+await test('hierarchy: orchestrator → 3 leads → 4 workers in parallel; each level read-only/scoped; plan + cost recorded; check passes', () => {
+  const d = sandbox();
+  hierJob(d, 'hier', hierGoal(happyPlan('MOCKCOST=0.01'), 'PLANCOST=0.01 '));
+  runOnce(d);
+  const s = stateOf(d);
+  assert(s.phase === '4_COMMITTED' && s.mode === 'SWARM-MESH (4W)', `${s.phase} ${s.mode} ${s.lastGateStatus}`);
+  assert(calls(d, 'orch-calls.txt').length === 1 && calls(d, 'lead-calls.txt').length === 3, 'expected 1 orchestrator call and 3 lead calls');
+  for (const line of [...calls(d, 'orch-calls.txt'), ...calls(d, 'lead-calls.txt')]) assert(/ALLOWED=Read,Glob,Grep /.test(line), `a planning level was not read-only: ${line}`);
+  const tools = (id) => argsOf(d, id).find((a) => a.startsWith('ALLOWED=')).slice(8).split(',');
+  assert(tools('lead-dev.impl').includes('Edit(src/slug.js)') && !tools('lead-dev.impl').some((t) => /push/.test(t)), tools('lead-dev.impl').join());
+  assert(tools('lead-qa.tests').includes('Bash(npm test:*)') && !tools('lead-qa.tests').some((t) => /node/.test(t)) && tools('lead-qa.tests').includes('Edit(tests/slug.test.js)'), tools('lead-qa.tests').join());
+  assert(tools('lead-ba.spec').includes('Edit(docs/slug.md)') && !tools('lead-ba.spec').some((t) => /npm|node/.test(t)), tools('lead-ba.spec').join());
+  const tl = fs.readFileSync(path.join(d, '.mock-prompts', 'timeline.txt'), 'utf8').trim().split('\n').map((l) => l.split(' '));
+  const wk = tl.filter((x) => /^lead-[a-z]+\./.test(x[2]));
+  assert(wk.filter((x) => x[1] === 'start').length === 4 && Math.max(...wk.filter((x) => x[1] === 'start').map((x) => +x[0])) < Math.min(...wk.filter((x) => x[1] === 'end').map((x) => +x[0])), 'workers did not all run in parallel');
+  const wp = promptOf(d, 'lead-dev.impl');
+  assert(wp.includes('[SHARED INTERFACE CONTRACT') && wp.includes('slugify(text)') && wp.includes('ROLE: DEV_ENGINEER') && wp.includes('[SCOPED TARGET FILES: src/slug.js]'), 'worker prompt lacks contract/role/scope');
+  const arch = json(path.join(d, '.harness', 'completed', ls(d, 'completed')[0]));
+  assert(arch.team.orchestrator === 'orchestrator' && arch.team.assignments.length === 3 && arch.team.assignments.find((a) => a.lead === 'lead-dev').workers.length === 2, JSON.stringify(arch.team));
+  assert(Math.abs(arch.costUsd - 0.08) < 1e-9 && Object.keys(arch.costByAgent).length === 8, `cost ${arch.costUsd} ${JSON.stringify(arch.costByAgent)}`);
+  const note = fs.readdirSync(path.join(d, '.harness', 'memory', 'sessions')).map((f) => fs.readFileSync(path.join(d, '.harness', 'memory', 'sessions', f), 'utf8')).join('');
+  assert(/- Team: orchestrator → lead-ba \(lead-ba\.spec\); lead-dev \(lead-dev\.impl, lead-dev\.util\)/.test(note) && /- Cost: \$0\.0800/.test(note), 'session note lacks team/cost');
+});
+
+await test('hierarchy guardrails (level 1): a delegation that breaks a rule is re-asked once, then REJECTED before any worker starts', () => {
+  const lead = (l, files, g = 'x') => ({ lead: l, files, goal: leadJson([{ id: 'w', targetFiles: files, prompt: 'WRITE x y' }], g) });
+  const cases = [
+    [{ assignments: [lead('lead-x', ['src/a.js'])] }, /not a lead you may delegate to/],
+    [{ assignments: [lead('lead-dev', ['docs/a.md'])] }, /outside lead "lead-dev"'s scope/],
+    [{ assignments: [lead('lead-dev', ['src/a.js']), lead('lead-dev', ['src/b.js'])] }, /assigned twice/],
+    [{ assignments: [lead('lead-dev', ['../escape.js'])] }, /unsafe path/],
+    [{ assignments: [lead('lead-dev', ['.harness/config.json'])] }, /unsafe path/],
+    [{ assignments: [] }, /no "assignments"/]
+  ];
+  for (const [plan, re] of cases) {
+    const d = sandbox();
+    hierJob(d, 'bad', hierGoal(plan));
+    runOnce(d);
+    const s = stateOf(d);
+    assert(s.phase === 'REJECTED' && re.test(s.lastGateStatus), `${re}: ${s.phase} ${s.lastGateStatus}`);
+    assert(calls(d, 'orch-calls.txt').length === 2, `orchestrator should be asked twice, was ${calls(d, 'orch-calls.txt').length}`);
+    assert(calls(d, 'lead-calls.txt').length === 0 && !ranWorkers(d), 'a lower level ran after an invalid delegation');
+    assert(ls(d, 'failed').length === 1, 'job not in failed/');
+  }
+  const d2 = sandbox(); hierJob(d2, 'nojson', 'no json here');
+  runOnce(d2);
+  assert(/not valid JSON/.test(stateOf(d2).lastGateStatus), stateOf(d2).lastGateStatus);
+});
+
+await test('hierarchy guardrails (level 2): a lead that plans outside its assignment, too many workers, or nothing is escalated to the human; no worker starts', () => {
+  const mk = (subtasks) => ({ assignments: [{ lead: 'lead-dev', files: ['src/a.js'], goal: leadJson(subtasks) }] });
+  const w = (id, f) => ({ id, targetFiles: [f], prompt: 'WRITE src/a.js x' });
+  const cases = [
+    [mk([w('a', 'src/other.js')]), /outside your assigned files/],
+    [mk([w('a', 'src/a.js'), w('b', 'src/a.js'), w('c', 'src/a.js'), w('d', 'src/a.js')]), /too many workers/],
+    [mk([{ id: 'a', targetFiles: [], prompt: 'x' }]), /no targetFiles/],
+    [mk([{ id: 'a', targetFiles: ['src/a.js'], prompt: '' }]), /no prompt/],
+    [mk([w('a', '../x.js')]), /unsafe path/]
+  ];
+  for (const [plan, re] of cases) {
+    const d = sandbox();
+    hierJob(d, 'badlead', hierGoal(plan), { verifyCmd: PASS });
+    runOnce(d);
+    const s = stateOf(d);
+    assert(s.phase === 'REJECTED' && /Lead 'lead-dev' could not produce a valid team plan/.test(s.lastGateStatus) && re.test(s.lastGateStatus) && /Escalated to you/.test(s.lastGateStatus), `${re}: ${s.lastGateStatus}`);
+    assert(calls(d, 'lead-calls.txt').length === 2, `lead should be asked twice, was ${calls(d, 'lead-calls.txt').length}`);
+    assert(!ranWorkers(d), 'a worker ran although a lead plan was invalid');
+  }
+});
+
+await test('team.json: validateTeam rejects every way of breaking the hierarchy (writable orchestrator, wider/overlapping scopes, forbidden paths, budgets, bad roles)', () => {
+  const roles = gov.loadRoles(); const charter = gov.readCharter();
+  const base = () => JSON.parse(fs.readFileSync(path.join(REPO, '.harness', 'team.json'), 'utf8'));
+  const v = (t) => gov.validateTeam(t, { roles, charter, plannerMaxWorkers: 4 });
+  assert(v(base()).errors.length === 0, `shipped team invalid: ${v(base()).errors}`);
+  const bad = [
+    [(t) => { t.members[0].role = 'DEV_ENGINEER'; }, /must be read-only/],
+    [(t) => { t.members.push({ ...t.members[0], id: 'orch2' }); }, /exactly one orchestrator/],
+    [(t) => { t.members.find((m) => m.id === 'lead-ba').scope = ['src/**']; }, /wider than what role BA_ANALYST may write/],
+    [(t) => { t.members.find((m) => m.id === 'lead-qa').scope = ['src/**']; }, /wider than what role QA_AUDITOR may write|overlapping scopes/],
+    [(t) => { t.members.find((m) => m.id === 'lead-dev').scope = ['src/**', 'docs/**']; }, /overlapping scopes/],
+    [(t) => { t.members.find((m) => m.id === 'lead-dev').scope = ['.env*']; }, /charter forbids/],
+    [(t) => { t.members.find((m) => m.id === 'lead-dev').scope = ['node_modules/**']; }, /charter forbids/],
+    [(t) => { t.members.find((m) => m.id === 'lead-dev').budget.maxCostUsd = 5; }, /budgets must shrink downwards/],
+    [(t) => { t.members.find((m) => m.id === 'lead-dev').budget.maxMinutes = 99; }, /exceeds the orchestrator's/],
+    [(t) => { t.members.find((m) => m.id === 'lead-dev').role = 'HACKER'; }, /unknown role/],
+    [(t) => { t.members.find((m) => m.id === 'lead-dev').role = 'PO_ARCHITECT'; }, /read-only/],
+    [(t) => { t.members.find((m) => m.id === 'lead-dev').maxWorkers = 99; }, /maxWorkers must be/],
+    [(t) => { t.members.find((m) => m.id === 'lead-dev').reports_to = 'lead-ba'; }, /must report to the orchestrator/],
+    [(t) => { t.members.find((m) => m.id === 'lead-dev').scope = []; }, /non-empty "scope"/],
+    [(t) => { t.members.find((m) => m.id === 'lead-dev').level = 'worker'; }, /level must be/],
+    [(t) => { t.members[0].canDelegateTo = ['ghost']; }, /not a lead/],
+    [(t) => { t.members.find((m) => m.id === 'lead-qa').id = 'lead-dev'; }, /duplicate member id/]
+  ];
+  for (const [mutate, re] of bad) { const t = base(); mutate(t); const r = v(t); assert(r.errors.some((e) => re.test(e)), `${re} not reported; got: ${r.errors.join(' | ')}`); }
+  assert(gov.validateTeam({}, { roles }).errors.length > 0 && gov.validateTeam(null, { roles }).errors.length > 0, 'a missing/empty team must be an error');
+});
+
+await test('team.json: an invalid team stops the task before any agent is called; a missing team is reported; Doctor and team.mjs agree', () => {
+  const d = sandbox();
+  const t = json(path.join(d, '.harness', 'team.json')); t.members.find((m) => m.id === 'lead-dev').scope = ['src/**', 'docs/**'];
+  fs.writeFileSync(path.join(d, '.harness', 'team.json'), JSON.stringify(t));
+  hierJob(d, 'badteam', hierGoal(happyPlan()));
+  runOnce(d);
+  assert(stateOf(d).phase === 'REJECTED' && /team\.json is invalid, nothing was started/.test(stateOf(d).lastGateStatus) && calls(d, 'orch-calls.txt').length === 0, stateOf(d).lastGateStatus);
+  const doc = node(d, ['.harness/doctor.mjs']);
+  assert(doc.status !== 0 && /✖ team\.json: leads "lead-ba" and "lead-dev"|✖ team\.json: leads "lead-dev" and "lead-ba"|overlapping scopes/.test(doc.stdout), doc.stdout.split('\n').filter((l) => /team/.test(l)).join('\n'));
+  assert(node(d, ['.harness/team.mjs', 'validate']).status === 1, 'team.mjs validate should fail');
+  const d2 = sandbox(); fs.rmSync(path.join(d2, '.harness', 'team.json'));
+  hierJob(d2, 'noteam', hierGoal(happyPlan()));
+  runOnce(d2);
+  assert(/team\.json does not exist/.test(stateOf(d2).lastGateStatus), stateOf(d2).lastGateStatus);
+  const d3 = sandbox();
+  const show = node(d3, ['.harness/team.mjs', 'show']);
+  assert(show.status === 0 && /L1  orchestrator  \[PO_ARCHITECT\]/.test(show.stdout) && /L2  lead-dev  \[DEV_ENGINEER\]/.test(show.stdout) && /owns: src\/\*\*/.test(show.stdout) && /team is valid/.test(show.stdout), show.stdout);
+  assert(/team\.json valid: orchestrator → 3 lead\(s\)/.test(node(d3, ['.harness/doctor.mjs']).stdout), 'Doctor does not report the valid team');
+});
+
+await test('budget: the task cap stops a hierarchy right after planning when the planners already cost too much — no worker starts; cost is in the dead letter', () => {
+  const d = sandbox();
+  hierJob(d, 'cap', hierGoal(happyPlan(), 'PLANCOST=0.04 '), { maxCostUsd: 0.05 });
+  runOnce(d);
+  const s = stateOf(d);
+  assert(s.phase === 'REJECTED' && /BUDGET_EXCEEDED/.test(s.lastGateStatus), `${s.phase} ${s.lastGateStatus}`);
+  assert(!ranWorkers(d), 'workers started although the budget was already exceeded');
+  const f = json(path.join(d, '.harness', 'failed', ls(d, 'failed')[0]));
+  assert(f.costUsd > 0.05 && f.costByAgent.orchestrator === 0.04 && Object.keys(f.costByAgent).filter((k) => k.startsWith('lead-')).length === 3, JSON.stringify(f.costByAgent));
+  assert(log(d).some((e) => e.phase === 'BUDGET_EXCEEDED'), 'no BUDGET_EXCEEDED event');
+});
+
+await test('budget: a worker over its lead\'s per-agent cap is stopped (BUDGET_AGENT_EXCEEDED) and the files are restored', () => {
+  const d = sandbox();
+  fs.mkdirSync(path.join(d, 'docs')); fs.writeFileSync(path.join(d, 'docs', 'slug.md'), 'ORIGINAL');
+  const plan = happyPlan(); plan.assignments[0].goal = leadJson([{ id: 'spec', targetFiles: ['docs/slug.md'], prompt: 'MOCKCOST=0.9\nWRITE docs/slug.md CHANGED' }]);
+  hierJob(d, 'agentcap', hierGoal(plan));
+  runOnce(d);
+  assert(stateOf(d).phase === 'REJECTED' && /BUDGET_AGENT_EXCEEDED: worker lead-ba\.spec/.test(stateOf(d).lastGateStatus), stateOf(d).lastGateStatus);
+  assert(fs.readFileSync(path.join(d, 'docs', 'slug.md'), 'utf8') === 'ORIGINAL', 'file not restored after the budget stop');
+});
+
+await test('budget: a non-hierarchy task with maxCostUsd never starts another cycle once over budget (cap beats the 3-cycle limit)', () => {
+  const d = sandbox();
+  drop(d, { id: 'cyclecap', title: 'cc', maxCostUsd: 0.05, verifyCmd: FAIL_VERIFY, subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'MOCKCOST=0.04\nWRITE a.txt x' }] });
+  runOnce(d);
+  assert(stateOf(d).phase === 'REJECTED' && /BUDGET_EXCEEDED/.test(stateOf(d).lastGateStatus), `${stateOf(d).phase} ${stateOf(d).lastGateStatus}`);
+  const f = json(path.join(d, '.harness', 'failed', ls(d, 'failed')[0]));
+  assert(f.costUsd === 0.08 && log(d).filter((e) => e.phase === 'SQUARE_RETRY').length === 1, `cost ${f.costUsd}, retries ${log(d).filter((e) => e.phase === 'SQUARE_RETRY').length}: stopped after 2 cycles, not 3`);
+  assert(!fs.existsSync(path.join(d, 'a.txt')), 'files not restored after the budget stop');
+});
+
+await test('hierarchy via backlog: an autonomous item with "hierarchy": true runs the whole team inside the charter and ends DONE', () => {
+  const d = sandbox(); setCharter(d, { autonomous: 'on' });
+  setBacklog(d, [{ id: 'H1', title: 'team feature', priority: 1, status: 'READY', hierarchy: true, maxCostUsd: 1, goal: hierGoal(happyPlan()), verifyCmd: ALL4 }]);
+  tick(d);
+  assert(byId(d, 'H1').status === 'DONE', `${byId(d, 'H1').status} ${byId(d, 'H1').blockedReason || ''}`);
+  const arch = json(path.join(d, '.harness', 'completed', ls(d, 'completed')[0]));
+  assert(arch.autonomous === true && arch.hierarchy === true && arch.team.assignments.length === 3, 'job lost the hierarchy/autonomous flags');
+  // charter still binds the team: a team whose lead scope exceeds the charter's allowedPaths is rejected for autonomous work
+  const d2 = sandbox(); setCharter(d2, { autonomous: 'on', allowedPaths: 'src/**' });
+  setBacklog(d2, [{ id: 'H2', title: 'team feature', priority: 1, status: 'READY', hierarchy: true, goal: hierGoal(happyPlan()), verifyCmd: ALL4 }]);
+  tick(d2);
+  assert(byId(d2, 'H2').status === 'BLOCKED' && /outside charter allowedPaths/.test(byId(d2, 'H2').blockedReason || ''), `${byId(d2, 'H2').status} ${byId(d2, 'H2').blockedReason}`);
+});
+
+await test('dispatch --hierarchy / --max-cost: writes a hierarchy job (no subtasks yet), validates the cost, runs end to end; hierarchy+cap shown in --help', () => {
+  const d = sandbox();
+  const r = node(d, ['.harness/dispatch.mjs', '--goal', hierGoal(happyPlan()), '--hierarchy', '--max-cost', '1.5', '--check', ALL4, '--wait']);
+  assert(r.status === 0 && /orchestrator → leads → workers, per team\.json/.test(r.stdout) && /RESULT: COMMITTED/.test(r.stdout), r.stdout + r.stderr);
+  const arch = json(path.join(d, '.harness', 'completed', ls(d, 'completed')[0]));
+  assert(arch.hierarchy === true && arch.maxCostUsd === 1.5 && !arch.subtasks, JSON.stringify(Object.keys(arch)));
+  assert(node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--hierarchy', '--max-cost', 'lots']).status === 1, 'a non-numeric --max-cost must be refused');
+  assert(/--hierarchy/.test(node(d, ['.harness/dispatch.mjs', '--help']).stdout), 'help does not mention --hierarchy');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

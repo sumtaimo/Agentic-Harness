@@ -44,6 +44,23 @@ Pick one:
 | A copy without GitHub | Click **Code → Download ZIP**, unzip it, open the folder in your editor. |
 | Add it to an **existing project** | Download/clone this repo, then run `node install.mjs /path/to/your/project`. It never overwrites your files: existing `AGENTS.md`, `CLAUDE.md`, `.vscode/tasks.json` etc. get a harness section *added*. |
 
+### Hand it to another team (5 minutes, nothing installed globally)
+This repo is a template any team can drop into **their own project**. Everything is plain files in the project:
+```bash
+git clone <this repo> agentic-harness
+node agentic-harness/install.mjs /path/to/their/project     # safe to re-run; never overwrites their files
+cd /path/to/their/project && node .harness/doctor.mjs         # checks Node, the AI engine, git, the team, the rules
+```
+Then they simply **prompt it**, from either place:
+- **Editor (Claude Code):** open the project, accept the trust dialog once, and type `/harness:run <what you want>`.
+  Say "use the team" (or ask for something big) and it runs the agent hierarchy; the agents appear in the chat live.
+- **Terminal:** `node .harness/daemon.mjs` in one terminal, then in another
+  `node .harness/dispatch.mjs --goal "<what you want>" --hierarchy --max-cost 2 --wait` and watch the agents work.
+
+Each team then makes it theirs by editing plain files: `.harness/team.json` (who is on the agent team and what each may touch),
+`.harness/charter.md` (what the harness may do on its own), `.harness/roles/` and `.harness/skills/` (personas and rules),
+`.harness/memory/` (what the AIs should remember). Their own versions are kept when the installer is run again.
+
 ## 2. One-time setup (about 10 minutes)
 
 1. **Install Node.js 18 or newer** from <https://nodejs.org> (the LTS button).
@@ -83,6 +100,32 @@ Or just **talk to your editor's AI chat**. It reads `AGENTS.md`, so you can say 
 > Use the harness to add a contact form to the homepage, and check it with the tests.
 
 > Remember that I want every answer as short numbered steps.
+
+### The agent team: orchestrator → leads → workers (`--hierarchy`)
+For a big goal, three levels of real agents work together, defined in **`.harness/team.json`**:
+
+```
+L1  orchestrator [PO_ARCHITECT]       plans only; read-only. Splits the goal between the leads.
+├─ L2  lead-ba  [BA_ANALYST]    owns docs/**   → plans its own workers
+├─ L2  lead-dev [DEV_ENGINEER]  owns src/**    → plans its own workers
+└─ L2  lead-qa  [QA_AUDITOR]    owns tests/**  → plans its own workers
+      └─ L3  workers (created by each lead, with the lead's role): they do the work, in parallel
+```
+`node .harness/team.mjs show` prints it with every member's set-up (role, scope, tools, budget). Each member has its own set-up in that file.
+Run it with `node .harness/dispatch.mjs --goal "…" --hierarchy --max-cost 2` or `/harness:run` (say "use the team").
+
+What the controller enforces deterministically, so no agent can talk its way around it:
+- **Every level is validated before the next one starts.** The orchestrator may only give a lead files inside that lead's scope,
+  never two leads the same file, never `..`/`.git`/`.harness`; a lead may only give its workers files inside what it was assigned,
+  and no more workers than its limit. A broken plan is re-asked once; a lead that still fails is **escalated to you** and nothing runs.
+- **Permissions only narrow downwards.** The orchestrator and the leads are read-only (the engine only gets Read/Glob/Grep). A lead's scope
+  can only be narrower than its role's writable paths, can never touch what the charter forbids, and two leads' scopes can never overlap
+  (`team.mjs validate` and Doctor reject an invalid team before any agent is started). Workers get their role's tools and only their files.
+- **Budgets only shrink downwards and are counted by the controller.** `--max-cost` (or the orchestrator's budget in `team.json`) is a hard cap on the
+  whole task: the real cost of every agent is added up and the task stops with `BUDGET_EXCEEDED` (files restored) as soon as it is over, and a
+  worker over its lead's own cap stops with `BUDGET_AGENT_EXCEEDED`. A running agent cannot be stopped by cost mid-run, so the check happens when it
+  reports back (and no new agents or cycles start once over). Each lead's `maxMinutes` is also its agents' time limit.
+- Cost per agent, the plan, and who did what are written to the session note and the job archive.
 
 ### The check (verifier)
 The check is what makes this safe: the work is only accepted when the check command succeeds.
@@ -131,6 +174,7 @@ The template ships a project config for Claude Code (VS Code extension, terminal
 | `/harness:status` | runs `node .harness/status.mjs` + the backlog overview and summarises them in plain words |
 | `/harness:tick` | one autonomous step (`node .harness/daemon.mjs --tick`). It first checks the charter: if `autonomous: off` it stops and asks, and never edits the charter itself |
 | `/harness:doctor` | runs `node .harness/doctor.mjs` and explains every failure, warning and note |
+| `/harness:team` | shows the agent team (orchestrator → leads → workers), each member's scope and budget, and whether the team is valid |
 | `/harness:teach <rule>` | saves a rule to memory for every AI in the project |
 
 `.claude/settings.json` adds permission rules and the hook:
@@ -359,8 +403,9 @@ node .harness/memory.mjs list|remember|forget|context|sessions
 node .harness/doctor.mjs                 # setup check + engine flag probe
 node .harness/status.mjs --log 25        # state + recent JSONL events
 node .harness/watch.mjs --job <id>       # live feed of every agent action until that job finishes
-node test/run-tests.mjs                  # 65 end-to-end tests with a mock engine (no AI account needed, free)
-npm run test:live                        # REAL Claude agents end to end (manual task, autonomous uat run, editor config); ~$0.5, needs `claude` logged in
+node test/run-tests.mjs                  # 77 end-to-end tests with a mock engine (no AI account needed, free)
+npm run test:live                        # REAL Claude agents end to end (manual task, autonomous uat run, agent-team hierarchy, editor config); ~$1.5, needs `claude` logged in
+node .harness/team.mjs show|validate     # the agent team and its guardrails
 ```
 
 Job file format (`.harness/inbox/*.json`):

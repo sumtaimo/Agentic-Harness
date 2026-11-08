@@ -298,6 +298,8 @@ export function recordSession(record) {
     `- Verify command: \`${record.verifyCmd}\` (${record.verifySource || 'given by task'})`,
     ...(record.git ? [`- Git: ${record.git.mergedSha ? `merged into **${record.git.branch}** @ ${record.git.mergedSha.slice(0, 8)} (from ${record.git.baseSha.slice(0, 8)})` : `**${record.git.branch}** unchanged`}; worker branches ${record.git.workerBranches.join(', ') || '-'}${record.git.keptBranches ? ' (kept for review)' : ' (deleted)'}; protected branches ${record.git.protectedUnchanged ? 'unchanged' : 'CHANGED — check!'}`] : []),
     ...(record.planner ? [`- Plan: ${record.planner}`] : []),
+    ...(record.team ? [`- Team: ${record.team.orchestrator} → ${record.team.assignments.map((a) => `${a.lead} (${a.workers.map((w) => w.id).join(', ')})`).join('; ')}`] : []),
+    ...(record.costUsd ? [`- Cost: $${record.costUsd.toFixed(4)} (${Object.entries(record.costByAgent || {}).map(([k, v]) => `${k} $${v.toFixed(4)}`).join(', ')})`] : []),
     ...(record.rollback ? [`- Rollback: ${record.rollback}`] : []),
     `- Finished: ${record.finishedAt}`,
     '',

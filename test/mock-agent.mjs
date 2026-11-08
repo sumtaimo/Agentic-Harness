@@ -24,12 +24,34 @@ fs.writeFileSync(path.join(MP, `${id}.txt`), prompt);
 fs.writeFileSync(path.join(MP, `${id}.args.json`), JSON.stringify(process.argv.slice(2)));
 fs.appendFileSync(path.join(MP, 'timeline.txt'), `${Date.now()} start ${id}\n`);
 
+// Cost the mock reports: planners (orchestrator / lead / PO / planner) read PLANCOST=0.04 anywhere in their prompt;
+// a worker reads MOCKCOST=0.04 only from ITS OWN task instructions (so it cannot leak into the planners' prompts).
+const mockCost = Number((prompt.match(/PLANCOST=([\d.]+)/) || [])[1] || 0);
+const workerCost = Number(((prompt.split('[TASK INSTRUCTIONS]:')[1] || '').match(/MOCKCOST=([\d.]+)/) || [])[1] || 0);
+
+// ORCHESTRATOR mode (hierarchy level 1): echo back "ORCH_JSON {...}" from the goal (one line).
+if (prompt.startsWith('[HARNESS ORCHESTRATOR]')) {
+  fs.appendFileSync(path.join(MP, 'orch-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);
+  const plan = (prompt.match(/ORCH_JSON (\{.*\})/) || [])[1] || 'not json';
+  console.log(JSON.stringify({ type: 'result', is_error: false, result: plan, total_cost_usd: mockCost }));
+  process.exit(0);
+}
+
+// LEAD mode (hierarchy level 2): echo back "LEAD_JSON {...}" found in ITS OWN assignment (not the overall goal).
+if (prompt.startsWith('[HARNESS LEAD ')) {
+  fs.appendFileSync(path.join(MP, 'lead-calls.txt'), `${id} ${process.argv.slice(2).join(' ')}\n`);
+  const own = prompt.split('[YOUR ASSIGNED FILES]')[0].split(/\[ASSIGNMENT from [^\]]*\]:/)[1] || '';
+  const plan = (own.match(/LEAD_JSON (\{.*\})/) || [])[1] || 'not json';
+  console.log(JSON.stringify({ type: 'result', is_error: false, result: plan, total_cost_usd: mockCost }));
+  process.exit(0);
+}
+
 // PO_ARCHITECT mode: echo back the task list embedded in charter.md as "PO_JSON {...}" (one line).
 if (prompt.startsWith('[HARNESS PO_ARCHITECT]')) {
   fs.appendFileSync(path.join(MP, 'po-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);
   fs.writeFileSync(path.join(MP, 'po.txt'), prompt);
   const plan = (prompt.match(/PO_JSON (\{.*\})/) || [])[1] || 'not json';
-  console.log(JSON.stringify({ type: 'result', is_error: false, result: plan }));
+  console.log(JSON.stringify({ type: 'result', is_error: false, result: plan, total_cost_usd: mockCost }));
   process.exit(0);
 }
 
@@ -38,7 +60,7 @@ if (prompt.startsWith('[HARNESS PLANNER]')) {
   fs.appendFileSync(path.join(MP, 'planner-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);
   fs.writeFileSync(path.join(MP, 'planner.txt'), prompt);
   const plan = (prompt.match(/PLAN_JSON (\{.*\})/) || [])[1] || 'not json';
-  console.log(JSON.stringify({ type: 'result', is_error: false, result: 'Here is the plan:\n```json\n' + plan + '\n```' }));
+  console.log(JSON.stringify({ type: 'result', is_error: false, result: 'Here is the plan:\n```json\n' + plan + '\n```', total_cost_usd: mockCost }));
   process.exit(0);
 }
 
@@ -61,5 +83,5 @@ for (const line of task.split('\n')) {
   }
 }
 fs.appendFileSync(path.join(MP, 'timeline.txt'), `${Date.now()} end ${id}\n`);
-const result = { type: 'result', is_error: false, result: `mock ${id} done`, duration_ms: 42, permission_denials: denials };
+const result = { type: 'result', is_error: false, result: `mock ${id} done`, duration_ms: 42, permission_denials: denials, total_cost_usd: workerCost };
 console.log(JSON.stringify(result));

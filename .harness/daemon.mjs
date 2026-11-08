@@ -35,7 +35,8 @@ import {
 } from './lib/common.mjs';
 import {
   readCharter, loadRoles, loadSkills, matchSkills, computeAllowedTools, computeDisallowedTools,
-  matchesAny, withinAll, skillRulesNotGranted, readBacklog, writeBacklog, updateBacklogItem, nextReady, backlogCounts, itemToJob
+  matchesAny, withinAll, skillRulesNotGranted, readBacklog, writeBacklog, updateBacklogItem, nextReady, backlogCounts, itemToJob,
+  loadTeam, validateTeam
 } from './lib/governance.mjs';
 import {
   isRepoWithCommits, branchSha, ensureBranch, protectedShas, ensureWorkerWorktree, commitScoped,
@@ -283,7 +284,8 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallo
       try {
         const r = summarizeOutput(stdout);
         if (r.denials.length) logTelemetry('PERMISSION_DENIED', `${id}: engine denied ${r.denials.length} action(s) outside its role`, { worker: id, denials: r.denials });
-        done(resolve, { engine: profile.name, output: r.text, denials: r.denials });
+        trackCost(id, r.cost);
+        done(resolve, { engine: profile.name, output: r.text, denials: r.denials, costUsd: r.cost });
       } catch (e) { done(reject, e); }
     });
   });
@@ -305,9 +307,32 @@ function summarizeOutput(stdout) {
   if (j && typeof j === 'object' && 'result' in j) {
     if (j.is_error) throw new Error(`Engine reported an error: ${String(j.result).slice(0, 2000)}`);
     const denials = (j.permission_denials || []).map((d) => ({ tool: d.tool_name, target: d.tool_input?.file_path || d.tool_input?.command || '' }));
-    return { text: String(j.result), denials };
+    return { text: String(j.result), denials, cost: Number(j.total_cost_usd) || 0 };
   }
-  return { text, denials: [] };
+  return { text, denials: [], cost: 0 };
+}
+
+// ── cost accounting + budget guardrails (deterministic: the controller counts, the agent cannot) ──
+const taskCost = { usd: 0, agents: {} };
+const resetCost = () => { taskCost.usd = 0; taskCost.agents = {}; };
+function trackCost(id, usd) {
+  const c = Number(usd) || 0;
+  taskCost.usd += c; taskCost.agents[id] = (taskCost.agents[id] || 0) + c;
+  if (c > 0) logTelemetry('AGENT_COST', `${id}: $${c.toFixed(4)} (task total $${taskCost.usd.toFixed(4)})`, { agent: id, usd: c, total: taskCost.usd });
+  writeState({ costUsd: Math.round(taskCost.usd * 10000) / 10000 });
+}
+/** Cost cap for a task: its own maxCostUsd, else (hierarchy) the orchestrator's budget, else config.budget.maxTaskCostUsd. */
+function budgetCap(task) {
+  if (typeof task.maxCostUsd === 'number') return task.maxCostUsd;
+  if (task.hierarchy) { const o = (loadTeam()?.members || []).find((m) => m.level === 'orchestrator'); if (typeof o?.budget?.maxCostUsd === 'number') return o.budget.maxCostUsd; }
+  return typeof config.budget?.maxTaskCostUsd === 'number' ? config.budget.maxTaskCostUsd : null;
+}
+function enforceBudget(task, where) {
+  const cap = budgetCap(task);
+  if (cap !== null && taskCost.usd > cap + 1e-9) {
+    logTelemetry('BUDGET_EXCEEDED', `Task spent $${taskCost.usd.toFixed(4)} > cap $${cap} after ${where}`, { cap, spent: taskCost.usd, agents: taskCost.agents });
+    throw fatal(`BUDGET_EXCEEDED: the task has spent $${taskCost.usd.toFixed(3)} against its cap of $${cap} (after ${where}). The controller stopped it; raise "maxCostUsd" only if you accept the cost.`);
+  }
 }
 
 /** Which memory parts the engine already loads itself (e.g. CLAUDE.md "@.harness/memory/lessons.md"). */
@@ -667,6 +692,164 @@ async function aiDecompose(task, gov) {
   throw fatal(`AI planner could not produce a valid plan after ${attempts} attempt(s): ${feedback}`);
 }
 
+// ───────────────────────────── hierarchy: orchestrator → leads → workers ─────────────────────────────
+// Level 1 (orchestrator, read-only) splits the goal between leads; level 2 (each lead, read-only) splits its
+// slice into workers; level 3 (workers) do the work in parallel. The controller validates every level
+// deterministically (team.json guardrails, scopes, no overlaps, worker limits) before the next one starts, and
+// counts the cost of every agent against the budget. An invalid lead plan is escalated to the human.
+
+const stripSlash = (f) => String(f).replace(/\/$/, '');
+const minutesToMs = (m, dflt) => (typeof m === 'number' && m > 0 ? Math.round(m * 60000) : dflt);
+
+async function hierDecompose(task, gov) {
+  const team = loadTeam();
+  if (!team) throw fatal('This task asks for the team hierarchy, but .harness/team.json does not exist.');
+  const pc = config.planner || {};
+  const { errors } = validateTeam(team, { roles: gov.roles, charter: gov.charter, plannerMaxWorkers: pc.maxWorkers || 4 });
+  if (errors.length) throw fatal(`team.json is invalid, nothing was started: ${errors.join('; ')}`);
+  const orch = team.members.find((m) => m.level === 'orchestrator');
+  const leads = team.members.filter((m) => m.level === 'lead');
+  const delegable = new Set(orch.canDelegateTo?.length ? orch.canDelegateTo : leads.map((l) => l.id));
+  const attempts = pc.maxAttempts || 2;
+  const goalText = task.goal || task.prompt || task.title;
+  const userAllowed = (task.targetFiles || []).map(safeTarget).filter(Boolean);
+  const { files, total } = listProjectFiles(ROOT, pc.maxFilesListed || 400);
+  const scripts = readJsonSafe(path.join(ROOT, 'package.json'), null)?.scripts;
+  const memory = memoryContext(config);
+  const readOnly = ['Read', 'Glob', 'Grep'];
+  const deny = computeDisallowedTools(gov.charter);
+  const persona = (m) => { const r = gov.roles[String(m.role).toUpperCase()]; return r?.mission || r?.description || m.role; };
+  const context = [
+    `\n[PROJECT FILES (${files.length} of ${total})]:\n${files.join('\n') || '(empty project)'}`,
+    scripts ? `\n[package.json scripts]:\n${JSON.stringify(scripts, null, 2)}` : '',
+    memory ? `\n[USER MEMORY]:\n${memory}` : ''
+  ];
+  const leadLine = (l) => `- ${l.id} (role ${l.role}; may own: ${l.scope.join(', ')}; up to ${l.maxWorkers ?? 3} workers)`;
+
+  // ── level 1: the orchestrator delegates the goal to leads
+  const validateAssignments = (plan) => {
+    if (!Array.isArray(plan.assignments) || !plan.assignments.length) throw new Error('JSON has no "assignments" list.');
+    const seenLeads = new Set(); const claimed = [];
+    for (const a of plan.assignments) {
+      const lead = leads.find((l) => l.id === a.lead);
+      if (!lead || !delegable.has(lead.id)) throw new Error(`assignment to "${a.lead}": that is not a lead you may delegate to (${[...delegable].join(', ')}).`);
+      if (seenLeads.has(lead.id)) throw new Error(`lead "${lead.id}" is assigned twice; use each lead at most once.`);
+      seenLeads.add(lead.id);
+      if (typeof a.goal !== 'string' || !a.goal.trim()) throw new Error(`assignment to "${lead.id}" has no goal.`);
+      if (!Array.isArray(a.files) || !a.files.length) throw new Error(`assignment to "${lead.id}" has no files.`);
+      a.files = a.files.map((f) => { const s = safeTarget(f); if (!s) throw new Error(`assignment to "${lead.id}" has an unsafe path "${f}".`); return String(f).endsWith('/') ? `${s}/` : s; });
+      for (const f of a.files) {
+        if (!withinAll(f, lead.scope)) throw new Error(`file "${f}" is outside lead "${lead.id}"'s scope (${lead.scope.join(', ')}).`);
+        if (userAllowed.length && !inScope(stripSlash(f), userAllowed)) throw new Error(`file "${f}" is outside the files the user allowed (${userAllowed.join(', ')}).`);
+        for (const [other, by] of claimed) if (by !== lead.id && (stripSlash(f) === stripSlash(other) || stripSlash(f).startsWith(`${stripSlash(other)}/`) || stripSlash(other).startsWith(`${stripSlash(f)}/`))) throw new Error(`Swarm Lock Collision: "${f}" (${lead.id}) overlaps "${other}" (${by}).`);
+        claimed.push([f, lead.id]);
+      }
+    }
+    return plan;
+  };
+
+  let plan = null; let feedback = '';
+  for (let attempt = 1; attempt <= attempts && !plan; attempt++) {
+    writeState({ phase: '1_ORCHESTRATOR', planSummary: `${orch.id} is delegating the goal to the leads (attempt ${attempt}/${attempts})…` });
+    const prompt = [
+      '[HARNESS ORCHESTRATOR]',
+      `You are ${orch.id}, the ORCHESTRATOR (level 1) of an agent team. Persona: ${persona(orch)}`,
+      'You only PLAN. Do NOT create, edit or delete any file. You may read files to understand the project.',
+      'Split the GOAL between the team leads below. Each lead plans its own slice and starts its own workers, so give every lead a clear goal for its slice and the exact files its team will own.',
+      'Rules (the controller checks every one and rejects the plan otherwise):',
+      '- Use each lead at most once; skip leads that have nothing to do.',
+      '- Every file you assign must be inside that lead\'s scope, files must not overlap between leads, and never use absolute paths, "..", ".git/" or ".harness/".',
+      userAllowed.length ? `- The user only allows files inside: ${userAllowed.join(', ')}` : '',
+      '- Put the exact names, signatures and return values that teams share into "interfaceContract"; every worker receives it.',
+      'Reply with ONLY this JSON object, no other text:',
+      '{"interfaceContract":"shared names, signatures, return values","assignments":[{"lead":"lead-id","goal":"what this lead\'s team must achieve","files":["path/file.ext"]}],"verifySuggestion":"optional"}',
+      `\n[TEAM LEADS]:\n${leads.filter((l) => delegable.has(l.id)).map(leadLine).join('\n')}`,
+      `\n[GOAL]:\n${goalText}`,
+      ...context,
+      feedback ? `\n[YOUR PREVIOUS PLAN WAS REJECTED — fix this]:\n${feedback}` : ''
+    ].filter(Boolean).join('\n');
+    logTelemetry('1_ORCHESTRATOR', `${orch.id} delegation attempt ${attempt}/${attempts}`, { goal: String(goalText).slice(0, 300) });
+    const { output } = await spawnEngine({ id: orch.id, engine: task.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(orch.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny });
+    try {
+      let parsed;
+      try { parsed = extractJson(output); } catch { throw new Error(`Reply was not valid JSON: ${output.slice(0, 300)}`); }
+      plan = validateAssignments(parsed);
+    } catch (e) { feedback = e.message; plan = null; logTelemetry('1_ORCHESTRATOR_INVALID', e.message, { attempt }); }
+  }
+  if (!plan) throw fatal(`The orchestrator could not produce a valid delegation after ${attempts} attempt(s): ${feedback}. Escalated to you.`);
+  enforceBudget(task, 'the orchestrator');
+  const contract = typeof plan.interfaceContract === 'string' ? plan.interfaceContract.slice(0, 4000) : '';
+  logTelemetry('1_ORCHESTRATED', `${orch.id} delegated to ${plan.assignments.length} lead(s)`, { assignments: plan.assignments.map((a) => ({ lead: a.lead, files: a.files })) });
+
+  // ── level 2: every lead splits its slice into workers (in parallel)
+  const planLead = async (a) => {
+    const lead = leads.find((l) => l.id === a.lead);
+    const maxW = lead.maxWorkers ?? 3;
+    let fb = '';
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      writeState({ phase: '1_LEADS', planSummary: `${plan.assignments.length} lead(s) planning their teams (attempt ${attempt}/${attempts})…` });
+      const prompt = [
+        `[HARNESS LEAD ${lead.id}]`,
+        `You are ${lead.id}, a TEAM LEAD (level 2) reporting to ${orch.id}. Persona: ${persona(lead)}`,
+        'You only PLAN for your team. Do NOT create, edit or delete any file. You may read files to understand the project.',
+        `Split your ASSIGNMENT into 1 to ${maxW} workers that will run IN PARALLEL. Rules (the controller checks every one and rejects the plan otherwise):`,
+        '- Every worker owns a list of targetFiles, each one inside your assigned files; no file may appear in two workers.',
+        '- Each worker prompt must be self-contained and must follow the shared interface contract exactly.',
+        'Reply with ONLY this JSON object, no other text:',
+        '{"subtasks":[{"id":"short-kebab-id","targetFiles":["path/file.ext"],"prompt":"instructions for this worker"}]}',
+        `\n[ASSIGNMENT from ${orch.id}]:\n${a.goal}\n[YOUR ASSIGNED FILES]: ${a.files.join(', ')}`,
+        contract ? `\n[SHARED INTERFACE CONTRACT]:\n${contract}` : '',
+        `\n[OVERALL GOAL]:\n${goalText}`,
+        ...context,
+        fb ? `\n[YOUR PREVIOUS PLAN WAS REJECTED — fix this]:\n${fb}` : ''
+      ].filter(Boolean).join('\n');
+      logTelemetry('1_LEAD', `${lead.id} planning attempt ${attempt}/${attempts}`, { lead: lead.id });
+      const { output } = await spawnEngine({ id: lead.id, engine: task.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(lead.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny });
+      try {
+        let parsed;
+        try { parsed = extractJson(output); } catch { throw new Error(`Reply was not valid JSON: ${output.slice(0, 300)}`); }
+        const subs = parsed.subtasks;
+        if (!Array.isArray(subs) || !subs.length) throw new Error('JSON has no "subtasks" list.');
+        if (subs.length > maxW) throw new Error(`too many workers (${subs.length}); your limit is ${maxW}.`);
+        for (const s of subs) {
+          if (typeof s.prompt !== 'string' || !s.prompt.trim()) throw new Error(`worker "${s.id}" has no prompt.`);
+          if (!Array.isArray(s.targetFiles) || !s.targetFiles.length) throw new Error(`worker "${s.id}" has no targetFiles.`);
+          for (const f of s.targetFiles) {
+            const safe = safeTarget(f);
+            if (!safe) throw new Error(`worker "${s.id}" has an unsafe path "${f}".`);
+            if (!a.files.some((af) => inScope(stripSlash(safe), [stripSlash(af)]))) throw new Error(`worker "${s.id}" targets "${f}", outside your assigned files (${a.files.join(', ')}).`);
+          }
+        }
+        return subs;
+      } catch (e) { fb = e.message; logTelemetry('1_LEAD_INVALID', `${lead.id}: ${e.message}`, { lead: lead.id, attempt }); }
+    }
+    throw fatal(`Lead '${lead.id}' could not produce a valid team plan after ${attempts} attempt(s): ${fb}. Escalated to you; the orchestrator cannot fix another level's plan.`);
+  };
+  const settled = await Promise.allSettled(plan.assignments.map(planLead));
+  const failed = settled.find((r) => r.status === 'rejected');
+  enforceBudget(task, 'the leads'); // money already spent counts even when a lead failed
+  if (failed) throw failed.reason;
+
+  // ── level 3: workers (created from the lead plans), checked once more as one swarm
+  const subtasks = [];
+  const teamPlan = { orchestrator: orch.id, assignments: [] };
+  plan.assignments.forEach((a, i) => {
+    const lead = leads.find((l) => l.id === a.lead);
+    const mine = settled[i].value.map((s) => ({
+      id: `${lead.id}.${s.id}`, lead: lead.id, role: lead.role, skills: Array.isArray(s.skills) ? s.skills : undefined,
+      targetFiles: s.targetFiles, prompt: String(s.prompt).trim(), engine: task.engine, goal: a.goal,
+      timeoutMs: minutesToMs(lead.budget?.maxMinutes, undefined), maxCostUsd: lead.budget?.maxCostUsd
+    }));
+    subtasks.push(...mine);
+    teamPlan.assignments.push({ lead: lead.id, goal: a.goal.slice(0, 300), files: a.files, workers: [] });
+  });
+  validateSubtasks(subtasks, { source: 'hierarchy', allowed: userAllowed, requireScope: true, gov, autonomous: !!task.autonomous });
+  subtasks.forEach((sub) => resolveGovernance(sub, gov));
+  for (const sub of subtasks) teamPlan.assignments.find((x) => x.lead === sub.lead).workers.push({ id: sub.id, files: sub.targetFiles });
+  logTelemetry('1_HIERARCHY_PLANNED', `${orch.id} → ${plan.assignments.length} lead(s) → ${subtasks.length} worker(s)`, { team: teamPlan });
+  return { subtasks, interfaceContract: contract, verifySuggestion: typeof plan.verifySuggestion === 'string' ? plan.verifySuggestion.slice(0, 300) : '', team: teamPlan };
+}
+
 async function runPlanner(task, errorTrace = null, previous = null) {
   const allShell = (subs) => subs.length > 0 && subs.every((s) => s.cliCommand && !s.prompt);
   const engineLabel = (subs) => {
@@ -685,13 +868,18 @@ async function runPlanner(task, errorTrace = null, previous = null) {
   writeState({ phase: '1_PLANNER', engine: engineLabel(given ? task.subtasks : [{ prompt: 'x' }]), taskTitle: task.title, planSummary: given ? `${task.subtasks.length} worker(s) given by the task` : 'single worker' });
   logTelemetry('1_PLANNER', 'Validating task and checking file-lock boundaries', { engine: task.engine || 'auto', errorTrace, autonomous: !!task.autonomous, backlogId: task.backlogId });
 
-  let subtasks; let planSummary; let verifySuggestion = task.verifySuggestion || ''; let interfaceContract = task.interfaceContract || '';
+  let subtasks; let planSummary; let verifySuggestion = task.verifySuggestion || ''; let interfaceContract = task.interfaceContract || ''; let teamPlan = null;
   const vOpts = { gov, autonomous: !!task.autonomous, requireScope: !!task.autonomous };
   if (given) {
     subtasks = task.subtasks.map((s) => ({ ...s, engine: s.engine || task.engine }));
     validateSubtasks(subtasks, vOpts);
     subtasks.forEach((sub) => resolveGovernance(sub, gov));
     planSummary = `${subtasks.length} worker(s) given by the task`;
+  } else if (task.hierarchy) {
+    const r = await hierDecompose(task, gov);
+    subtasks = r.subtasks; verifySuggestion = r.verifySuggestion || verifySuggestion; teamPlan = r.team;
+    interfaceContract = [interfaceContract, r.interfaceContract].filter(Boolean).join('\n');
+    planSummary = `hierarchy ${r.team.orchestrator} → ${r.team.assignments.length} lead(s) → ${subtasks.length} worker(s): ${r.team.assignments.map((a) => `${a.lead}[${a.workers.length}]`).join(' ')}`;
   } else if (task.autoPlan) {
     const r = await aiDecompose(task, gov);
     subtasks = r.subtasks; verifySuggestion = r.verifySuggestion || verifySuggestion;
@@ -721,7 +909,7 @@ async function runPlanner(task, errorTrace = null, previous = null) {
   return {
     taskId: task.id || `job-${Date.now()}`,
     title: task.title || 'Unnamed Harness Task',
-    engine: engineLabel(subtasks), mode, subtasks, verifyCmd, verifySource, verifySuggestion, planSummary, interfaceContract,
+    engine: engineLabel(subtasks), mode, subtasks, verifyCmd, verifySource, verifySuggestion, planSummary, interfaceContract, team: teamPlan,
     errorContext: errorTrace
   };
 }
@@ -755,6 +943,11 @@ async function runExecutorSwarm(plan, gitCtx = null) {
         workerCwd = wtPath;
       }
       const result = await runWorker(sub, workerCwd, plan.errorContext);
+      // per-agent budget (a running agent cannot be stopped by cost, so this is checked when it reports back)
+      if (typeof sub.maxCostUsd === 'number' && (taskCost.agents[sub.id] || 0) > sub.maxCostUsd + 1e-9) {
+        logTelemetry('BUDGET_AGENT_EXCEEDED', `${sub.id} cost $${(taskCost.agents[sub.id] || 0).toFixed(4)} > its cap $${sub.maxCostUsd}`, { agent: sub.id });
+        throw fatal(`BUDGET_AGENT_EXCEEDED: worker ${sub.id} cost $${(taskCost.agents[sub.id] || 0).toFixed(3)}, over its cap of $${sub.maxCostUsd}.`);
+      }
       if (useWorktrees) result.sync = await syncWorktree(wtPath, sub);
       if (gitCtx && sub.prompt) {
         const c = await commitScoped({
@@ -842,6 +1035,7 @@ async function runCommitter(plan, task, taskFile, gitCtx = null) {
   logTelemetry('4_COMMITTER', 'Task passed all gates and committed', { taskId: plan.taskId, engine: plan.engine, verifyCmd: plan.verifyCmd });
   archiveTask(taskFile, task, DIRS.completed, {
     result: 'COMMITTED', plan: plan.subtasks, verifyCmd: plan.verifyCmd, completedAt: new Date().toISOString(),
+    ...(plan.team ? { team: plan.team } : {}), costUsd: Math.round(taskCost.usd * 10000) / 10000, costByAgent: taskCost.agents,
     ...(gitCtx ? { git: { branch: gitCtx.branch, from: gitCtx.tipAtCandidate, to: gitCtx.candidate, workerBranches: Object.values(gitCtx.workers).map((w) => w.branch) } } : {})
   });
 }
@@ -886,7 +1080,8 @@ async function executeSquareCycle(taskFile) {
   let plan = null; let outputs = []; let cycle = 1; let lastErrorTrace = null; let haltReason = null; let backup = null;
   const integration = integrationFor(task); let gitCtx = null; let gitResult = null;
   const title = task.title || path.basename(taskFile);
-  writeState({ planSummary: '-', workerSummary: '-', currentTaskFile: taskFile });
+  resetCost();
+  writeState({ planSummary: '-', workerSummary: '-', currentTaskFile: taskFile, costUsd: 0 });
   lastFinished = { autonomous: !!task.autonomous, backlogId: task.backlogId, title, ok: false };
   if (task.backlogId) {
     const item = updateBacklogItem(task.backlogId, { status: 'IN_PROGRESS', startedAt: new Date().toISOString(), lastJobId: task.id });
@@ -899,7 +1094,9 @@ async function executeSquareCycle(taskFile) {
       plan = await runPlanner(task, lastErrorTrace, plan);
       if (integration && !gitCtx) gitCtx = await startIntegration(task, integration);
       if (cycle === 1 && !backup && !gitCtx) backup = backupScope(plan);
+      if (cycle > 1) enforceBudget(task, `cycle ${cycle - 1}`); // never start another cycle once over budget
       outputs = await runExecutorSwarm(plan, gitCtx);
+      enforceBudget(task, `cycle ${cycle} workers`);
       const verification = await runVerifier(plan);
       if (verification.passed) {
         await runCommitter(plan, task, taskFile, gitCtx);
@@ -931,7 +1128,8 @@ async function executeSquareCycle(taskFile) {
   try { gitResult = await finishIntegration(gitCtx, false); } catch (e) { logTelemetry('GIT_CLEANUP_FAILED', e.message); }
   if (gitResult) rollback = `${gitCtx.branch} unchanged (candidate discarded)${gitResult.keptBranches ? `; worker branches kept for review: ${gitResult.workerBranches.join(', ')}` : ''}`;
   const dest = archiveTask(taskFile, task, DIRS.failed, {
-    result: phase, haltReason: reason, haltedAt: new Date().toISOString(), cyclesUsed: usedCycles, rollback, errors, git: gitResult
+    result: phase, haltReason: reason, haltedAt: new Date().toISOString(), cyclesUsed: usedCycles, rollback, errors, git: gitResult,
+    costUsd: Math.round(taskCost.usd * 10000) / 10000, costByAgent: taskCost.agents
   }, errors.map((e, i) => `===== cycle ${i + 1} =====\n${e}`).join('\n\n'));
   finishSession(task, plan, phase, usedCycles, errors, outputs, rollback, gitResult);
   writeState({
@@ -954,6 +1152,7 @@ function finishSession(task, plan, result, cycles, errors, outputs, rollback = n
         taskId: task.id || 'task', title, result, cycles, maxCycles: MAX_CYCLES, goal: task.goal,
         engine: plan?.engine || task.engine || '-', verifyCmd: plan?.verifyCmd || task.verifyCmd || '-', verifySource: plan?.verifySource,
         verifySuggestion: plan?.verifySuggestion, planner: plan?.planSummary, rollback, git: gitResult,
+        team: plan?.team, costUsd: Math.round(taskCost.usd * 10000) / 10000, costByAgent: { ...taskCost.agents },
         subtasks: plan?.subtasks || task.subtasks || [], errors, outputs, finishedAt: new Date().toISOString()
       });
     }

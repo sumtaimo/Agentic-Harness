@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, listLessons, probeEngine, profileFlags, detectVerifyCmd } from './lib/common.mjs';
-import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases } from './lib/governance.mjs';
+import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam } from './lib/governance.mjs';
 
 ensureDirs();
 const ok = (m) => console.log(`  ✔ ${m}`);
@@ -78,6 +78,21 @@ try {
   if (c.IN_PROGRESS) warn(`${c.IN_PROGRESS} item(s) IN_PROGRESS — if no task is running, an interrupted run left them; set them READY with: node .harness/backlog.mjs ready <id>`);
 } catch (e) { if (fs.existsSync(path.join(ROOT, '.harness', 'backlog.json'))) { bad(`backlog.json is invalid: ${e.message}`); problems++; } else warn('No backlog.json yet.'); }
 ok(`${listReleases().length} release snapshot(s) in .harness/releases/`);
+
+console.log('\nAgent team (hierarchy: orchestrator → leads → workers)');
+{
+  const team = loadTeam();
+  if (!team) note('No .harness/team.json, so "dispatch --hierarchy" is not set up. Copy it from the template if you want the team mode.');
+  else {
+    const { errors, warnings: tw } = validateTeam(team, { roles, charter, plannerMaxWorkers: (config.planner || {}).maxWorkers || 4 });
+    errors.forEach((e) => { bad(`team.json: ${e}`); problems++; });
+    tw.forEach((w) => warn(`team.json: ${w}`));
+    if (!errors.length) {
+      const orch = team.members.find((m) => m.level === 'orchestrator'); const leads = team.members.filter((m) => m.level === 'lead');
+      ok(`team.json valid: ${orch.id} → ${leads.length} lead(s): ${leads.map((l) => `${l.id} [${l.role}] owns ${l.scope.join(', ')}`).join(' | ')}`);
+    }
+  }
+}
 
 console.log('\nGit integration branch (where autonomous work lands)');
 {

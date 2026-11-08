@@ -9,6 +9,9 @@
  *   if they exist, a short "harness" section is appended once (never replaced).
  * - .vscode/tasks.json: created if missing; if it exists, the Harness tasks are merged in
  *   (if it cannot be parsed, e.g. it has comments, they go to .vscode/tasks.harness.json instead).
+ * - .claude/: slash commands copied if missing, settings.json merged (your rules stay, nothing is loosened).
+ * - Your own charter, backlog, team, roles, skills and memory are never overwritten. Re-running is safe.
+ * - Local runtime files (live feed, state, logs) are never copied from this template.
  */
 
 import fs from 'node:fs';
@@ -23,9 +26,9 @@ if (path.resolve(target) === path.resolve(SRC)) { console.error('Target is this 
 
 const report = [];
 // Runtime + personal history never travels to another project.
-const RUNTIME = new Set(['state.json', 'telemetry.log', 'daemon.pid', 'engine-probe.json', 'auto-lessons.md']);
-// The target project's own data wins: memory, config, charter, backlog, roles, skills.
-const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|roles[\\/]|skills[\\/]|config\.json$|charter\.md$|backlog\.json$)/;
+const RUNTIME = new Set(['state.json', 'telemetry.log', 'daemon.pid', 'engine-probe.json', 'auto-lessons.md', 'live.log', 'auto-state.json']);
+// The target project's own data wins: memory, config, charter, backlog, roles, skills, team.
+const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|roles[\\/]|skills[\\/]|config\.json$|charter\.md$|backlog\.json$|team\.json$)/;
 
 function copyDir(from, to, rel = '.harness') {
   fs.mkdirSync(to, { recursive: true });
@@ -127,4 +130,13 @@ if (!existing.includes('# agentic-harness runtime')) { fs.writeFileSync(gi, `${e
 
 console.log(`Installed the agentic harness into ${target}\n`);
 report.forEach((l) => console.log(`  ${l}`));
-console.log(`\nNext: open that folder in your editor, then run task "Harness: Doctor (check my setup)".`);
+console.log(`
+Done. Your project now has the agentic harness. Next steps:
+  1. Check it:        node .harness/doctor.mjs        (needs Node 18+ and one AI engine, e.g. Claude Code, logged in)
+  2. Fill the team:   node .harness/team.mjs show     (edit .harness/team.json to change who is on the agent team)
+  3. Prompt it:
+       in Claude Code:  open the folder, accept the trust dialog once, then type  /harness:run <what you want done>
+                        (add "use the team" for a big goal: orchestrator -> leads -> workers)
+       in a terminal:   node .harness/daemon.mjs                  (leave it running; watch the agents work)
+                        node .harness/dispatch.mjs --goal "<what you want>" --hierarchy --max-cost 2 --wait
+  Every file above is plain text in your project; nothing is installed globally.`);

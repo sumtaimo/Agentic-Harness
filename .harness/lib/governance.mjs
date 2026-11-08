@@ -244,6 +244,94 @@ export function matchSkills(sub, roleName, allSkills) {
   return { chosen, mismatched, unknown };
 }
 
+// ───────────────────────────── team hierarchy (orchestrator → leads → workers) ─────────────────────────────
+
+export const TEAM_FILE = path.join(HARNESS_DIR, 'team.json');
+export const loadTeam = (file = TEAM_FILE) => readJsonSafe(file, null);
+
+/** Concrete sample paths for a glob (used to compare two globs without a full glob algebra). */
+function globProbes(glob) {
+  const g = String(glob).replace(/\\/g, '/').replace(/^\.\//, '');
+  return [...new Set([
+    g.replace(/\*\*\//g, 'a/b/').replace(/\*\*/g, 'a/b/c').replace(/\*/g, 'x'),
+    g.replace(/\*\*\//g, '').replace(/\*\*/g, 'c').replace(/\*/g, 'y')
+  ])];
+}
+/** Is everything the child glob can match also matched by the parent globs? (probe-based, conservative) */
+export const globWithin = (child, parentGlobs) => globProbes(child).every((p) => matchesAny(p, parentGlobs));
+/** Can two globs match the same file? (probe-based) */
+export const globsOverlap = (a, b) => globProbes(a).some((p) => matchesAny(p, [b])) || globProbes(b).some((p) => matchesAny(p, [a]));
+
+/**
+ * The deterministic guardrails of the hierarchy. Returns { errors[], warnings[] }; errors must stop the run.
+ *  - exactly one orchestrator (level "orchestrator", reports to nobody), and it is READ-ONLY (its role owns no files)
+ *  - every lead reports to the orchestrator, has a known role that may write, and a non-empty scope
+ *  - a lead's scope can only NARROW its role's writable paths, and never reach charter-forbidden paths
+ *  - lead scopes are pairwise disjoint, so teams can never collide on a file
+ *  - budgets only shrink downwards (sum of lead cost caps <= orchestrator cap; lead minutes <= orchestrator minutes)
+ */
+export function validateTeam(team, { roles = {}, charter = null, plannerMaxWorkers = 4 } = {}) {
+  const errors = []; const warnings = [];
+  if (!team || !Array.isArray(team.members)) return { errors: ['team.json must be an object with a "members" list'], warnings };
+  const ids = new Set();
+  for (const m of team.members) {
+    if (!m || typeof m.id !== 'string' || !m.id) { errors.push('every member needs an "id"'); continue; }
+    if (ids.has(m.id)) errors.push(`duplicate member id "${m.id}"`);
+    ids.add(m.id);
+    if (!['orchestrator', 'lead'].includes(m.level)) errors.push(`member "${m.id}": level must be "orchestrator" or "lead" (workers are created by leads at run time)`);
+  }
+  const orchs = team.members.filter((m) => m.level === 'orchestrator');
+  const leads = team.members.filter((m) => m.level === 'lead');
+  if (orchs.length !== 1) errors.push(`exactly one orchestrator is required (found ${orchs.length})`);
+  if (!leads.length) errors.push('at least one lead is required');
+  const orch = orchs[0];
+  if (orch) {
+    if (orch.reports_to) errors.push(`orchestrator "${orch.id}" must not report to anyone`);
+    const r = roles[String(orch.role).toUpperCase()];
+    if (!r) errors.push(`orchestrator "${orch.id}": unknown role "${orch.role}"`);
+    else if ((r.writablePaths || []).length) errors.push(`orchestrator "${orch.id}": role ${r.name} may write files (${r.writablePaths.join(', ')}); the orchestrator must be read-only`);
+    for (const c of orch.canDelegateTo || []) if (!leads.some((l) => l.id === c)) errors.push(`orchestrator canDelegateTo lists "${c}", which is not a lead`);
+  }
+  for (const l of leads) {
+    if (orch && l.reports_to !== orch.id) errors.push(`lead "${l.id}" must report to the orchestrator "${orch.id}" (reports_to is "${l.reports_to}")`);
+    const r = roles[String(l.role).toUpperCase()];
+    if (!r) { errors.push(`lead "${l.id}": unknown role "${l.role}"`); continue; }
+    if (!(r.writablePaths || []).length) errors.push(`lead "${l.id}": role ${r.name} is read-only, so its workers could not do any work`);
+    if (!Array.isArray(l.scope) || !l.scope.length) { errors.push(`lead "${l.id}": needs a non-empty "scope" (paths its team may own)`); continue; }
+    for (const g of l.scope) {
+      if (!globWithin(g, r.writablePaths || [])) errors.push(`lead "${l.id}": scope "${g}" is wider than what role ${r.name} may write (${(r.writablePaths || []).join(', ')})`);
+      if (charter && globProbes(g).some((p) => matchesAny(p, charter.forbiddenPaths))) errors.push(`lead "${l.id}": scope "${g}" reaches a path the charter forbids (${charter.forbiddenPaths.join(', ')})`);
+      if (charter && charter.allowedPaths.length && !globWithin(g, charter.allowedPaths)) warnings.push(`lead "${l.id}": scope "${g}" is wider than the charter allowedPaths; autonomous runs will reject files outside them`);
+    }
+    const mw = l.maxWorkers ?? 3;
+    if (!Number.isInteger(mw) || mw < 1 || mw > plannerMaxWorkers) errors.push(`lead "${l.id}": maxWorkers must be a whole number from 1 to ${plannerMaxWorkers}`);
+  }
+  for (let i = 0; i < leads.length; i++) for (let j = i + 1; j < leads.length; j++) {
+    for (const a of leads[i].scope || []) for (const b of leads[j].scope || []) {
+      if (globsOverlap(a, b)) errors.push(`leads "${leads[i].id}" and "${leads[j].id}" have overlapping scopes ("${a}" / "${b}"); two teams could collide on a file`);
+    }
+  }
+  const num = (v) => (typeof v === 'number' && v >= 0 ? v : null);
+  if (orch) {
+    const sumCost = leads.reduce((t, l) => t + (num(l.budget?.maxCostUsd) ?? 0), 0);
+    const oc = num(orch.budget?.maxCostUsd);
+    if (oc !== null && sumCost > oc + 1e-9) errors.push(`budgets must shrink downwards: leads' cost caps add up to $${sumCost} but the orchestrator's cap is $${oc}`);
+    const om = num(orch.budget?.maxMinutes);
+    for (const l of leads) { const lm = num(l.budget?.maxMinutes); if (om !== null && lm !== null && lm > om) errors.push(`lead "${l.id}": maxMinutes (${lm}) exceeds the orchestrator's (${om})`); }
+  }
+  return { errors, warnings };
+}
+
+/** The effective set-up of one member (for `team.mjs show` and Doctor). */
+export function describeMember(m, roles) {
+  const r = roles[String(m.role).toUpperCase()] || {};
+  return {
+    id: m.id, level: m.level, role: m.role, reportsTo: m.reports_to || null,
+    scope: m.scope || [], maxWorkers: m.level === 'lead' ? (m.maxWorkers ?? 3) : null,
+    tools: r.allowedTools || [], budget: m.budget || {}, mission: r.mission || r.description || ''
+  };
+}
+
 // ───────────────────────────── backlog store ─────────────────────────────
 
 export const STATUSES = ['BACKLOG', 'READY', 'IN_PROGRESS', 'DONE', 'BLOCKED'];
@@ -308,7 +396,10 @@ export function itemToJob(item, { autonomous = false } = {}) {
     createdAt: new Date().toISOString()
   };
   for (const k of ['engine', 'verifyCmd', 'acceptanceCriteria', 'interfaceContract', 'source']) if (item[k] !== undefined) job[k] = item[k];
+  if (item.hierarchy) job.hierarchy = true;
+  if (item.maxCostUsd !== undefined) job.maxCostUsd = item.maxCostUsd;
   if (Array.isArray(item.subtasks) && item.subtasks.length) job.subtasks = item.subtasks;
+  else if (item.hierarchy) Object.assign(job, { goal: item.goal || item.title, targetFiles: item.targetFiles || [] });
   else if (item.autoPlan) Object.assign(job, { autoPlan: true, goal: item.goal || item.title, targetFiles: item.targetFiles || [] });
   else job.subtasks = [{ id: 'worker-main', role: item.role, skills: item.skills, targetFiles: item.targetFiles || [], prompt: item.goal || item.title }];
   return job;
