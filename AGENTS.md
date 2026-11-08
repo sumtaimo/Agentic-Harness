@@ -122,6 +122,14 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
   **Never edit or delete anything in `.harness/releases/`.**
 - A failed autonomous task is BLOCKED, its files are restored, and autonomy pauses: explain
   why (session note / `failed/*.trace.txt`) and let the user decide.
+- Autonomous work lands on the **`uat` branch**, never in the user's folder or on `main`:
+  - Each worker commits on `harness/<task>/<worker>`.
+  - The merged candidate is checked, and `uat` moves only if the check passes.
+  - A failed task leaves `uat` unchanged and keeps its worker branches for review.
+
+  Show the user `git log --oneline uat` and let **them** merge `uat` into `main`. Never merge,
+  push or reset `main`/`master`/`production` yourself. For a manual task that should also go to
+  `uat`, add `--branch uat` to dispatch.
 
 ## 6. Map of the harness
 

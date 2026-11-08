@@ -77,7 +77,8 @@ export function which(binary) {
 
 /** Flags a profile relies on: every arg starting with "-" (placeholders excluded). */
 export function profileFlags(profile) {
-  return (profile.args || []).filter((a) => /^-[\w-]/.test(a) && a !== '--' && !a.includes('{'));
+  const all = [...(profile.args || []), ...(profile.output?.batch || []), ...(profile.output?.stream || [])];
+  return [...new Set(all.filter((a) => /^-[\w-]/.test(a) && a !== '--' && !a.includes('{')))];
 }
 
 /**
@@ -294,6 +295,7 @@ export function recordSession(record) {
     `- Engine: ${record.engine}`,
     `- Cycles used: ${record.cycles}/${record.maxCycles}`,
     `- Verify command: \`${record.verifyCmd}\` (${record.verifySource || 'given by task'})`,
+    ...(record.git ? [`- Git: ${record.git.mergedSha ? `merged into **${record.git.branch}** @ ${record.git.mergedSha.slice(0, 8)} (from ${record.git.baseSha.slice(0, 8)})` : `**${record.git.branch}** unchanged`}; worker branches ${record.git.workerBranches.join(', ') || '-'}${record.git.keptBranches ? ' (kept for review)' : ' (deleted)'}; protected branches ${record.git.protectedUnchanged ? 'unchanged' : 'CHANGED — check!'}`] : []),
     ...(record.planner ? [`- Plan: ${record.planner}`] : []),
     ...(record.rollback ? [`- Rollback: ${record.rollback}`] : []),
     `- Finished: ${record.finishedAt}`,

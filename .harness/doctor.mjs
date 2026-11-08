@@ -74,6 +74,30 @@ try {
 } catch (e) { if (fs.existsSync(path.join(ROOT, '.harness', 'backlog.json'))) { bad(`backlog.json is invalid: ${e.message}`); problems++; } else warn('No backlog.json yet.'); }
 ok(`${listReleases().length} release snapshot(s) in .harness/releases/`);
 
+console.log('\nGit integration branch (where autonomous work lands)');
+{
+  const g = config.git || {};
+  const sh = (args) => { try { return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; } };
+  const repo = !!sh(['rev-parse', '--verify', 'HEAD']);
+  const mode = g.integrationBranch ? (g.integrationMode || 'off') : 'off';
+  if (mode === 'off') ok('integration branch off: every task edits your working folder (with backup + rollback).');
+  else {
+    ok(`'${g.integrationBranch}' for ${mode === 'always' ? 'every task' : 'autonomous tasks (manual ones too with dispatch --branch)'}; protected: ${(g.protectedBranches || []).join(', ')}`);
+    if ((g.protectedBranches || []).includes(g.integrationBranch)) { bad(`integrationBranch '${g.integrationBranch}' is in protectedBranches — tasks will be refused.`); problems++; }
+    if (!repo) {
+      if (charter.autonomous) { bad('Autonomous is ON but this folder is not a git repository with a commit: autonomous tasks will be refused. Run: git init && git add -A && git commit -m start'); problems++; }
+      else warn('Not a git repository yet — needed before autonomous work. Run: git init && git add -A && git commit -m start');
+    } else {
+      const tip = sh(['rev-parse', '--short', `refs/heads/${g.integrationBranch}`]);
+      ok(tip ? `'${g.integrationBranch}' exists @ ${tip}. See its work with: git log --oneline ${g.integrationBranch}` : `'${g.integrationBranch}' does not exist yet; it will be created from ${g.integrationBase || 'HEAD'} on the first task.`);
+      const left = (sh(['branch', '--list', 'harness/*']) || '').split('\n').map((b) => b.replace(/^[*+\s]+/, '').trim()).filter(Boolean);
+      if (left.length) warn(`${left.length} worker branch(es) kept from failed tasks for review: ${left.slice(0, 5).join(', ')}${left.length > 5 ? ' …' : ''} (delete with: git branch -D <name>)`);
+      if (!sh(['config', 'user.email'])) warn('git has no user.email: harness commits will use "Agentic Harness <harness@localhost>".');
+    }
+  }
+  ok(`live agent output: ${config.liveAgentOutput === false ? 'off' : 'on (agents stream their actions into the terminal)'}; heartbeat every ${config.heartbeatIntervalSeconds || config.autonomous?.intervalSeconds || 60}s`);
+}
+
 console.log('\nMemory');
 const profile = fs.existsSync(FILES.profile) ? fs.readFileSync(FILES.profile, 'utf8') : '';
 /\(fill me\)/i.test(profile) ? warn('memory/profile.md still has "(fill me)" placeholders — tell your AI about yourself so it can fill them') : ok('memory/profile.md is filled in');

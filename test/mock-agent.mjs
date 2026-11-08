@@ -5,6 +5,8 @@
 //   FIX <file> <text>          write the file only if the prompt contains a previous verifier error
 //   FAIL                       exit 1
 //   SLEEP <ms>                 wait (to prove workers run in parallel)
+//   SAY <text> / DENY <file>   (stream mode) an assistant message / a permission denial
+// With argument FMT=stream it prints Claude-style stream-json events instead of one JSON result.
 // It also saves the full prompt it received to .mock-prompts/<worker-id>.txt
 import fs from 'node:fs';
 import path from 'node:path';
@@ -38,14 +40,22 @@ if (prompt.startsWith('[HARNESS PLANNER]')) {
 
 const task = prompt.split('[TASK INSTRUCTIONS]:')[1] || '';
 const hasError = prompt.includes('[PREVIOUS VERIFIER ERROR TO FIX]');
+const stream = process.argv.includes('FMT=stream'); // like claude --output-format stream-json
+const emit = (o) => stream && console.log(JSON.stringify(o));
+emit({ type: 'system', subtype: 'init', model: 'mock-model' });
+const denials = [];
 for (const line of task.split('\n')) {
   const [cmd, file, ...rest] = line.trim().split(' ');
   if (cmd === 'FAIL') { console.error('mock agent asked to fail'); process.exit(1); }
   if (cmd === 'SLEEP') await new Promise((r) => setTimeout(r, Number(file)));
+  if (cmd === 'SAY') emit({ type: 'assistant', message: { content: [{ type: 'text', text: [file, ...rest].join(' ') }] } });
+  if (cmd === 'DENY') denials.push({ tool_name: 'Write', tool_input: { file_path: path.resolve(file) } });
   if (cmd === 'WRITE' || (cmd === 'FIX' && hasError)) {
+    emit({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: path.resolve(file) } }] } });
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, rest.join(' '));
   }
 }
 fs.appendFileSync(path.join('.mock-prompts', 'timeline.txt'), `${Date.now()} end ${id}\n`);
-console.log(JSON.stringify({ type: 'result', is_error: false, result: `mock ${id} done` }));
+const result = { type: 'result', is_error: false, result: `mock ${id} done`, duration_ms: 42, permission_denials: denials };
+console.log(JSON.stringify(result));

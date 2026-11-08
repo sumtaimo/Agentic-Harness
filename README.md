@@ -141,6 +141,38 @@ The controller works **on your behalf**, but only inside the rules you write in
 Add items with task 10 or `node .harness/backlog.mjs add "…"`; see them with task 8.
 Try it with the BA + DEV + QA sample: task 9 with `.harness/examples/backlog.sample.json`.
 
+### Where autonomous work lands: the `uat` branch (your `main` and your folder are never touched)
+Autonomous tasks need a git repository. For each task:
+1. Every worker gets **its own branch and worktree** (`harness/<task>/<worker>`), cut from `uat`.
+   `uat` is created from your current commit the first time.
+2. When a worker finishes, only the files it was allowed to change are committed on its branch.
+   Anything else it touched is thrown away.
+3. All worker branches are merged into a **candidate** in a separate integration worktree, and
+   **the check runs on that candidate**.
+4. Only if the check passes does `uat` move to the candidate. If it fails, `uat` stays exactly as
+   it was, and the worker branches are kept for you to review.
+
+Your own folder, its checked-out branch, and `main`/`master`/`production` are never written
+(the log records `PROTECTED_BRANCHES_UNCHANGED` after every task). If `uat` happens to be
+checked out in your folder, it is fast-forwarded there, but only when you have no uncommitted
+changes. See the result with `git log --oneline uat`, and merge `uat` into `main` yourself when
+you're happy.
+
+Manual tasks keep editing your folder, unless you ask for the branch: `dispatch.mjs --branch uat …`.
+Change this in `config.json` → `git` (`integrationMode`: `autonomous` | `always` | `off`).
+
+### Watching the agents live
+While a task runs, the terminal shows what each agent does, as it happens, one line per action:
+```
+  [worker-dev]       ▶ agent started (…) in .harness/worktrees/UAT-AUTO-001-…/worker-dev
+  [worker-qa]        💬 I'll write the test file now.
+  [worker-dev]       🔧 Write src/greeter.js
+  [worker-dev]       ⚠ This command requires approval
+  [worker-dev]       ✔ finished in 10.5s · $0.167 · ⛔ denied: Bash node -e …
+```
+`config.json` → `"liveAgentOutput": false` (or env `HARNESS_LIVE=0`) turns it off. The
+full-screen dashboard returns whenever the harness is idle.
+
 ### Roles and skills
 | Role | Does | May own files | Engine tools (Claude Code) |
 |---|---|---|---|
@@ -249,7 +281,12 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 | `planner.allowedTools` | Read, Glob, Grep | tools the planner may use (read-only) |
 | `defaultVerifyCmd` | always passes | the check used when there is no `--check` and no usable package.json script |
 | `memory.maxLessonLines` | 50 | most lesson lines put into a worker prompt |
-| `autonomous.intervalSeconds` | 300 | how often the autonomous controller wakes (`--interval <s>` or `--schedule <min>` override) |
+| `autonomous.intervalSeconds` (or `heartbeatIntervalSeconds`) | 60 | heartbeat: how often the autonomous controller wakes (`--interval <s>` / `--schedule <min>` override) |
+| `liveAgentOutput` | true | stream each agent's actions into the terminal |
+| `git.integrationBranch` / `integrationMode` | `uat` / `autonomous` | where work lands (see section 4); `always` = every task, `off` = in your folder |
+| `git.protectedBranches` | main, master, production, prod | never written; refused as a target |
+| `git.keepFailedBranches` | true | keep `harness/<task>/*` branches of failed tasks for review |
+| `git.linkIntoWorktrees` | `node_modules` | shared folders linked into worktrees so checks can run |
 | `memory.*` | on | turn memory injection, session notes and auto lessons on/off |
 
 ## 8. For developers
@@ -263,7 +300,7 @@ node .harness/dispatch.mjs --help        # all options: --goal --files --check -
 node .harness/memory.mjs list|remember|forget|context|sessions
 node .harness/doctor.mjs                 # setup check + engine flag probe
 node .harness/status.mjs --log 25        # state + recent JSONL events
-node test/run-tests.mjs                  # 42 end-to-end tests with a mock engine (no AI account needed)
+node test/run-tests.mjs                  # 51 end-to-end tests with a mock engine (no AI account needed)
 ```
 
 Job file format (`.harness/inbox/*.json`):
@@ -301,6 +338,16 @@ Or let the AI plan it: `{ "id": "job-2", "title": "…", "autoPlan": true, "goal
   unknown skills are all rejected before any worker starts. BA, DEV and QA truly run in parallel.
 - Uploads (v2): the old state and unstarted inbox jobs are snapshotted, memory is kept (or reset
   on request), invalid uploads are rejected, and an upload during a running task is refused.
+- uat mode (v2.1):
+  - Workers get their own branches, out-of-scope edits are discarded, and the candidate is checked
+    before `uat` moves. A failed check leaves `uat` unchanged, and retries continue on the same
+    branch.
+  - Parallel workers are merged into one candidate. A `uat` checked out in your folder is
+    fast-forwarded there, or refused if the folder is dirty.
+  - Protected targets and autonomous work without git are refused, and `--branch` opts manual
+    tasks in.
+- Live output and heartbeat (v2.1): live output is rendered, permission denials are logged, and
+  the heartbeat wakes up to work added later.
 
 ### Changes from the original master prompt
 The original `setup-harness.mjs` was run first, unchanged, and passed its own self-audit. These
@@ -333,6 +380,19 @@ problems were then found and fixed:
    and its check runs the tests. Role tool rules use valid Claude Code syntax (`Bash(git status)`,
    not `Bash(git:status)`), with git narrowed to read-only because the charter forbids pushes and
    remote changes.
+8. v2.1 added the `uat` integration branch, live agent output and the heartbeat. The prompt's
+   `setup-autonomous-uat.mjs` was first run unchanged in a throwaway repo. It met its own criteria,
+   but:
+   - `--output-format text` showed **nothing for 14 seconds**, then only a final summary, so it
+     wasn't live.
+   - It ran `git checkout uat` in **your** folder.
+   - It merged *before* checking, so a **failed task's code stayed on `uat`** (proven with a
+     failing task).
+   - Workers ran one at a time, and `git add .` committed out-of-scope files.
+   - Inbox jobs present at startup were ignored, backlog items stayed `IN_PROGRESS`, and there was
+     no retry.
+
+   v2.1 fixes all of these (see section 4).
 
 ## License
 

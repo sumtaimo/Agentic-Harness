@@ -26,11 +26,12 @@ function sandbox({ worktrees = false } = {}) {
   cfg.autoOrder = ['mock'];
   cfg.useGitWorktrees = worktrees;
   cfg.workerTimeoutMs = 20000;
+  cfg.git = { ...(cfg.git || {}), integrationMode: 'off' }; // v1/v2 in-place tests; uat tests switch it on
   fs.writeFileSync(path.join(dir, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
   return dir;
 }
 
-const env = { ...process.env, HARNESS_SILENT: '1', HARNESS_AGENT: '' };
+const env = { ...process.env, HARNESS_SILENT: '1', HARNESS_AGENT: '', HARNESS_LIVE: '0' };
 delete env.HARNESS_WORKER;
 const node = (dir, args, extraEnv = {}) => spawnSync(process.execPath, args, { cwd: dir, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 60000 });
 const json = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
@@ -643,6 +644,152 @@ await test('backlog CLI: add / list / ready / pop', () => {
   assert(/Promoted/.test(pop.stdout) && byId(d, id).status === 'IN_PROGRESS' && ls(d, 'inbox').length === 1, pop.stdout);
   runOnce(d);
   assert(byId(d, id).status === 'DONE', `status ${byId(d, id).status}`);
+});
+
+
+// ───────────── v2.1: uat integration branch, live agent output, heartbeat ─────────────
+
+function gitSandbox({ mode = 'autonomous', autonomous = true } = {}) {
+  const d = sandbox();
+  const cfg = json(path.join(d, '.harness', 'config.json'));
+  cfg.git = { integrationBranch: 'uat', integrationMode: mode, integrationBase: 'HEAD', protectedBranches: ['main', 'master'], keepFailedBranches: true, linkIntoWorktrees: ['node_modules'] };
+  fs.writeFileSync(path.join(d, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
+  if (autonomous) setCharter(d, { autonomous: 'on' });
+  fs.copyFileSync(path.join(REPO, '.gitignore'), path.join(d, '.gitignore'));
+  fs.writeFileSync(path.join(d, 'README.md'), '# demo\n');
+  const g = (...a) => execFileSync('git', a, { cwd: d, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  g('init', '-q', '-b', 'main'); g('config', 'user.email', 't@t'); g('config', 'user.name', 't'); g('add', '-A'); g('commit', '-q', '-m', 'init');
+  return { d, g, sha: (ref) => { try { return g('rev-parse', '--verify', ref); } catch { return null; } } };
+}
+const onBranch = (g, ref, file) => { try { return g('show', `${ref}:${file}`); } catch { return null; } };
+
+await test('uat: autonomous task is built on its own branch, verified as a candidate, then merged into uat — main, your folder and checked-out branch untouched; out-of-scope edit discarded', () => {
+  const { d, g, sha } = gitSandbox();
+  const mainBefore = sha('main');
+  setBacklog(d, [{ id: 'U1', title: 'greeter', priority: 1, status: 'READY', verifyCmd: existsCheck('src/g.js'),
+    subtasks: [{ id: 'dev', role: 'DEV_ENGINEER', targetFiles: ['src/g.js'], prompt: 'WRITE src/g.js hello\nWRITE docs/leak.md sneaky' }] }]);
+  const r = tick(d);
+  assert(byId(d, 'U1').status === 'DONE', `${byId(d, 'U1').status} ${byId(d, 'U1').blockedReason || ''} ${r.stdout}`);
+  assert(onBranch(g, 'uat', 'src/g.js') === 'hello', 'uat lacks the work');
+  assert(onBranch(g, 'uat', 'docs/leak.md') === null, 'out-of-scope file reached uat');
+  assert(sha('main') === mainBefore, 'main moved!');
+  assert(g('branch', '--show-current') === 'main' && !fs.existsSync(path.join(d, 'src', 'g.js')), 'your folder/branch was touched');
+  assert(g('branch', '--list', 'harness/*') === '', 'worker branches not cleaned up after success');
+  assert(g('worktree', 'list').split('\n').length === 1, 'worktrees left behind');
+  const ev = log(d).map((e) => e.phase);
+  for (const p of ['GIT_BRANCH_CREATED', 'GIT_WORKER_COMMIT', 'GIT_CANDIDATE', 'GIT_INTEGRATED', 'PROTECTED_BRANCHES_UNCHANGED', '2_SCOPE_VIOLATION']) assert(ev.includes(p), `missing ${p}`);
+  assert(log(d).find((e) => e.phase === '3_VERIFIER').cwd.includes('_integration'), 'verifier did not run on the candidate');
+  const arch = json(path.join(d, '.harness', 'completed', ls(d, 'completed')[0]));
+  assert(arch.git.to === sha('uat') && byId(d, 'U1').integratedInto === `uat@${sha('uat').slice(0, 8)}`, 'audit trail lacks merge sha');
+  assert(g('log', '--format=%s', 'uat').includes('harness(U1-run'), 'merge commit message missing');
+});
+
+await test('uat: failed check → uat does NOT move (no broken merge), worker branch kept for review, item BLOCKED', () => {
+  const { d, g, sha } = gitSandbox();
+  const mainBefore = sha('main');
+  setBacklog(d, [{ id: 'U2', title: 'bad', priority: 1, status: 'READY', verifyCmd: FAIL_VERIFY,
+    subtasks: [{ id: 'dev', role: 'DEV_ENGINEER', targetFiles: ['src/bad.js'], prompt: 'WRITE src/bad.js broken' }] }]);
+  tick(d);
+  assert(byId(d, 'U2').status === 'BLOCKED', byId(d, 'U2').status);
+  assert(sha('uat') === mainBefore && onBranch(g, 'uat', 'src/bad.js') === null, 'failed work reached uat');
+  assert(sha('main') === mainBefore, 'main moved');
+  const kept = g('branch', '--list', 'harness/*');
+  assert(/harness\/U2-run[\w-]+\/dev/.test(kept), `worker branch not kept: ${kept}`);
+  assert(onBranch(g, kept.replace(/^[*+\s]+/, '').trim(), 'src/bad.js') === 'broken', 'kept branch lacks the attempt');
+  const f = json(path.join(d, '.harness', 'failed', ls(d, 'failed')[0]));
+  assert(/uat unchanged/.test(f.rollback) && f.git.protectedUnchanged === true, JSON.stringify(f.rollback));
+});
+
+await test('uat: a retry continues in the same worker branch and only the passing cycle is merged', () => {
+  const { d, g } = gitSandbox();
+  setBacklog(d, [{ id: 'U3', title: 'retry', priority: 1, status: 'READY', verifyCmd: existsCheck('src/f.js'),
+    subtasks: [{ id: 'dev', targetFiles: ['src/f.js'], prompt: 'FIX src/f.js fixed' }] }]);
+  tick(d);
+  assert(byId(d, 'U3').status === 'DONE' && byId(d, 'U3').cyclesUsed === 2, JSON.stringify(byId(d, 'U3')));
+  assert(onBranch(g, 'uat', 'src/f.js') === 'fixed', 'fix not on uat');
+});
+
+await test('uat: two parallel workers (BA + DEV) are merged into one verified candidate', () => {
+  const { d, g } = gitSandbox();
+  setBacklog(d, [{ id: 'U4', title: 'pair', priority: 1, status: 'READY', verifyCmd: existsCheck('docs/a.md', 'src/a.js'),
+    subtasks: [{ id: 'ba', role: 'BA_ANALYST', targetFiles: ['docs/a.md'], prompt: 'WRITE docs/a.md spec' },
+      { id: 'dev', role: 'DEV_ENGINEER', targetFiles: ['src/a.js'], prompt: 'WRITE src/a.js code' }] }]);
+  tick(d);
+  assert(onBranch(g, 'uat', 'docs/a.md') === 'spec' && onBranch(g, 'uat', 'src/a.js') === 'code', 'not both merged');
+  assert((g('log', '--format=%s', 'uat').match(/merge (ba|dev) into uat/g) || []).length === 2, 'expected 2 merge commits');
+});
+
+await test('uat checked out in your folder: clean → fast-forwarded there; uncommitted changes → refused, uat unchanged', () => {
+  const { d, g, sha } = gitSandbox();
+  g('checkout', '-q', '-b', 'uat');
+  setBacklog(d, [{ id: 'U5', title: 'ff', priority: 1, status: 'READY', verifyCmd: existsCheck('src/ff.js'), subtasks: [{ id: 'dev', targetFiles: ['src/ff.js'], prompt: 'WRITE src/ff.js ff' }] },
+    { id: 'U6', title: 'dirty', priority: 2, status: 'READY', verifyCmd: existsCheck('src/x.js'), subtasks: [{ id: 'dev', targetFiles: ['src/x.js'], prompt: 'WRITE src/x.js x' }] }]);
+  tick(d);
+  assert(byId(d, 'U5').status === 'DONE' && fs.readFileSync(path.join(d, 'src', 'ff.js'), 'utf8') === 'ff', 'not fast-forwarded into the checked-out uat');
+  fs.appendFileSync(path.join(d, 'README.md'), 'my unsaved edit\n');
+  const before = sha('uat');
+  tick(d);
+  assert(byId(d, 'U6').status === 'BLOCKED' && /uncommitted changes/.test(byId(d, 'U6').blockedReason), byId(d, 'U6').blockedReason);
+  assert(sha('uat') === before && fs.readFileSync(path.join(d, 'README.md'), 'utf8').includes('my unsaved edit'), 'your uncommitted work was touched');
+});
+
+await test('uat: protected branch as target is refused; autonomous work without git is refused', () => {
+  const { d, sha } = gitSandbox({ autonomous: false });
+  const mainBefore = sha('main');
+  drop(d, { id: 'prot', title: 'p', integrationBranch: 'main', verifyCmd: PASS, subtasks: [{ id: 'w', targetFiles: ['src/p.js'], prompt: 'WRITE src/p.js p' }] });
+  runOnce(d);
+  assert(/protected branch 'main'/.test(json(path.join(d, '.harness', 'state.json')).lastGateStatus) && sha('main') === mainBefore, 'protected target not refused');
+  const n = sandbox();
+  const cfg = json(path.join(n, '.harness', 'config.json')); cfg.git.integrationMode = 'autonomous'; cfg.git.integrationBranch = 'uat';
+  fs.writeFileSync(path.join(n, '.harness', 'config.json'), JSON.stringify(cfg));
+  setCharter(n, { autonomous: 'on' });
+  setBacklog(n, [{ id: 'NG', title: 'nogit', status: 'READY', verifyCmd: PASS, subtasks: [{ id: 'w', targetFiles: ['src/a.js'], prompt: 'WRITE src/a.js a' }] }]);
+  tick(n);
+  assert(/needs a git repository/.test(byId(n, 'NG').blockedReason || '') && !fs.existsSync(path.join(n, 'src', 'a.js')), 'non-git autonomous not refused');
+});
+
+await test('uat: manual "dispatch --branch uat" opts a normal task in; without it, manual tasks still edit your folder', () => {
+  const { d, g } = gitSandbox({ autonomous: false });
+  const r = node(d, ['.harness/dispatch.mjs', '--goal', 'WRITE src/m.js m', '--files', 'src/m.js', '--branch', 'uat', '--check', existsCheck('src/m.js'), '--wait']);
+  assert(r.status === 0 && onBranch(g, 'uat', 'src/m.js') === 'm' && !fs.existsSync(path.join(d, 'src', 'm.js')), r.stdout);
+  const r2 = node(d, ['.harness/dispatch.mjs', '--goal', 'WRITE src/local.js l', '--files', 'src/local.js', '--check', existsCheck('src/local.js'), '--wait']);
+  assert(r2.status === 0 && fs.existsSync(path.join(d, 'src', 'local.js')) && onBranch(g, 'uat', 'src/local.js') === null, 'manual default changed');
+});
+
+await test('live agent output: stream-json events become readable lines (tool calls, messages, denials); quiet mode uses batch JSON', () => {
+  const d = sandbox();
+  const cfg = json(path.join(d, '.harness', 'config.json'));
+  cfg.profiles.mock.args = [MOCK, '{output}', 'ALLOWED={allowedTools}'];
+  cfg.profiles.mock.output = { batch: ['FMT=json'], stream: ['FMT=stream'] };
+  fs.writeFileSync(path.join(d, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
+  drop(d, { id: 'live', title: 'live', verifyCmd: PASS, subtasks: [{ id: 'w', targetFiles: ['src/a.js'], prompt: 'SAY Planning the module\nWRITE src/a.js a\nDENY src/evil.js' }] });
+  const r = node(d, ['.harness/daemon.mjs', '--once'], { HARNESS_LIVE: '1' });
+  const out = r.stdout;
+  for (const want of ['▶ agent started (mock-model)', '💬 Planning the module', '🔧 Write src/a.js', '✔ finished in 0.0s', '⛔ denied: Write src/evil.js']) assert(out.includes(want), `missing "${want}" in:\n${out}`);
+  assert(argsOf(d, 'w').includes('FMT=stream'), 'stream args not used');
+  assert(log(d).some((e) => e.phase === 'PERMISSION_DENIED' && e.denials[0].target.endsWith('src/evil.js')), 'denial not in audit log');
+  assert(json(path.join(d, '.harness', 'state.json')).phase === '4_COMMITTED', 'final result not parsed from stream');
+  const q = sandbox();
+  fs.writeFileSync(path.join(q, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
+  drop(q, { id: 'quiet', title: 'q', verifyCmd: PASS, subtasks: [{ id: 'w', targetFiles: ['src/a.js'], prompt: 'WRITE src/a.js a' }] });
+  const rq = node(q, ['.harness/daemon.mjs', '--once'], { HARNESS_LIVE: '0' });
+  assert(argsOf(q, 'w').includes('FMT=json') && !rq.stdout.includes('🔧'), 'quiet mode should not stream');
+});
+
+await test('heartbeat: config heartbeatIntervalSeconds wakes the controller again and picks up work added later', async () => {
+  const { d } = gitSandbox();
+  const cfg = json(path.join(d, '.harness', 'config.json')); cfg.heartbeatIntervalSeconds = 1;
+  fs.writeFileSync(path.join(d, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
+  setCharter(d, { requireRealCheck: 'no' }, 'PO_JSON {"tasks":[]}');
+  setBacklog(d, []);
+  const daemon = spawn(process.execPath, ['.harness/daemon.mjs', '--autonomous'], { cwd: d, env, stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 1500));
+  setBacklog(d, [{ id: 'LATE', title: 'added later', status: 'READY', verifyCmd: existsCheck('src/late.js'), subtasks: [{ id: 'w', targetFiles: ['src/late.js'], prompt: 'WRITE src/late.js l' }] }]);
+  const ok = await waitFor(() => byId(d, 'LATE')?.status === 'DONE', 15000);
+  daemon.kill('SIGTERM'); await new Promise((r) => daemon.on('close', r));
+  assert(ok, `LATE is ${byId(d, 'LATE')?.status}`);
+  assert(log(d).some((e) => e.phase === 'AUTO_DISPATCH' && e.trigger === 'interval'), 'not woken by the heartbeat');
+  assert(log(d).some((e) => e.phase === 'AUTO_START' && /every 1s/.test(e.message)), 'heartbeat config not used');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

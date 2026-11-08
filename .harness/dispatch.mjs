@@ -18,6 +18,8 @@
  *     --worker "w1:src/api.ts:Implement endpoint" \
  *     --worker "w2:src/api.test.ts:Write tests"
  *
+ * --branch uat   build on its own git branches, verify, then merge into 'uat' only if the check passes
+ *                (your working folder and main are not touched)
  * --wait   block until the job finishes and print the result (exit 0 = committed).
  *          If no background daemon is running, this command processes the job itself.
  */
@@ -46,6 +48,7 @@ let verifyCmd;
 let files = [];
 let wait = false;
 let autoPlan = !!config.planner?.defaultAutoPlan;
+let branch;
 const subtasks = [];
 
 for (let i = 0; i < args.length; i++) {
@@ -56,6 +59,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--title' && v !== undefined) { title = args[++i].trim(); }
   else if (a === '--files' && v !== undefined) { files = args[++i].split(',').map((f) => f.trim()).filter(Boolean); }
   else if (a === '--wait') { wait = true; }
+  else if (a === '--branch' && v !== undefined) { branch = args[++i].trim() || undefined; }
   else if (a === '--auto-plan') {
     autoPlan = true;
     if (/^(yes|no|true|false|on|off)$/i.test(v || '')) autoPlan = /^(yes|true|on)$/i.test(args[++i]);
@@ -92,6 +96,7 @@ const job = {
   ...(engine ? { engine } : {}),
   title,
   ...(verifyCmd ? { verifyCmd } : {}),
+  ...(branch ? { integrationBranch: branch } : {}),
   createdAt: new Date().toISOString(),
   ...(usePlanner
     ? { autoPlan: true, goal, targetFiles: files }
@@ -108,6 +113,7 @@ fs.writeFileSync(`${inboxPath}.tmp`, JSON.stringify(job, null, 2)); // atomic ha
 fs.renameSync(`${inboxPath}.tmp`, inboxPath);                       // the daemon never sees half a file
 console.log(`Dispatched [${(engine || config.activeProfile).toUpperCase()}] job ${job.id} (${usePlanner ? 'AI planner will choose the workers' : `${job.subtasks.length} worker[s]`}) -> ${path.relative(ROOT, inboxPath)}`);
 console.log(`Check: ${checkLine}`);
+if (branch) console.log(`Git: result is merged into '${branch}' only if the check passes; your folder and protected branches are not touched.`);
 
 if (!wait) process.exit(0);
 

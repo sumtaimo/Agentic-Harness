@@ -14,8 +14,24 @@
     "codex"
   ],
   "defaultVerifyCmd": "node -e \"process.exit(0)\"",
+  "liveAgentOutput": true,
   "autonomous": {
-    "intervalSeconds": 300
+    "intervalSeconds": 60
+  },
+  "git": {
+    "integrationBranch": "uat",
+    "integrationMode": "autonomous",
+    "integrationBase": "HEAD",
+    "protectedBranches": [
+      "main",
+      "master",
+      "production",
+      "prod"
+    ],
+    "keepFailedBranches": true,
+    "linkIntoWorktrees": [
+      "node_modules"
+    ]
   },
   "planner": {
     "defaultAutoPlan": false,
@@ -39,12 +55,11 @@
   "profiles": {
     "claude": {
       "verified": true,
-      "note": "Claude Code headless mode. Prompt goes on stdin. Role tools -> --allowedTools; charter forbiddenPaths/forbiddenTools -> --disallowedTools. CLAUDE.md @imports profile.md + lessons.md, so the harness does not inject those twice.",
+      "note": "Claude Code headless mode. Prompt goes on stdin. {output} = json (quiet) or stream-json (live agent activity in the terminal). Role tools -> --allowedTools; charter forbiddenPaths/forbiddenTools -> --disallowedTools. CLAUDE.md @imports profile.md + lessons.md, so the harness does not inject those twice (except in worktrees).",
       "binary": "claude",
       "args": [
         "-p",
-        "--output-format",
-        "json",
+        "{output}",
         "--allowedTools",
         "{allowedTools}",
         "--disallowedTools",
@@ -67,7 +82,18 @@
         "--mcp-config",
         "{mcpConfig}"
       ],
-      "mcpConfigPath": ".harness/mcp.json"
+      "mcpConfigPath": ".harness/mcp.json",
+      "output": {
+        "batch": [
+          "--output-format",
+          "json"
+        ],
+        "stream": [
+          "--output-format",
+          "stream-json",
+          "--verbose"
+        ]
+      }
     },
     "antigravity": {
       "verified": false,

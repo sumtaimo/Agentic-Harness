@@ -114,7 +114,7 @@
     },
     {
       "label": "Harness: 6. Start Autonomous Controller (acts on charter.md)",
-      "detail": "Background controller that works through the backlog and, when it is empty, lets the PO_ARCHITECT plan new tasks — only if charter.md says autonomous: on. Stop the normal Start task first (only one controller per folder).",
+      "detail": "Wakes on a heartbeat and works through the backlog (the PO_ARCHITECT plans new tasks when it is empty), only if charter.md says autonomous: on. Work is built on its own branches and merged into 'uat' only after the check passes; your folder and main are never touched. You see each agent working live. Stop task 1 first (one controller per folder).",
       "type": "process",
       "command": "node",
       "args": [
@@ -225,7 +225,7 @@
     {
       "id": "files",
       "type": "promptString",
-      "description": "Which files/folders may it change? (comma separated, e.g. src/ — leave empty to let it decide; needed for automatic undo)",
+      "description": "Which files/folders may it change? (comma separated, e.g. src/ \u2014 leave empty to let it decide; needed for automatic undo)",
       "default": ""
     },
     {

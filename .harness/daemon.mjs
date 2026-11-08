@@ -36,6 +36,10 @@ import {
   readCharter, loadRoles, loadSkills, matchSkills, computeAllowedTools, computeDisallowedTools,
   matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, backlogCounts, itemToJob
 } from './lib/governance.mjs';
+import {
+  isRepoWithCommits, branchSha, ensureBranch, protectedShas, ensureWorkerWorktree, commitScoped,
+  buildCandidate, advanceBranch, removeWorktree, deleteBranch, safeRef
+} from './lib/integration.mjs';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -77,6 +81,7 @@ function logTelemetry(phase, message, meta = {}) {
 // ───────────────────────────── 4-corner live HUD ─────────────────────────────
 
 const W = 76;
+let lastCompact = '';
 const C = { reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', cyan: '\x1b[36m' };
 const fit = (s, n) => { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1) + '…' : s.padEnd(n); };
 const row = (left, right = '', color = '') => {
@@ -112,8 +117,11 @@ const engineList = () => Object.entries(config.profiles)
 function renderHUD(s) {
   if (process.env.HARNESS_SILENT === '1') return;
   const p = s.phase || 'IDLE';
-  if (!process.stdout.isTTY) { // logs / CI: one compact line per change
-    console.log(`[harness] ${p} | ${s.engine || '-'} | cycle ${s.cycle || 0}/${MAX_CYCLES} | ${s.taskTitle || ''} | ${s.lastGateStatus || ''}`);
+  // Non-TTY logs, or a task running with live agent output: one line per change instead of a redraw,
+  // so the agents' streamed activity stays readable on screen.
+  if (!process.stdout.isTTY || (liveOn() && draining)) {
+    const line = `${p} | ${s.engine || '-'} | cycle ${s.cycle || 0}/${MAX_CYCLES} | ${s.taskTitle || ''} | ${s.workerSummary || ''} | ${s.lastGateStatus || ''}`;
+    if (line !== lastCompact) { lastCompact = line; console.log(`${process.stdout.isTTY ? C.bold : ''}[harness]${process.stdout.isTTY ? C.reset : ''} ${line}`); }
     return;
   }
   const color = p.startsWith('HALT') || p.includes('FAIL') || p === 'REJECTED' ? C.red
@@ -135,6 +143,7 @@ function renderHUD(s) {
     row(`VERIFY:  ${s.lastGateStatus || 'READY'}`, '', color),
     row(`QUEUE:   ${queue.length} waiting  |  MEMORY: ${taught} taught rule(s), ${autoL} auto lesson(s)`),
     row(`AUTO:    ${s.autoStatus || 'off'}`),
+    row(`GIT:     ${s.gitSummary || ((config.git || {}).integrationBranch && (config.git || {}).integrationMode !== 'off' ? `${config.git.integrationBranch} for ${config.git.integrationMode === 'always' ? 'every task' : 'autonomous tasks'}; other tasks edit your folder` : 'tasks edit your working folder')}`),
     sep(),
     row(`ENGINES: ${engineList()}   (✓ installed)`),
     row('LOGS: .harness/telemetry.log', 'MEMORY: .harness/memory/'),
@@ -156,13 +165,17 @@ const winQuote = (a) => (/[\s"&|<>^()]/.test(a) ? `"${a.replace(/"/g, '""')}"` :
  *   "arg"             — substituted where "{prompt}" appears in args
  *   "after--"         — appended after a "--" separator
  */
-function buildArgs(profile, prompt, allowedTools, disallowedTools = []) {
+/** Live agent output in the terminal: HARNESS_LIVE=1/0 overrides config.liveAgentOutput (default on). */
+const liveOn = () => (process.env.HARNESS_LIVE === '1' ? true : process.env.HARNESS_LIVE === '0' ? false : config.liveAgentOutput !== false);
+
+function buildArgs(profile, prompt, allowedTools, disallowedTools = [], stream = false) {
   const allowed = (allowedTools || profile.allowedTools || []).join(',');
   const disallowed = (disallowedTools || []).join(',');
   const via = profile.promptVia || ((profile.args || []).includes('{prompt}') ? 'arg' : 'stdin');
   const args = [];
   for (const a of profile.args || []) {
     if (a === '{prompt}') { if (via === 'arg') args.push(prompt); continue; }
+    if (a === '{output}') { args.push(...((stream ? profile.output?.stream : profile.output?.batch) || [])); continue; }
     const v = a.replace('{allowedTools}', allowed).replace('{disallowedTools}', disallowed);
     // A placeholder that expands to nothing drops itself AND the flag before it (e.g. "--disallowedTools" "").
     if (v === '' && a !== '' && /^-/.test(args[args.length - 1] || '')) { args.pop(); continue; }
@@ -176,7 +189,44 @@ function buildArgs(profile, prompt, allowedTools, disallowedTools = []) {
   return { args, viaStdin: via === 'stdin' };
 }
 
-/** Spawn an AI engine with a prompt. Resolves { engine, output }. */
+// ── live rendering of agent activity (stream-json events → one readable line each) ──
+const LIVE_COLORS = ['\x1b[36m', '\x1b[35m', '\x1b[33m', '\x1b[32m', '\x1b[34m', '\x1b[91m'];
+const liveColor = new Map();
+function livePrint(id, text) {
+  if (!liveColor.has(id)) liveColor.set(id, LIVE_COLORS[liveColor.size % LIVE_COLORS.length]);
+  const tty = process.stdout.isTTY;
+  const label = `[${id}]`.padEnd(18);
+  process.stdout.write(`${tty ? liveColor.get(id) : ''}  ${label}${tty ? '\x1b[0m' : ''} ${text}\n`);
+}
+const oneLine = (t, n = 160) => { const x = String(t ?? '').replace(/\s+/g, ' ').trim(); return x.length > n ? `${x.slice(0, n - 1)}…` : x; };
+function toolLabel(c, cwd) {
+  const i = c.input || {};
+  const p = i.file_path || i.notebook_path || i.path;
+  const rel = p ? (path.isAbsolute(p) ? path.relative(cwd, p) || '.' : p) : '';
+  const what = rel || (i.command ? `$ ${i.command}` : '') || i.pattern || i.url || i.description || '';
+  return `${c.name}${what ? ` ${oneLine(what, 120)}` : ''}`;
+}
+function renderStreamEvent(id, ev, cwd) {
+  if (ev.type === 'system' && ev.subtype === 'init') livePrint(id, `▶ agent started${ev.model ? ` (${ev.model})` : ''} in ${path.relative(ROOT, cwd) || '.'}`);
+  else if (ev.type === 'assistant') {
+    for (const c of ev.message?.content || []) {
+      if (c.type === 'text' && c.text.trim()) livePrint(id, `💬 ${oneLine(c.text)}`);
+      else if (c.type === 'tool_use') livePrint(id, `🔧 ${toolLabel(c, cwd)}`);
+    }
+  } else if (ev.type === 'user') {
+    for (const c of ev.message?.content || []) {
+      if (c.type === 'tool_result' && c.is_error) {
+        const t = Array.isArray(c.content) ? c.content.map((x) => x.text || '').join(' ') : c.content;
+        livePrint(id, `⚠ ${oneLine(t, 140)}`);
+      }
+    }
+  } else if (ev.type === 'result') {
+    const denied = (ev.permission_denials || []).map((d) => oneLine(`${d.tool_name} ${d.tool_input?.file_path ? path.relative(cwd, d.tool_input.file_path) : d.tool_input?.command || ''}`, 90));
+    livePrint(id, `${ev.is_error ? '✖ failed' : '✔ finished'}${ev.duration_ms ? ` in ${(ev.duration_ms / 1000).toFixed(1)}s` : ''}${ev.total_cost_usd ? ` · $${ev.total_cost_usd.toFixed(3)}` : ''}${denied.length ? ` · ⛔ denied: ${denied.join(', ')}` : ''}`);
+  }
+}
+
+/** Spawn an AI engine with a prompt. Resolves { engine, output, denials }. Streams activity live when enabled. */
 function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallowedTools }) {
   return new Promise((resolve, reject) => {
     let profile;
@@ -185,14 +235,17 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallo
       logTelemetry('ENGINE_FALLBACK', `Engine '${profile.fallbackFrom}' unavailable (${profile.fallbackReason}); using '${profile.name}'`, { worker: id });
       writeState({ engine: profile.name.toUpperCase(), history: pushHistory(`! ${profile.fallbackFrom} unavailable → using ${profile.name}`) });
     }
+    const live = liveOn();
+    const stream = live && Array.isArray(profile.output?.stream);
     const binPath = which(profile.binary);
-    const { args, viaStdin } = buildArgs(profile, prompt, allowedTools, disallowedTools);
+    const { args, viaStdin } = buildArgs(profile, prompt, allowedTools, disallowedTools, stream);
     const isWin = process.platform === 'win32';
     const env = { ...process.env, HARNESS_WORKER: '1', HARNESS_WORKER_ID: id };
     const child = spawn(isWin ? winQuote(binPath) : binPath, isWin ? args.map(winQuote) : args, { cwd, env, shell: isWin, stdio: ['pipe', 'pipe', 'pipe'] });
-    logTelemetry('ENGINE_SPAWN', `Spawned ${profile.name} for ${id}`, { engine: profile.name, binary: binPath, args: args.map((a) => (a === prompt ? '<prompt>' : a)), promptVia: viaStdin ? 'stdin' : 'args', cwd });
+    logTelemetry('ENGINE_SPAWN', `Spawned ${profile.name} for ${id}`, { engine: profile.name, binary: binPath, args: args.map((a) => (a === prompt ? '<prompt>' : a)), promptVia: viaStdin ? 'stdin' : 'args', live: live ? (stream ? 'stream-json' : 'raw') : 'off', cwd });
+    if (live && !stream) livePrint(id, `▶ ${profile.name} started (raw output follows)`);
 
-    let stdout = ''; let stderr = ''; let settled = false;
+    let stdout = ''; let stderr = ''; let settled = false; let pending = '';
     const done = (fn, v) => { if (!settled) { settled = true; clearTimeout(timer); fn(v); } };
     const ms = timeoutMs || config.workerTimeoutMs || 300000;
     const timer = setTimeout(() => {
@@ -201,7 +254,16 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallo
       done(reject, new Error(`${id} (${profile.name}) timed out after ${ms}ms`));
     }, ms);
 
-    child.stdout.on('data', (c) => { stdout += c.toString(); });
+    child.stdout.on('data', (c) => {
+      const chunk = c.toString(); stdout += chunk;
+      if (!live) return;
+      pending += chunk;
+      const lines = pending.split('\n'); pending = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        if (stream) { try { renderStreamEvent(id, JSON.parse(line), cwd); } catch { livePrint(id, oneLine(line)); } } else livePrint(id, oneLine(line, 200));
+      }
+    });
     child.stderr.on('data', (c) => { stderr += c.toString(); });
     child.stdin.on('error', () => {}); // engine may close stdin early
     if (viaStdin) child.stdin.write(prompt);
@@ -209,27 +271,41 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallo
 
     child.on('error', (err) => done(reject, Object.assign(new Error(`Failed to start '${profile.binary}': ${err.message}`), { fatal: err.code === 'ENOENT' })));
     child.on('close', (code) => {
+      if (live && pending.trim() && !stream) livePrint(id, oneLine(pending, 200));
       if (code !== 0) return done(reject, new Error(`${id} (${profile.name}) exited with code ${code}: ${(stderr || stdout).trim().slice(0, 4000)}`));
-      try { done(resolve, { engine: profile.name, output: summarizeOutput(stdout) }); } catch (e) { done(reject, e); }
+      try {
+        const r = summarizeOutput(stdout);
+        if (r.denials.length) logTelemetry('PERMISSION_DENIED', `${id}: engine denied ${r.denials.length} action(s) outside its role`, { worker: id, denials: r.denials });
+        done(resolve, { engine: profile.name, output: r.text, denials: r.denials });
+      } catch (e) { done(reject, e); }
     });
   });
 }
 
-/** Claude's --output-format json returns {result, is_error, ...}; other engines return text. */
+/**
+ * Engine output → { text, denials }.
+ *  - Claude --output-format json: one object {result, is_error, permission_denials}
+ *  - Claude --output-format stream-json: JSON lines; the last {"type":"result"} line carries the same fields
+ *  - other engines: plain text
+ */
 function summarizeOutput(stdout) {
   const text = stdout.trim();
-  let j;
-  try { j = JSON.parse(text); } catch { return text; }
+  let j = null;
+  try { j = JSON.parse(text); } catch {
+    const lines = text.split('\n').filter((l) => l.trim().startsWith('{'));
+    for (let i = lines.length - 1; i >= 0 && !j; i--) { try { const o = JSON.parse(lines[i]); if (o.type === 'result') j = o; } catch { /* not JSON */ } }
+  }
   if (j && typeof j === 'object' && 'result' in j) {
     if (j.is_error) throw new Error(`Engine reported an error: ${String(j.result).slice(0, 2000)}`);
-    return String(j.result);
+    const denials = (j.permission_denials || []).map((d) => ({ tool: d.tool_name, target: d.tool_input?.file_path || d.tool_input?.command || '' }));
+    return { text: String(j.result), denials };
   }
-  return text;
+  return { text, denials: [] };
 }
 
 /** Which memory parts the engine already loads itself (e.g. CLAUDE.md "@.harness/memory/lessons.md"). */
 function autoLoadedMemory(profile, cwd) {
-  if (!profile.instructionFile || config.useGitWorktrees) return []; // worktrees see the last commit, maybe stale
+  if (!profile.instructionFile || config.useGitWorktrees || path.resolve(cwd) !== ROOT) return []; // worktrees see the last commit, maybe stale
   let text = '';
   try { text = fs.readFileSync(path.join(cwd, profile.instructionFile), 'utf8'); } catch { return []; }
   const skip = [];
@@ -381,6 +457,56 @@ function restoreScope(backup) {
 
 function discardBackup(backup) {
   if (backup?.dir) fs.rmSync(backup.dir, { recursive: true, force: true });
+}
+
+// ───────────────────────────── git integration branch (e.g. uat) ─────────────────────────────
+
+/** Which integration branch a task uses (null = classic in-place mode). */
+function integrationFor(task) {
+  const g = config.git || {};
+  if (task.integrationBranch) return task.integrationBranch;
+  const mode = g.integrationMode || 'off';
+  if (!g.integrationBranch || mode === 'off') return null;
+  if (mode === 'autonomous' && !task.autonomous) return null;
+  return g.integrationBranch;
+}
+
+async function startIntegration(task, branch) {
+  const g = config.git || {};
+  if (!(await isRepoWithCommits(ROOT))) throw fatal(`Integration branch '${branch}' needs a git repository with at least one commit (run: git init && git add -A && git commit -m start).`);
+  const protectedList = g.protectedBranches || ['main', 'master'];
+  if (protectedList.includes(branch)) throw fatal(`Refusing to integrate into protected branch '${branch}' (git.protectedBranches). Use an integration branch such as 'uat'.`);
+  const created = await ensureBranch(branch, g.integrationBase || 'HEAD', ROOT);
+  if (created) logTelemetry('GIT_BRANCH_CREATED', `Created integration branch '${branch}' from ${g.integrationBase || 'HEAD'}`);
+  const baseSha = await branchSha(branch, ROOT);
+  const tag = safeRef(task.id || `job-${Date.now()}`);
+  const ctx = {
+    branch, baseSha, tag, link: g.linkIntoWorktrees || ['node_modules'],
+    dir: path.join(DIRS.worktrees, tag), workers: {}, protectedBefore: await protectedShas(protectedList, ROOT), mergedSha: null
+  };
+  ctx.intPath = path.join(ctx.dir, '_integration');
+  logTelemetry('GIT_INTEGRATION', `Workers branch from '${branch}' @ ${baseSha.slice(0, 8)}; candidate is verified before '${branch}' moves`, { branch, baseSha, protected: ctx.protectedBefore });
+  writeState({ gitSummary: `${branch} @ ${baseSha.slice(0, 8)} ← harness/${tag}/* (your folder + ${protectedList.join('/')} untouched)` });
+  return ctx;
+}
+
+async function finishIntegration(ctx, ok) {
+  if (!ctx) return null;
+  const keep = !ok && (config.git || {}).keepFailedBranches !== false;
+  for (const w of Object.values(ctx.workers)) {
+    await removeWorktree(w.path, ROOT);
+    if (!keep) await deleteBranch(w.branch, ROOT);
+  }
+  await removeWorktree(ctx.intPath, ROOT);
+  try { fs.rmSync(ctx.dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  const after = await protectedShas(Object.keys(ctx.protectedBefore), ROOT);
+  const changed = Object.keys(after).filter((b) => after[b] !== ctx.protectedBefore[b]);
+  if (changed.length) logTelemetry('PROTECTED_BRANCH_CHANGED', `WARNING: ${changed.join(', ')} moved during the task (not by the harness merge path)`, { before: ctx.protectedBefore, after });
+  else logTelemetry('PROTECTED_BRANCHES_UNCHANGED', `${Object.keys(after).filter((b) => after[b]).join(', ') || '(none exist)'} unchanged`, { shas: after });
+  return {
+    branch: ctx.branch, baseSha: ctx.baseSha, mergedSha: ctx.mergedSha, protectedUnchanged: changed.length === 0,
+    workerBranches: Object.values(ctx.workers).map((w) => w.branch), keptBranches: keep
+  };
 }
 
 // ───────────────────────────── Node 1: planner ─────────────────────────────
@@ -591,11 +717,11 @@ async function runPlanner(task, errorTrace = null, previous = null) {
 
 // ───────────────────────────── Node 2: executor swarm ─────────────────────────────
 
-async function runExecutorSwarm(plan) {
+async function runExecutorSwarm(plan, gitCtx = null) {
   writeState({ phase: '2_EXECUTOR_SWARM', mode: plan.mode, workerSummary: `Spawning ${plan.subtasks.length} parallel worker(s): ${plan.subtasks.map((s) => `${s.resolvedRole ? `${s.resolvedRole}:` : ''}${s.id}`).join(' | ')}` });
   logTelemetry('2_EXECUTOR', `Dispatching ${plan.subtasks.length} worker(s)`, { mode: plan.mode, engine: plan.engine });
 
-  const useWorktrees = config.useGitWorktrees && plan.subtasks.some((s) => s.prompt);
+  const useWorktrees = !gitCtx && config.useGitWorktrees && plan.subtasks.some((s) => s.prompt);
   if (useWorktrees && !(await isGitRepo())) throw fatal('useGitWorktrees is on, but this folder is not a git repository with at least one commit.');
 
   let finished = 0;
@@ -605,12 +731,29 @@ async function runExecutorSwarm(plan) {
     let workerCwd = ROOT;
     const wtPath = path.join(DIRS.worktrees, `${plan.taskId}-${sub.id}`.replace(/[^\w.-]/g, '_'));
     try {
-      if (useWorktrees) {
+      if (gitCtx) { // integration mode: own branch + worktree from the integration branch, kept across cycles
+        const w = gitCtx.workers[sub.id] || (gitCtx.workers[sub.id] = {
+          branch: `harness/${gitCtx.tag}/${safeRef(sub.id)}`, path: path.join(gitCtx.dir, safeRef(sub.id))
+        });
+        if (await ensureWorkerWorktree({ wtPath: w.path, branch: w.branch, baseSha: gitCtx.baseSha, root: ROOT, link: gitCtx.link })) {
+          logTelemetry('GIT_WORKTREE', `Worker ${sub.id} works on branch ${w.branch}`, { worker: sub.id, path: w.path });
+        }
+        workerCwd = w.path;
+      } else if (useWorktrees) {
         await execFileAsync('git', ['worktree', 'add', '--detach', wtPath, 'HEAD'], { cwd: ROOT });
         workerCwd = wtPath;
       }
       const result = await runWorker(sub, workerCwd, plan.errorContext);
       if (useWorktrees) result.sync = await syncWorktree(wtPath, sub);
+      if (gitCtx && sub.prompt) {
+        const c = await commitScoped({
+          wtPath: workerCwd, targets: sub.targetFiles, inScope, root: ROOT, ignore: gitCtx.link,
+          message: `harness(${plan.taskId}): ${sub.resolvedRole ? `${sub.resolvedRole} ` : ''}${sub.id}\n\n${String(sub.prompt).slice(0, 400)}`
+        });
+        if (c.discarded.length) logTelemetry('2_SCOPE_VIOLATION', `Worker ${sub.id} changed files outside its scope; discarded before commit`, { worker: sub.id, blocked: c.discarded });
+        logTelemetry('GIT_WORKER_COMMIT', `${sub.id}: ${c.sha ? `committed ${c.kept.length} file(s) @ ${c.sha.slice(0, 8)}` : 'no in-scope changes'}`, { worker: sub.id, kept: c.kept, sha: c.sha });
+        result.git = c;
+      }
       finished++;
       writeState({ workerSummary: `${finished}/${plan.subtasks.length} worker(s) finished (last: ${sub.resolvedRole ? `${sub.resolvedRole}:` : ''}${sub.id})` });
       logTelemetry('2_WORKER_DONE', `Worker ${sub.id} finished`, { worker: sub.id, role: sub.resolvedRole });
@@ -630,6 +773,17 @@ async function runExecutorSwarm(plan) {
     throw Object.assign(new Error(`Swarm execution failed: ${errMsg}`), { fatal: rejected.some((r) => r.reason.fatal) });
   }
   writeState({ phase: '2_EXECUTED', workerSummary: `All ${plan.subtasks.length} worker(s) completed cleanly.` });
+  if (gitCtx) { // merge every worker branch into a candidate on top of the integration branch
+    const workerBranches = Object.entries(gitCtx.workers).map(([id, w]) => ({ id, branch: w.branch }));
+    const { tip, candidate } = await buildCandidate({
+      intPath: gitCtx.intPath, integrationBranch: gitCtx.branch, workerBranches, root: ROOT, link: gitCtx.link,
+      messageFor: (b) => `harness(${plan.taskId}): merge ${b.id} into ${gitCtx.branch}`
+    });
+    gitCtx.tipAtCandidate = tip; gitCtx.candidate = candidate;
+    plan.verifyCwd = gitCtx.intPath;
+    logTelemetry('GIT_CANDIDATE', `Candidate ${candidate.slice(0, 8)} = ${gitCtx.branch} @ ${tip.slice(0, 8)} + ${workerBranches.length} worker branch(es); verifying it before ${gitCtx.branch} moves`, { tip, candidate });
+    writeState({ gitSummary: `candidate ${candidate.slice(0, 8)} on ${gitCtx.branch} @ ${tip.slice(0, 8)} — verifying (not merged yet)` });
+  }
   return results.map((r) => r.value);
 }
 
@@ -637,9 +791,9 @@ async function runExecutorSwarm(plan) {
 
 async function runVerifier(plan) {
   writeState({ phase: '3_VERIFIER', lastGateStatus: `Running: ${plan.verifyCmd}` });
-  logTelemetry('3_VERIFIER', `Executing verification command: ${plan.verifyCmd}`, { source: plan.verifySource });
+  logTelemetry('3_VERIFIER', `Executing verification command: ${plan.verifyCmd}`, { source: plan.verifySource, cwd: plan.verifyCwd ? path.relative(ROOT, plan.verifyCwd) : '.' });
   try {
-    const { stdout } = await execAsync(plan.verifyCmd, { cwd: ROOT, timeout: config.verifyTimeoutMs || 600000, maxBuffer: 32 * 1024 * 1024 });
+    const { stdout } = await execAsync(plan.verifyCmd, { cwd: plan.verifyCwd || ROOT, timeout: config.verifyTimeoutMs || 600000, maxBuffer: 32 * 1024 * 1024 });
     const cleanOut = (stdout || '').trim().split('\n').filter(Boolean).pop() || 'OK';
     writeState({ phase: '3_VERIFIED', lastGateStatus: `PASS (Exit 0): ${plan.verifyCmd} -> ${cleanOut}` });
     logTelemetry('3_VERIFIED', 'Verifier exit code 0');
@@ -654,9 +808,15 @@ async function runVerifier(plan) {
 
 // ───────────────────────────── Node 4: committer ─────────────────────────────
 
-async function runCommitter(plan, task, taskFile) {
+async function runCommitter(plan, task, taskFile, gitCtx = null) {
   let gitNote = '';
-  if (config.autoGitCommit && (await isGitRepo())) {
+  if (gitCtx) { // the verified candidate becomes the new integration branch tip
+    const how = await advanceBranch({ branch: gitCtx.branch, newSha: gitCtx.candidate, expectedOld: gitCtx.tipAtCandidate, root: ROOT });
+    gitCtx.mergedSha = gitCtx.candidate;
+    gitNote = ` → ${gitCtx.branch} @ ${gitCtx.candidate.slice(0, 8)}`;
+    logTelemetry('GIT_INTEGRATED', `${gitCtx.branch} moved ${gitCtx.tipAtCandidate.slice(0, 8)} → ${gitCtx.candidate.slice(0, 8)} (${how})`, { branch: gitCtx.branch, from: gitCtx.tipAtCandidate, to: gitCtx.candidate });
+    writeState({ gitSummary: `${gitCtx.branch} @ ${gitCtx.candidate.slice(0, 8)} (verified merge) — your folder untouched` });
+  } else if (config.autoGitCommit && (await isGitRepo())) {
     const scope = plan.subtasks.flatMap((s) => s.targetFiles);
     try {
       await execFileAsync('git', ['add', '-A', '--', ...(scope.length ? scope : ['.']), ':(exclude).harness'], { cwd: ROOT });
@@ -669,7 +829,10 @@ async function runCommitter(plan, task, taskFile) {
   }
   writeState({ phase: '4_COMMITTED', lastGateStatus: `COMMITTED: ${plan.taskId} verified & archived${gitNote}.` });
   logTelemetry('4_COMMITTER', 'Task passed all gates and committed', { taskId: plan.taskId, engine: plan.engine, verifyCmd: plan.verifyCmd });
-  archiveTask(taskFile, task, DIRS.completed, { result: 'COMMITTED', plan: plan.subtasks, verifyCmd: plan.verifyCmd, completedAt: new Date().toISOString() });
+  archiveTask(taskFile, task, DIRS.completed, {
+    result: 'COMMITTED', plan: plan.subtasks, verifyCmd: plan.verifyCmd, completedAt: new Date().toISOString(),
+    ...(gitCtx ? { git: { branch: gitCtx.branch, from: gitCtx.tipAtCandidate, to: gitCtx.candidate, workerBranches: Object.values(gitCtx.workers).map((w) => w.branch) } } : {})
+  });
 }
 
 /** Move a job out of the inbox to completed/ or failed/ as <id>-<timestamp>.json (+ .trace.txt for failures). */
@@ -710,6 +873,7 @@ async function executeSquareCycle(taskFile) {
 
   const errors = [];
   let plan = null; let outputs = []; let cycle = 1; let lastErrorTrace = null; let haltReason = null; let backup = null;
+  const integration = integrationFor(task); let gitCtx = null; let gitResult = null;
   const title = task.title || path.basename(taskFile);
   writeState({ planSummary: '-', workerSummary: '-', currentTaskFile: taskFile });
   lastFinished = { autonomous: !!task.autonomous, backlogId: task.backlogId, title, ok: false };
@@ -722,14 +886,16 @@ async function executeSquareCycle(taskFile) {
     writeState({ cycle, taskId: task.id, taskTitle: title, lastGateStatus: cycle > 1 ? `Retrying with previous error (cycle ${cycle})` : 'Planning…' });
     try {
       plan = await runPlanner(task, lastErrorTrace, plan);
-      if (cycle === 1 && !backup) backup = backupScope(plan);
-      outputs = await runExecutorSwarm(plan);
+      if (integration && !gitCtx) gitCtx = await startIntegration(task, integration);
+      if (cycle === 1 && !backup && !gitCtx) backup = backupScope(plan);
+      outputs = await runExecutorSwarm(plan, gitCtx);
       const verification = await runVerifier(plan);
       if (verification.passed) {
-        await runCommitter(plan, task, taskFile);
+        await runCommitter(plan, task, taskFile, gitCtx);
+        gitResult = await finishIntegration(gitCtx, true);
         discardBackup(backup);
-        finishSession(task, plan, 'COMMITTED', cycle, errors, outputs);
-        if (task.backlogId) updateBacklogItem(task.backlogId, { status: 'DONE', completedAt: new Date().toISOString(), result: 'COMMITTED', cyclesUsed: cycle });
+        finishSession(task, plan, 'COMMITTED', cycle, errors, outputs, null, gitResult);
+        if (task.backlogId) updateBacklogItem(task.backlogId, { status: 'DONE', completedAt: new Date().toISOString(), result: 'COMMITTED', cyclesUsed: cycle, ...(gitResult ? { integratedInto: `${gitResult.branch}@${gitResult.mergedSha.slice(0, 8)}` } : {}) });
         lastFinished.ok = true;
         writeState({ history: pushHistory(`✔ COMMITTED  ${title} (cycle ${cycle}/${MAX_CYCLES})`), currentTaskFile: null });
         return true;
@@ -751,10 +917,12 @@ async function executeSquareCycle(taskFile) {
   const reason = haltReason || `HALTED after ${MAX_CYCLES} cycles. Last error: ${lastErrorTrace}`;
   let rollback = null;
   try { rollback = restoreScope(backup); } catch (e) { rollback = `FAILED: ${e.message} — backup kept in .harness/staging/`; logTelemetry('ROLLBACK_FAILED', e.message); }
+  try { gitResult = await finishIntegration(gitCtx, false); } catch (e) { logTelemetry('GIT_CLEANUP_FAILED', e.message); }
+  if (gitResult) rollback = `${gitCtx.branch} unchanged (candidate discarded)${gitResult.keptBranches ? `; worker branches kept for review: ${gitResult.workerBranches.join(', ')}` : ''}`;
   const dest = archiveTask(taskFile, task, DIRS.failed, {
-    result: phase, haltReason: reason, haltedAt: new Date().toISOString(), cyclesUsed: usedCycles, rollback, errors
+    result: phase, haltReason: reason, haltedAt: new Date().toISOString(), cyclesUsed: usedCycles, rollback, errors, git: gitResult
   }, errors.map((e, i) => `===== cycle ${i + 1} =====\n${e}`).join('\n\n'));
-  finishSession(task, plan, phase, usedCycles, errors, outputs, rollback);
+  finishSession(task, plan, phase, usedCycles, errors, outputs, rollback, gitResult);
   writeState({
     phase,
     lastGateStatus: haltReason ? `REJECTED: ${haltReason}` : `HALTED after ${MAX_CYCLES} cycles${rollback ? `; files ${rollback}` : ''}. Inspect .harness/failed/`,
@@ -766,7 +934,7 @@ async function executeSquareCycle(taskFile) {
   return false;
 }
 
-function finishSession(task, plan, result, cycles, errors, outputs, rollback = null) {
+function finishSession(task, plan, result, cycles, errors, outputs, rollback = null, gitResult = null) {
   const mem = config.memory || {};
   const title = task.title || task.id || 'task';
   try {
@@ -774,7 +942,7 @@ function finishSession(task, plan, result, cycles, errors, outputs, rollback = n
       recordSession({
         taskId: task.id || 'task', title, result, cycles, maxCycles: MAX_CYCLES, goal: task.goal,
         engine: plan?.engine || task.engine || '-', verifyCmd: plan?.verifyCmd || task.verifyCmd || '-', verifySource: plan?.verifySource,
-        verifySuggestion: plan?.verifySuggestion, planner: plan?.planSummary, rollback,
+        verifySuggestion: plan?.verifySuggestion, planner: plan?.planSummary, rollback, git: gitResult,
         subtasks: plan?.subtasks || task.subtasks || [], errors, outputs, finishedAt: new Date().toISOString()
       });
     }
@@ -810,7 +978,7 @@ async function drain() {
   } finally {
     draining = false;
     if (auto.enabled) { refreshAutoStatus(); setTimeout(() => autonomousTick('queue-empty').catch((e) => logTelemetry('AUTO_ERROR', e.message)), 1000); }
-    if (!onceMode && !selfTestMode) setTimeout(() => !draining && writeState({ phase: 'IDLE_WATCHING', mode: 'SQUARE + SWARM', cycle: 0, workerSummary: 'Idle — waiting for the next task', activeLocks: [] }), 1500);
+    if (!onceMode && !selfTestMode) setTimeout(() => !draining && !auto.ticking && writeState({ phase: 'IDLE_WATCHING', mode: 'SQUARE + SWARM', cycle: 0, workerSummary: 'Idle — waiting for the next task', activeLocks: [] }), 1500);
   }
 }
 
@@ -967,7 +1135,7 @@ const tickMode = args.includes('--tick');
 const onceMode = args.includes('--once') || tickMode;
 const argVal = (flag) => { const i = args.indexOf(flag); return i > -1 ? args[i + 1] : undefined; };
 auto.enabled = args.includes('--autonomous') && !tickMode;
-auto.intervalSec = Number(argVal('--interval')) || (Number(argVal('--schedule')) * 60) || (config.autonomous || {}).intervalSeconds || 300;
+auto.intervalSec = Number(argVal('--interval')) || (Number(argVal('--schedule')) * 60) || config.heartbeatIntervalSeconds || (config.autonomous || {}).intervalSeconds || 60;
 
 if (selfTestMode) {
   const testTaskFile = path.join(DIRS.inbox, 'self-test-swarm.json');
