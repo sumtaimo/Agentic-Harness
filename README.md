@@ -547,6 +547,60 @@ problems were then found and fixed:
    mode lost the first letter of its path (git's `" M path"` was trimmed), so the edit was discarded as "out
    of scope" and the task failed 3 times. `uat` stayed safe, but good work was thrown away. Fixed, with a
    regression test that fails when the bug is put back.
+10. v2.3 added **Normal vs. Autopilot** shortcuts, **dynamic execution routing** (`--mode normal|parallel|team`),
+    the **JavaScript SDK** (`.harness/sdk.mjs`), **MCP optional presets** (`.harness/mcp.json`), and expanded
+    **skills** (`security-guard`, `test-champion`, `api-craft`, `spec-writer`).
+
+---
+
+## Project Goal & Architecture Roadmap
+
+### The Core Vision
+To provide a **universal, zero-dependency Agentic Harness template** that any developer or team can drop into their existing project (`node install.mjs <project>`). It brings governed, automated AI pair programming and background autonomous cycles into any codebase—completely model-neutral, with automatic test verification, token-saving execution routing, and git rollback protection.
+
+### 1. Dynamic Execution Routing (4 Modes)
+
+Instead of paying the overhead and latency of a multi-agent hierarchy for simple micro-edits, the harness scales dynamically based on task scope:
+
+| Mode | Command / Flag | Agent Roster | Best For | Token Overhead |
+|---|---|---|---|---|
+| **Normal / Direct** | `npm run run -- --goal "…"` | Single direct worker (no planner) | 1–2 file bug fixes, small edits | **Minimal (~80% token savings)** |
+| **Parallel Swarm** | `dispatch.mjs --mode parallel` | N isolated builders (AI planner) | Independent files / modules | Medium (~3k tokens/worker) |
+| **Team Hierarchy** | `dispatch.mjs --mode team` | Orchestrator → Leads (BA, DEV, QA) | Cross-layer full features | Standard (~8k–15k tokens) |
+| **Autopilot Loop** | `npm run auto` | Autonomous daemon (`charter.md`) | Hands-off backlog grooming & coding on `uat` | Scheduled heartbeat cycles |
+
+### 2. Programmatic JavaScript SDK (`.harness/sdk.mjs`)
+Developers can automate or embed the harness directly into CI/CD scripts or custom tooling:
+
+```javascript
+import { run, addTask, autopilotTick, status, doctor } from './.harness/sdk.mjs';
+
+// 1. Run a normal task with automated verification
+const result = await run({
+  goal: "Add slugify utility function with unit tests",
+  files: ["src/slugify.js", "test/slugify.test.js"],
+  check: "npm test",
+  mode: "normal" // 'normal' | 'parallel' | 'team'
+});
+console.log(result.ok ? `Passed: ${result.jobId}` : "Task halted & rolled back");
+
+// 2. Add an autonomous task to the backlog
+await addTask({ title: "Audit input validation", role: "DEV_ENGINEER", check: "npm test" });
+
+// 3. Trigger an autonomous tick
+await autopilotTick();
+```
+
+### 3. Out-of-the-Box Skills Library (`.harness/skills/`)
+Skills inject targeted rules and allowed tools only when relevant to the task's keywords, avoiding prompt bloat:
+- **`code-craft`**: Enforces `@governed-by` headers, clean modular structure, and test execution before completing.
+- **`security-guard`**: Blocks hardcoded secrets/API keys, unsanitized inputs, eval/injection vulnerabilities, and path traversal.
+- **`test-champion`**: Directs QA auditors to cover happy paths, boundary/edge cases, error shapes, and deterministic assertions.
+- **`api-craft`**: Enforces uniform REST/JSON error structures, HTTP status codes, and input validation.
+- **`spec-writer`**: Formulates concise Given/When/Then acceptance criteria and interface contracts without code leaks.
+
+### 4. Model Independence & MCP Presets (`.harness/mcp.json`)
+The harness connects to any CLI-driven AI engine (Claude, Gemini, Codex, Antigravity, local Ollama models) without vendor lock-in. Optional MCP server presets are pre-configured for GitHub PR/issue inspection, Postgres databases, and web fetching.
 
 ## License
 
