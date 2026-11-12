@@ -8,5 +8,21 @@
         "."
       ]
     }
+  },
+  "_optionalPresets": {
+    "_note": "Copy a preset into mcpServers to enable it, then set useMcp: true for the engine in config.json. Secrets come from your environment, never write them here.",
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }
+    },
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "${DATABASE_URL}"]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    }
   }
 }
