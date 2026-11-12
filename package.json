@@ -5,6 +5,12 @@
   "scripts": {
     "test": "node test/run-tests.mjs",
     "test:live": "node test/live-e2e.mjs",
-    "demo": "node examples/make-demo.mjs"
+    "demo": "node examples/make-demo.mjs",
+    "run": "node .harness/dispatch.mjs --mode normal --wait",
+    "normal": "node .harness/dispatch.mjs --mode normal --wait",
+    "auto": "node .harness/daemon.mjs --autonomous",
+    "autopilot": "node .harness/daemon.mjs --autonomous",
+    "status": "node .harness/status.mjs",
+    "doctor": "node .harness/doctor.mjs"
   }
 }

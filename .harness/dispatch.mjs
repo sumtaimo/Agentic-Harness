@@ -22,6 +22,11 @@
  *   node .harness/dispatch.mjs --goal "Build a login feature with spec, code and tests" --hierarchy [--max-cost 1.5] [--wait]
  *   (--max-cost: the controller stops the task if the agents spend more than this many dollars)
  *
+ * --mode normal    one direct worker, no planner (fastest, fewest tokens)  — npm run run -- --goal "…"
+ * --mode parallel  AI planner splits into parallel workers (same as --auto-plan)
+ * --mode team      orchestrator → leads → workers (same as --hierarchy)
+ * Autopilot (backlog loop) is not a dispatch mode: npm run auto
+ *
  * --branch uat   build on its own git branches, verify, then merge into 'uat' only if the check passes
  *                (your working folder and main are not touched)
  * --wait   block until the job finishes and print the result (exit 0 = committed).
@@ -67,6 +72,16 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--wait') { wait = true; }
   else if (a === '--branch' && v !== undefined) { branch = args[++i].trim() || undefined; }
   else if (a === '--hierarchy') { hierarchy = true; }
+  else if (a === '--mode' && v !== undefined) {
+    const m = args[++i].trim().toLowerCase();
+    if (m === 'normal' || m === 'direct' || m === 'run') { autoPlan = false; hierarchy = false; }
+    else if (m === 'parallel') { autoPlan = true; hierarchy = false; }
+    else if (m === 'team' || m === 'hierarchy') { hierarchy = true; }
+    else if (m === 'auto' || m === 'autopilot') {
+      console.error('Autopilot works from the backlog, not from one goal. Add the task with:\n  node .harness/backlog.mjs add "<title>" --status READY\nthen start autopilot with:  npm run auto');
+      process.exit(1);
+    } else { console.error(`Unknown --mode '${m}'. Use: normal | parallel | team (autopilot: npm run auto)`); process.exit(1); }
+  }
   else if (a === '--max-cost' && v !== undefined) {
     maxCost = Number(args[++i]);
     if (!Number.isFinite(maxCost) || maxCost < 0) { console.error('--max-cost must be a number of dollars, e.g. --max-cost 1.5'); process.exit(1); }

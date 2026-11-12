@@ -2,6 +2,26 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Harness: Run (normal, one task now)",
+      "detail": "Single direct worker, no planner: fastest and cheapest. Files are restored if the check fails.",
+      "type": "process",
+      "command": "node",
+      "args": [".harness/dispatch.mjs", "--mode", "normal", "--goal", "${input:goal}", "--files", "${input:files}", "--check", "${input:check}", "--wait"],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: Autopilot (work the READY backlog)",
+      "detail": "Same as task 6: runs READY backlog tasks by itself inside charter.md; results land on the 'uat' branch.",
+      "type": "process",
+      "command": "node",
+      "args": [".harness/daemon.mjs", "--autonomous"],
+      "isBackground": true,
+      "runOptions": { "instanceLimit": 1 },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true, "group": "harness" },
+      "problemMatcher": []
+    },
+    {
       "label": "Harness: 1. Start (live screen)",
       "detail": "Starts the background agentic harness and shows its live screen. Starts by itself when the folder opens (after you allow automatic tasks once).",
       "type": "process",
