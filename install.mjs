@@ -240,7 +240,7 @@ if (optI > -1) {
   const want = String(process.argv[optI + 1] || '').toLowerCase();
   if (!['on', 'off'].includes(want)) { console.error('--autonomous takes "on" or "off".'); process.exit(1); }
   const cp = path.join(target, '.harness', 'charter.md');
-  if (want === 'off' && report.some((r) => r.startsWith('wrote  .harness/charter.md')) && fs.existsSync(cp)) {
+  if (want === 'off' && report.some((r) => r.replaceAll('\\', '/').startsWith('wrote  .harness/charter.md')) && fs.existsSync(cp)) {
     fs.writeFileSync(cp, fs.readFileSync(cp, 'utf8').replace(/^- autonomous: on$/m, '- autonomous: off'));
     report.push('set   autonomous mode OFF in the new .harness/charter.md');
   }

@@ -210,7 +210,7 @@ const oneLine = (t, n = 160) => { const x = String(t ?? '').replace(/\s+/g, ' ')
 function toolLabel(c, cwd) {
   const i = c.input || {};
   const p = i.file_path || i.notebook_path || i.path;
-  const rel = p ? (path.isAbsolute(p) ? path.relative(cwd, p) || '.' : p) : '';
+  const rel = p ? (path.isAbsolute(p) ? path.relative(cwd, p) || '.' : p).split(path.sep).join('/') : '';
   const what = rel || (i.command ? `$ ${i.command}` : '') || i.pattern || i.url || i.description || '';
   return `${c.name}${what ? ` ${oneLine(what, 120)}` : ''}`;
 }
@@ -229,7 +229,7 @@ function renderStreamEvent(id, ev, cwd) {
       }
     }
   } else if (ev.type === 'result') {
-    const denied = (ev.permission_denials || []).map((d) => oneLine(`${d.tool_name} ${d.tool_input?.file_path ? path.relative(cwd, d.tool_input.file_path) : d.tool_input?.command || ''}`, 90));
+    const denied = (ev.permission_denials || []).map((d) => oneLine(`${d.tool_name} ${d.tool_input?.file_path ? path.relative(cwd, d.tool_input.file_path).split(path.sep).join('/') : d.tool_input?.command || ''}`, 90));
     livePrint(id, `${ev.is_error ? '✖ failed' : '✔ finished'}${ev.duration_ms ? ` in ${(ev.duration_ms / 1000).toFixed(1)}s` : ''}${ev.total_cost_usd ? ` · $${ev.total_cost_usd.toFixed(3)}` : ''}${denied.length ? ` · ⛔ denied: ${denied.join(', ')}` : ''}`);
   }
 }

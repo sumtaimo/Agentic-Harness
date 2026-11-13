@@ -31,6 +31,14 @@ function useBin(name, scripts) {
   const dir = fs.mkdtempSync(path.join(tmpRoot, `bin-${name}-`));
   for (const [bin, body] of Object.entries(scripts)) {
     const file = path.join(dir, bin);
+    if (process.platform === 'win32') {
+      // Windows cannot run a #!/bin/sh script: emulate it with a .cmd that prints the same lines (or prints nothing).
+      // Only the two body shapes used below are supported: `exit 0` and `printf '%s\n' 'line' 'line' ...`.
+      const lines = body.startsWith('printf') ? [...body.matchAll(/'([^']*)'/g)].slice(1).map((m) => m[1]) : [];
+      fs.writeFileSync(`${file}.help.txt`, lines.map((l) => `${l}\r\n`).join(''));
+      fs.writeFileSync(`${file}.cmd`, lines.length ? `@type "%~dp0${bin}.help.txt"\r\n` : '@exit /b 0\r\n');
+      continue;
+    }
     fs.writeFileSync(file, `#!/bin/sh\n${body}\n`);
     fs.chmodSync(file, 0o755);
   }
@@ -133,7 +141,7 @@ test('help printing nothing: a verified profile is still trusted', () => {
 test('an old-format cache entry claiming compatible is ignored, and a verified change re-probes', async () => {
   const { FILES } = await import('../.harness/lib/common.mjs');
   const dir = useBin('stale-cache', { gemini: 'exit 0' });
-  const bin = path.join(dir, 'gemini');
+  const bin = path.join(dir, process.platform === 'win32' ? 'gemini.cmd' : 'gemini');
   const oldKey = `${bin}|${fs.statSync(bin).mtimeMs}|${profileFlags(profiles.gemini).join(' ')}`;
   fs.writeFileSync(FILES.probe, JSON.stringify({ [oldKey]: { installed: true, checked: false, compatible: true, missing: [], binPath: bin } }));
   assert.equal(probeEngine(profiles.gemini).compatible, false, 'old cache entry must not be reused');

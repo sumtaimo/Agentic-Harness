@@ -143,8 +143,11 @@ await test('engine whose --help lacks a configured flag fails the probe → fall
   const fake = path.join(d, 'fake-engine.mjs');
   fs.writeFileSync(fake, '#!/usr/bin/env node\nconsole.log("Usage: fake [options]\\n  --other-flag   something");\n');
   fs.chmodSync(fake, 0o755);
+  // Windows cannot run a shebang script directly: use a .cmd wrapper there.
+  let fakeBin = fake;
+  if (process.platform === 'win32') { fakeBin = path.join(d, 'fake-engine.cmd'); fs.writeFileSync(fakeBin, `@echo off\r\n"${process.execPath}" "${fake}" %*\r\n`); }
   const cfg = json(path.join(d, '.harness', 'config.json'));
-  cfg.profiles.fake = { binary: fake, args: ['--needed-flag'], promptVia: 'stdin' };
+  cfg.profiles.fake = { binary: fakeBin, args: ['--needed-flag'], promptVia: 'stdin' };
   fs.writeFileSync(path.join(d, '.harness', 'config.json'), JSON.stringify(cfg));
   drop(d, { id: 'probe', title: 'p', engine: 'fake', subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'WRITE a.txt hi' }] });
   runOnce(d);
@@ -226,7 +229,9 @@ await test('watch mode: 3 jobs dropped at once are all processed in order; secon
   daemon.kill('SIGTERM');
   await new Promise((r) => daemon.on('close', r));
   assert(ls(d, 'completed').length === 3, `only ${ls(d, 'completed').length} completed`);
-  assert(!fs.existsSync(path.join(d, '.harness', 'daemon.pid')), 'pid file left behind');
+  // Windows cannot deliver SIGTERM to a handler (the process is killed outright), so the pid file can remain there;
+  // a stale pid file is harmless because liveness is checked with process.kill(pid, 0).
+  if (process.platform !== 'win32') assert(!fs.existsSync(path.join(d, '.harness', 'daemon.pid')), 'pid file left behind');
 });
 
 await test('self-test hands off to a running daemon instead of racing it', async () => {
@@ -788,7 +793,7 @@ await test('live agent output: stream-json events become readable lines (tool ca
   const out = r.stdout;
   for (const want of ['▶ agent started (mock-model)', '💬 Planning the module', '🔧 Write src/a.js', '✔ finished in 0.0s', '⛔ denied: Write src/evil.js']) assert(out.includes(want), `missing "${want}" in:\n${out}`);
   assert(argsOf(d, 'w').includes('FMT=stream'), 'stream args not used');
-  assert(log(d).some((e) => e.phase === 'PERMISSION_DENIED' && e.denials[0].target.endsWith('src/evil.js')), 'denial not in audit log');
+  assert(log(d).some((e) => e.phase === 'PERMISSION_DENIED' && e.denials[0].target.replaceAll('\\', '/').endsWith('src/evil.js')), 'denial not in audit log');
   assert(json(path.join(d, '.harness', 'state.json')).phase === '4_COMMITTED', 'final result not parsed from stream');
   const q = sandbox();
   fs.writeFileSync(path.join(q, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
