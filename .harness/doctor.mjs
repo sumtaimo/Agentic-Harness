@@ -43,7 +43,7 @@ for (const [name, p] of Object.entries(config.profiles)) {
     continue;
   }
   if (!probe.checked && !flags.length) { ok(`${name.padEnd(12)} ${probe.binPath} — no command-line flags to check`); continue; }
-  if (!probe.checked) { warn(`${name.padEnd(12)} ${probe.binPath} — flags not checked (${probe.error})`); continue; }
+  if (!probe.checked) { warn(`${name.padEnd(12)} ${probe.binPath} — flags not checked (${probe.error})${probe.compatible ? ' — used anyway (verified profile)' : ' → will NOT be used (unverified profile); fix the CLI or its "args" in config.json'}`); continue; }
   if (probe.compatible) ok(`${name.padEnd(12)} ${probe.binPath} — all ${flags.length} flag(s) found: ${flags.join(' ')}`);
   else bad(`${name.padEnd(12)} ${probe.binPath} — --help does NOT list: ${probe.missing.join(' ')}  → will fall back to "auto". Fix "args" in config.json.`);
 }

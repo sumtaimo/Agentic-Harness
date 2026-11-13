@@ -115,7 +115,8 @@ export function probeEngine(profile, { force = false } = {}) {
   const help = `${r.stdout || ''}\n${r.stderr || ''}`;
   let result;
   if (!help.trim()) {
-    result = { installed: true, checked: false, compatible: true, missing: [], binPath, error: r.error?.message || `'--help' printed nothing (exit ${r.status})` };
+    // Unreadable help proves nothing: trust it only for a profile marked verified (tested against the real CLI).
+    result = { installed: true, checked: false, compatible: profile.verified === true, missing: [], binPath, error: r.error?.message || `'--help' printed nothing (exit ${r.status})` };
   } else {
     const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const missing = flags.filter((f) => !new RegExp(`(^|[\\s,\\[(|/])${esc(f)}(?=[\\s,=\\]).|<\\[]|$)`, 'm').test(help));
@@ -140,6 +141,7 @@ export function resolveProfile(config, requested, { allowFallback = true } = {})
     if (!p) return { ok: false, why: 'unknown engine' };
     const probe = probeEngine(p);
     if (!probe.installed) return { ok: false, why: `'${p.binary}' is not installed` };
+    if (!probe.compatible && !probe.checked) return { ok: false, why: `its flags could not be checked (${probe.error}) and the profile is not verified` };
     if (!probe.compatible) return { ok: false, why: `'${p.binary} --help' does not list ${probe.missing.join(', ')}` };
     return { ok: true, probe };
   };

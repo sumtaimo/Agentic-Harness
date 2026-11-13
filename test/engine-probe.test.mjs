@@ -107,13 +107,26 @@ test('no gemini or agy on PATH gives installed=false', () => {
   }
 });
 
-test('help printing nothing gives checked=false and is treated as compatible', () => {
-  useBin('silent', { gemini: 'exit 0' });
+test('help printing nothing: an unverified profile is rejected and auto falls through to agy', () => {
+  useBin('silent', { gemini: 'exit 0', agy: AGY_HELP });
   const probe = probeEngine(profiles.gemini, { force: true });
   assert.equal(probe.installed, true);
   assert.equal(probe.checked, false);
+  assert.equal(probe.compatible, false);
+  assert.match(probe.error, /printed nothing/);
+  assert.equal(resolveProfile(config).name, 'antigravity');
+  const r = resolveProfile(config, 'gemini');
+  assert.equal(r.fallbackFrom, 'gemini');
+  assert.match(r.fallbackReason, /could not be checked/);
+});
+
+test('help printing nothing: a verified profile is still trusted', () => {
+  useBin('silent-verified', { gemini: 'exit 0' });
+  const verified = { ...profiles.gemini, verified: true };
+  const probe = probeEngine(verified, { force: true });
+  assert.equal(probe.checked, false);
   assert.equal(probe.compatible, true);
-  assert.equal(resolveProfile(config).name, 'gemini');
+  assert.equal(resolveProfile({ ...config, profiles: { ...profiles, gemini: verified } }).name, 'gemini');
 });
 
 test('winQuote keeps an empty argument on Windows and quotes special characters', async () => {
