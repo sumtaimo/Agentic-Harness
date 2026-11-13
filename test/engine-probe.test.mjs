@@ -58,16 +58,16 @@ after(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-const GEMINI_HELP = `printf '%s\\n' 'Usage: gemini [options]' '  -p, --prompt         Prompt; runs non-interactively' '  --approval-mode      default | auto_edit | yolo' '  -h, --help           Show help'`;
+const GEMINI_HELP = `printf '%s\\n' 'Usage: gemini [options]' '  -p, --prompt         Prompt; runs non-interactively' '  --approval-mode      default | auto_edit | yolo' '  --skip-trust         Trust the current workspace' '  -h, --help           Show help'`;
 const AGY_HELP = `printf '%s\\n' 'Usage: agy [options]' '  -p, --prompt <text>  Run one prompt headless and exit' '  -h, --help           Show help'`;
 
 test('profileFlags extracts dash flags from args', () => {
   assert.deepEqual(profileFlags({ args: ['--yolo', 'sub', '--', '--x={p}'] }), ['--yolo']);
-  assert.deepEqual(profileFlags(profiles.gemini).sort(), ['--approval-mode', '-p']);
+  assert.deepEqual(profileFlags(profiles.gemini).sort(), ['--approval-mode', '--skip-trust', '-p']);
   assert.deepEqual(profileFlags(profiles.antigravity), ['-p']);
   assert.equal(profiles.antigravity.binary, 'agy');
-  assert.equal(profiles.antigravity.promptVia, 'stdin');
-  assert.deepEqual(profiles.antigravity.args, ['-p', '']);
+  assert.equal(profiles.antigravity.promptVia, 'arg');
+  assert.deepEqual(profiles.antigravity.args, ['-p', '{prompt}']);
 });
 
 test('fake gemini listing -p and --approval-mode is compatible and auto picks it', () => {
@@ -84,7 +84,7 @@ test('an old gemini that only lists --yolo is incompatible and auto falls throug
   useBin('gemini-old', { gemini: `printf '%s\\n' '  -y, --yolo   Auto-approve'`, agy: AGY_HELP });
   const probe = probeEngine(profiles.gemini, { force: true });
   assert.equal(probe.compatible, false);
-  assert.deepEqual([...probe.missing].sort(), ['--approval-mode', '-p']);
+  assert.deepEqual([...probe.missing].sort(), ['--approval-mode', '--skip-trust', '-p']);
   assert.equal(resolveProfile(config).name, 'antigravity');
 });
 
@@ -159,9 +159,9 @@ test('a fresh install has Gemini auto-approve OFF; an existing config and the ow
   spawnSync(process.execPath, [installer, fresh], { encoding: 'utf8' });
   spawnSync(process.execPath, [installer, own], { encoding: 'utf8' });
   const freshArgs = JSON.parse(fs.readFileSync(path.join(fresh, '.harness', 'config.json'), 'utf8')).profiles.gemini.args;
-  assert.deepEqual(freshArgs, ['-p', ''], 'fresh install must not auto-approve');
+  assert.deepEqual(freshArgs, ['--skip-trust', '-p', ''], 'fresh install must not auto-approve');
   assert.equal(fs.readFileSync(path.join(own, '.harness', 'config.json'), 'utf8'), ownCfg, 'existing config must be kept');
-  assert.deepEqual(profiles.gemini.args, ['--approval-mode', 'yolo', '-p', ''], 'the owner repo keeps its own choice');
+  assert.deepEqual(profiles.gemini.args, ['--skip-trust', '--approval-mode', 'yolo', '-p', ''], 'the owner repo keeps its own choice');
 });
 
 test('the installer\'s embedded .gitignore copy (used by npx installs) matches .gitignore', () => {

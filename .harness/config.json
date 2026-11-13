@@ -106,13 +106,13 @@
     },
     "antigravity": {
       "verified": false,
-      "note": "UNVERIFIED (confirm with 'agy --help'). The Antigravity terminal agent is 'agy'; '-p \"\"' runs headless with the prompt piped on stdin (avoids argument length limits and Windows newline quoting). Unconfirmed that agy appends stdin to an empty -p; if not, set promptVia to 'arg' and args to ['-p','{prompt}']. No auto-approve flag on purpose (the owner approved auto-approve for Gemini only).",
+      "note": "UNVERIFIED. Checked with 'agy --help' (1.5.0): '-p' is an alias for '--print' and needs a prompt value; '-p \"\"' with the prompt on stdin FAILS ('error: empty prompt'), so the prompt is passed as an argument. A full run with the argument form has not been completed yet. Windows limit: a command line is at most 32,767 characters (8,191 through cmd.exe, which .cmd shims use), so a very long prompt passed as an argument can fail; multi-line prompts also depend on Windows argument quoting. agy.exe may be installed in ~/.gemini/bin without being on PATH: add that folder to PATH or doctor reports it as not installed. No auto-approve flag on purpose (agy has --dangerously-skip-permissions and --mode; the owner approved auto-approve for Gemini only).",
       "binary": "agy",
       "args": [
         "-p",
-        ""
+        "{prompt}"
       ],
-      "promptVia": "stdin",
+      "promptVia": "arg",
       "allowedTools": [
         "Read",
         "Edit",
@@ -124,13 +124,18 @@
         "medium": null,
         "high": null
       },
-      "modelsNote": "No model flag is known for agy yet: it always uses its own newest default. If `agy --help` documents a model flag and aliases, add modelArgs (e.g. [\"--model\",\"{model}\"]) and the aliases here."
+      "modelsNote": "agy --help documents '--model' and '--effort (low|medium|high|xhigh|max)'; 'agy models' lists the models. No alias set: no --model flag is passed, so agy uses its own default on every tier.",
+      "modelArgs": [
+        "--model",
+        "{model}"
+      ]
     },
     "gemini": {
       "verified": false,
-      "note": "UNVERIFIED (confirm with 'gemini --help'). Headless: '-p' with the prompt piped on stdin (stdin is appended to the -p text). '--approval-mode yolo' (replaces the deprecated --yolo) auto-approves every tool; the owner approved this for this project.",
+      "note": "UNVERIFIED. Checked with 'gemini --help' (0.68.0): '-p' is appended to stdin; '--approval-mode yolo' auto-approves every tool (the owner approved this for this project); '--skip-trust' is needed in a folder the CLI does not already trust, otherwise approval mode is overridden and it exits with code 55. A full headless run has not been completed yet: the CLI must be logged in with an account tier that it still supports.",
       "binary": "gemini",
       "args": [
+        "--skip-trust",
         "--approval-mode",
         "yolo",
         "-p",
@@ -152,7 +157,7 @@
     },
     "codex": {
       "verified": false,
-      "note": "UNVERIFIED here (not installed on the test machine). OpenAI Codex CLI; '-' means read the prompt from stdin.",
+      "note": "UNVERIFIED: codex is not installed on the machines tested so far. OpenAI Codex CLI; '-' means read the prompt from stdin.",
       "binary": "codex",
       "args": [
         "exec",

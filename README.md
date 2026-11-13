@@ -485,9 +485,9 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 | Engine | Status |
 |---|---|
 | `claude` (Claude Code) | ✅ verified end-to-end, including the AI planner and two parallel workers |
-| `antigravity` (`agy`) | ⚠️ not verified here: `agy -p ""`, prompt on stdin, no auto-approve |
-| `gemini` (Gemini CLI) | ⚠️ not verified here: `-p ""`, prompt on stdin. This repo adds `--approval-mode yolo` (auto-approves every tool); new installs do not |
-| `codex` (OpenAI Codex CLI) | ⚠️ not verified here |
+| `antigravity` (`agy`) | ⚠️ not verified: stdin with `-p ""` was tested and rejected (`empty prompt`), so the prompt goes as an argument (`-p "<prompt>"`); a full run with that form is not done yet. Windows limit: a command line is at most 32,767 characters (8,191 through `cmd.exe`, which `.cmd` shims use), so a very long prompt passed as an argument can fail. No auto-approve. `agy` may not be on PATH |
+| `gemini` (Gemini CLI) | ⚠️ not verified: `--skip-trust -p ""`, prompt on stdin. This repo adds `--approval-mode yolo` (auto-approves every tool); new installs do not. A full headless run is not done yet |
+| `codex` (OpenAI Codex CLI) | ⚠️ not verified (not installed on the machines tested) |
 
 Setup, subscription login and checks for Gemini and `agy`: [`docs/ENGINES.md`](docs/ENGINES.md).
 
