@@ -1505,7 +1505,20 @@ await test('documentation matches reality: every script, sub-command and slash c
 await test('demo project (examples/make-demo.mjs): ready to try — harness installed, objectives filled, one READY task with a real check, own git repo; the controller can run it end to end; --force only recreates demos', () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-demo-test-'));
   const demo = path.join(base, 'demo');
-  const mk = (...a) => spawnSync(process.execPath, [path.join(REPO, 'examples', 'make-demo.mjs'), ...a], { encoding: 'utf8' });
+  // make-demo runs the doctor, which (correctly) fails when no AI CLI is installed, e.g. on a CI runner. Put a fake
+  // `claude` whose --help lists every configured flag first on PATH, so the result does not depend on the machine.
+  const fakeBin = path.join(base, 'fake-bin');
+  fs.mkdirSync(fakeBin);
+  const help = 'Usage: claude [options]\n  -p, --print\n  --allowedTools <tools>\n  --disallowedTools <tools>\n  --output-format <format>\n  --verbose\n  --model <model>\n';
+  if (process.platform === 'win32') {
+    fs.writeFileSync(path.join(fakeBin, 'claude.help.txt'), help.replace(/\n/g, '\r\n'));
+    fs.writeFileSync(path.join(fakeBin, 'claude.cmd'), '@type "%~dp0claude.help.txt"\r\n');
+  } else {
+    fs.writeFileSync(path.join(fakeBin, 'claude'), `#!/bin/sh\ncat <<'EOF'\n${help}EOF\n`);
+    fs.chmodSync(path.join(fakeBin, 'claude'), 0o755);
+  }
+  const mkEnv = { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH}` };
+  const mk = (...a) => spawnSync(process.execPath, [path.join(REPO, 'examples', 'make-demo.mjs'), ...a], { encoding: 'utf8', env: mkEnv });
   const r = mk(demo);
   assert(r.status === 0 && /Demo project created/.test(r.stdout) && /Failures: 0/.test(r.stdout), r.stdout + r.stderr);
   for (const f of ['.harness/visible.mjs', '.claude/agents/lead-dev.md', '.claude/commands/harness/run.md', 'README.md', 'package.json']) assert(fs.existsSync(path.join(demo, f)), `demo lacks ${f}`);

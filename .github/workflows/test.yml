@@ -23,4 +23,13 @@ jobs:
         with:
           node-version: 22
       # No "npm install": the project has no dependencies.
-      - run: npm test
+      # Each failing test is also raised as an annotation, so it is visible on the run page (and the public API)
+      # without opening the full log.
+      - name: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.txt || {
+            grep -E '^\s*✖|^not ok|Error' test-output.txt | head -40 | sed 's/^\s*/::error title=npm test::/'
+            exit 1
+          }
