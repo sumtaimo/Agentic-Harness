@@ -79,7 +79,7 @@ If your prompt starts with `[HARNESS WORKER ID: …]`, `[HARNESS PLANNER]` or
 `[HARNESS PO_ARCHITECT]`, you were started BY the harness. Do the task in that prompt directly,
 act as the role persona it gives you, follow any injected skill contract and shared interface
 contract, stay inside your scoped files, and **never** run `.harness/dispatch.mjs` or
-`.harness/backlog.mjs` (dispatch refuses anyway). Skip the rest of this file except section 2.
+`.harness/backlog.mjs` (dispatch refuses anyway). Skip the rest of this file except section 2 and the constitution above.
 
 ---
 
