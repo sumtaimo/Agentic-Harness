@@ -31,7 +31,7 @@ try {
     `- Autonomous mode: charter says ${charter.autonomous ? 'ON' : 'off'}${git.integrationBranch && git.integrationMode !== 'off' ? `; autonomous work lands on the '${git.integrationBranch}' branch, never main` : ''}`,
     `- Memory: ${listLessons(FILES.lessons).length} taught rule(s) (already loaded via CLAUDE.md)`
   ];
-  if (/\(fill me/i.test(profile)) lines.push('- profile.md is not filled in yet: ask the user a few simple questions and fill it (see AGENTS.md section 1).');
+  if (/^- .*\(fill me/im.test(profile)) lines.push('- profile.md is not filled in yet: ask the user a few simple questions and fill it (see AGENTS.md section 1).');
 
   // Editor workflow state: unfinished runs need a decision; AUTO MODE starts the workflow by itself.
   const VIS = path.join(path.dirname(FILES.state), 'visible');

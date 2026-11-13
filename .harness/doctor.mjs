@@ -136,7 +136,7 @@ console.log('\nGit integration branch (where autonomous work lands)');
 
 console.log('\nMemory');
 const profile = fs.existsSync(FILES.profile) ? fs.readFileSync(FILES.profile, 'utf8') : '';
-/\(fill me\)/i.test(profile) ? note('memory/profile.md still has "(fill me)" placeholders. Optional: tell your AI "Read AGENTS.md and fill in my profile". The shared template keeps it generic on purpose.') : ok('memory/profile.md is filled in');
+/^- .*\(fill me/im.test(profile) ? note('memory/profile.md still has "(fill me)" placeholders. Optional: tell your AI "Read AGENTS.md and fill in my profile". The shared template keeps it generic on purpose.') : ok('memory/profile.md is filled in');
 ok(`${listLessons(FILES.lessons).length} taught rule(s), ${listLessons(FILES.autoLessons).length} auto lesson(s)`);
 
 console.log('\nDaemon');
