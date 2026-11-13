@@ -1744,5 +1744,30 @@ await test('model tiers (multi-engine): each engine gets its own alias, an engin
   assert(node(d, ['.harness/team.mjs', 'validate']).status === 1, 'an invalid model must be rejected');
 });
 
+// ───────────────────────────── real-engine error handling (found with the real claude CLI) ─────────────────────────────
+
+await test('engine errors: a usage limit in Claude JSON on stdout (exit 1, noise on stderr) is reported as-is and stops at once, no retries', () => {
+  const d = sandbox();
+  const fake = path.join(d, 'limit-engine.mjs');
+  // what claude -p --output-format json printed on a real machine that had hit its subscription limit
+  fs.writeFileSync(fake, "process.stdin.resume();process.stdin.on('end',()=>{process.stderr.write('Ignoring 24 permissions.allow entries: this workspace has not been trusted.\\n');process.stdout.write(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:429,result:\"You've hit your 5-hour limit · resets 3:40pm\"}));process.exit(1);});");
+  withProfiles(d, { mock: { verified: true, binary: process.execPath, args: [fake], promptVia: 'stdin', allowedTools: [] } });
+  drop(d, { id: 'limit', title: 'limit', verifyCmd: PASS, subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'WRITE a.txt hi' }] });
+  runOnce(d);
+  const s = stateOf(d);
+  const spawns = log(d).filter((e) => e.phase === 'ENGINE_SPAWN').length;
+  assert(spawns === 1, `a usage limit must not be retried (spawned ${spawns}x)`);
+  assert(/You've hit your 5-hour limit/.test(s.lastGateStatus) && !/not been trusted/.test(s.lastGateStatus), `the engine's own message must be shown: ${s.lastGateStatus}`);
+});
+
+await test('engine errors: a login problem on stderr is fatal; an ordinary crash is still retried', () => {
+  const mk = (d, body) => { const f = path.join(d, 'e.mjs'); fs.writeFileSync(f, `process.stdin.resume();process.stdin.on('end',()=>{${body}});`); withProfiles(d, { mock: { verified: true, binary: process.execPath, args: [f], promptVia: 'stdin', allowedTools: [] } }); };
+  const job = (d) => drop(d, { id: 'j', title: 'j', verifyCmd: PASS, subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'x' }] });
+  const d1 = sandbox(); mk(d1, "process.stderr.write('Error: not logged in. Please run gemini to log in.\\n');process.exit(1);"); job(d1); runOnce(d1);
+  assert(log(d1).filter((e) => e.phase === 'ENGINE_SPAWN').length === 1 && /account\/login problem/.test(stateOf(d1).lastGateStatus), `login: ${stateOf(d1).lastGateStatus}`);
+  const d2 = sandbox(); mk(d2, "process.stderr.write('TypeError: something broke\\n');process.exit(1);"); job(d2); runOnce(d2);
+  assert(log(d2).filter((e) => e.phase === 'ENGINE_SPAWN').length === 3, 'an ordinary crash keeps its 3 cycles');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -285,7 +285,16 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallo
     child.on('error', (err) => done(reject, Object.assign(new Error(`Failed to start '${profile.binary}': ${err.message}`), { fatal: err.code === 'ENOENT' })));
     child.on('close', (code) => {
       if (live && pending.trim() && !stream) livePrint(id, oneLine(pending, 200));
-      if (code !== 0) return done(reject, new Error(`${id} (${profile.name}) exited with code ${code}: ${(stderr || stdout).trim().slice(0, 4000)}`));
+      if (code !== 0) {
+        // The engine's own error (e.g. Claude's JSON {"is_error":true,"result":"You've hit your limit"}) is on stdout;
+        // stderr may only hold unrelated warnings, so prefer the engine's message when there is one.
+        try { summarizeOutput(stdout); } catch (e) {
+          if (e.engineError) return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${e.message}`), { fatal: e.fatal }));
+        }
+        const raw = `${stderr}\n${stdout}`.trim();
+        const fatal = engineErrorIsFatal(raw);
+        return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${(stderr || stdout).trim().slice(0, 4000)}${fatal ? ' (account/login problem: retrying cannot fix it)' : ''}`), { fatal }));
+      }
       try {
         const r = summarizeOutput(stdout);
         if (r.denials.length) logTelemetry('PERMISSION_DENIED', `${id}: engine denied ${r.denials.length} action(s) outside its role`, { worker: id, denials: r.denials });
@@ -302,6 +311,15 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallo
  *  - Claude --output-format stream-json: JSON lines; the last {"type":"result"} line carries the same fields
  *  - other engines: plain text
  */
+/**
+ * Account-level engine errors that retrying (or a stronger model) cannot fix: usage/quota limits, not logged in,
+ * bad credentials. They stop the task at once with the engine's own message instead of burning 3 cycles.
+ */
+function engineErrorIsFatal(text, status) {
+  if ([401, 402, 403, 429].includes(Number(status))) return true;
+  return /hit your .{0,40}limit|usage limit|quota (exceeded|exhausted)|rate.?limit|resource.?exhausted|credit balance|not logged in|please (run .{0,30})?log ?in|login required|unauthori[sz]ed|authentication (failed|required|error)|invalid api key/i.test(String(text || ''));
+}
+
 function summarizeOutput(stdout) {
   const text = stdout.trim();
   let j = null;
@@ -310,7 +328,10 @@ function summarizeOutput(stdout) {
     for (let i = lines.length - 1; i >= 0 && !j; i--) { try { const o = JSON.parse(lines[i]); if (o.type === 'result') j = o; } catch { /* not JSON */ } }
   }
   if (j && typeof j === 'object' && 'result' in j) {
-    if (j.is_error) throw new Error(`Engine reported an error: ${String(j.result).slice(0, 2000)}`);
+    if (j.is_error) {
+      const msg = String(j.result).slice(0, 2000);
+      throw Object.assign(new Error(`Engine reported an error: ${msg}`), { fatal: engineErrorIsFatal(msg, j.api_error_status), engineError: true });
+    }
     const denials = (j.permission_denials || []).map((d) => ({ tool: d.tool_name, target: d.tool_input?.file_path || d.tool_input?.command || '' }));
     return { text: String(j.result), denials, cost: Number(j.total_cost_usd) || 0 };
   }
