@@ -1,5 +1,7 @@
 # The agent workflow and its rules
 
+Khmer version (ភាសាខ្មែរ): [`docs/WORKFLOW.km.md`](WORKFLOW.km.md).
+
 This is the detailed version of the workflow in the README. It is written for the person who owns a project that has
 the harness installed, and for any team that copies the template into its own project.
 
