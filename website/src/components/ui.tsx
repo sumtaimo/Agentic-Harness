@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Check, Copy } from 'lucide-react';
-import { useLang } from '../lib/lang';
+import { Rich, useLang } from '../lib/lang';
 
 export async function copyText(text: string): Promise<boolean> {
   try {
@@ -21,7 +21,6 @@ export async function copyText(text: string): Promise<boolean> {
 
 export function CopyButton({ text, className = '' }: { text: string; className?: string }) {
   const { t: dict } = useLang();
-  const label = dict.common.copy;
   const [done, setDone] = useState(false);
   const t = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(t.current), []);
@@ -29,52 +28,104 @@ export function CopyButton({ text, className = '' }: { text: string; className?:
     <button
       type="button"
       onClick={async () => { if (await copyText(text)) { setDone(true); window.clearTimeout(t.current); t.current = window.setTimeout(() => setDone(false), 1400); } }}
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border border-term-line px-2 py-1 text-xs text-term-muted transition hover:border-term-muted hover:text-term-fg focus-visible:outline-2 focus-visible:outline-accent ${className}`}
-      aria-label={done ? dict.common.copied : `${label}: ${text}`}
+      className={`grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint transition hover:bg-surface-2 hover:text-fg focus-visible:outline-2 focus-visible:outline-fg ${className}`}
+      aria-label={done ? dict.common.copied : `${dict.common.copy}: ${text}`}
+      title={done ? dict.common.copied : dict.common.copy}
     >
       {done ? <Check size={13} className="text-ok" /> : <Copy size={13} />}
-      <span>{done ? dict.common.copied : label}</span>
     </button>
   );
 }
 
-/** A terminal-style command line with a copy button. Always dark, in both themes. */
-export function Cmd({ cmd, comment, prompt = '$' }: { cmd: string; comment?: string; prompt?: string }) {
+/** A command line: light, quiet, with a copy button. */
+export function Cmd({ cmd, prompt = '$' }: { cmd: string; prompt?: string }) {
   return (
-    <div className="group flex items-start gap-3 rounded-lg border border-term-line bg-term px-3.5 py-2.5 font-mono text-[13px] leading-6">
-      <span className="select-none text-term-muted">{prompt}</span>
-      <div className="min-w-0 flex-1 overflow-x-auto">
-        <code className="whitespace-pre text-term-fg">{cmd}</code>
-        {comment && <div className="whitespace-normal text-term-muted"># {comment}</div>}
-      </div>
+    <div className="flex items-center gap-2.5 rounded-lg border border-line bg-surface px-3 py-1.5 font-mono text-[12.5px] leading-6">
+      <span className="select-none text-faint">{prompt}</span>
+      <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre text-fg">{cmd}</code>
       <CopyButton text={cmd} />
     </div>
   );
 }
 
-export function Section({ id, eyebrow, title, intro, children }: { id: string; eyebrow: string; title: string; intro?: ReactNode; children: ReactNode }) {
+/** A numbered section: "Title ———— 03". Notes go to the right margin on wide screens, below the text otherwise. */
+export function Section({ id, n, title, children }: { id: string; n: number; title: string; children: ReactNode }) {
   return (
-    <section id={id} className="border-t border-line">
-      <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-24">
-        <header className="mx-auto max-w-3xl text-center">
-          <p className="font-mono text-xs uppercase tracking-[0.14em] text-accent">{eyebrow}</p>
-          <h2 className="mt-3 text-balance text-3xl font-semibold tracking-tight text-fg sm:text-[36px]">{title}</h2>
-          {intro && <div className="mx-auto mt-4 max-w-2xl text-pretty text-[15px] leading-7 text-muted">{intro}</div>}
-        </header>
-        <div className="mt-12">{children}</div>
-      </div>
+    <section id={id} data-section className="pt-20">
+      <h2 className="flex items-center gap-4">
+        <span className="font-medium text-fg">{title}</span>
+        <span className="h-px flex-1 bg-line" aria-hidden="true" />
+        <span className="font-serif text-lg italic text-faint">{String(n).padStart(2, '0')}</span>
+      </h2>
+      <div className="mt-6 space-y-5">{children}</div>
     </section>
   );
 }
 
+/** A paragraph with an optional margin note (footnote). */
+export function P({ text, note, n, muted = false }: { text: string; note?: string; n?: number; muted?: boolean }) {
+  return (
+    <div className="relative">
+      <p className={`text-pretty leading-7 ${muted ? 'text-muted' : 'text-fg'}`}><Rich text={text} /></p>
+      {note && (
+        <aside className="mt-2 flex gap-2 text-[12.5px] leading-5 text-faint xl:absolute xl:left-[calc(100%+48px)] xl:top-1 xl:mt-0 xl:w-[190px]">
+          <span>{n}</span><span><Rich text={note} /></span>
+        </aside>
+      )}
+    </div>
+  );
+}
+
+/** A white card with label / content rows, like a form. */
+export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <div className={`rounded-2xl border border-line bg-surface px-5 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.03)] ${className}`}>{children}</div>;
+}
+
+export function Row({ k, children }: { k: ReactNode; children: ReactNode }) {
+  return (
+    <div className="grid gap-1 border-b border-line py-3.5 last:border-0 sm:grid-cols-[150px_1fr] sm:gap-5">
+      <div className="text-[13.5px] text-muted">{k}</div>
+      <div className="min-w-0 text-[14.5px] leading-6 text-fg">{children}</div>
+    </div>
+  );
+}
+
+/** "01  Title. text" with a hairline above each step. */
+export function Steps({ items }: { items: { t?: string; d: ReactNode }[] }) {
+  return (
+    <ol>
+      {items.map((s, i) => (
+        <li key={i} className="grid grid-cols-[34px_1fr] gap-2 border-t border-line py-3.5">
+          <span className="pt-px font-mono text-[12px] text-faint">{String(i + 1).padStart(2, '0')}</span>
+          <div className="min-w-0 leading-7 text-muted">{s.t && <span className="mr-1.5 font-medium text-fg">{s.t}</span>}{s.d}</div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** Small segmented control: text options, the chosen one in ink. */
+export function Segmented<T extends string | number>({ value, options, onChange, label }: { value: T; options: { v: T; l: string }[]; onChange: (v: T) => void; label: string }) {
+  return (
+    <div role="radiogroup" aria-label={label} className="inline-flex flex-wrap gap-1">
+      {options.map((o) => (
+        <button key={String(o.v)} type="button" role="radio" aria-checked={value === o.v} onClick={() => onChange(o.v)}
+          className={`rounded-full border px-3 py-1 text-[12.5px] transition ${value === o.v ? 'border-fg bg-fg text-bg' : 'border-line bg-surface text-muted hover:border-line-strong hover:text-fg'}`}>
+          {o.l}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 const TIER_STYLE = {
-  fast: 'bg-ok-soft text-ok border-ok/30',
-  medium: 'bg-accent-soft text-accent border-accent/30',
-  high: 'bg-warn-soft text-warn border-warn/30',
+  fast: 'text-ok border-ok/30 bg-ok-soft',
+  medium: 'text-fg border-line-strong bg-surface-2',
+  high: 'text-warn border-warn/30 bg-warn-soft',
 } as const;
 
 export function TierPill({ tier }: { tier: keyof typeof TIER_STYLE }) {
-  return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[11px] font-medium ${TIER_STYLE[tier]}`}>{tier}</span>;
+  return <span className={`inline-flex items-center rounded-full border px-2 py-px font-mono text-[11px] ${TIER_STYLE[tier]}`}>{tier}</span>;
 }
 
 export function GithubMark({ size = 16 }: { size?: number }) {

@@ -20,14 +20,19 @@ export function LangProvider({ children }: { children: ReactNode }) {
 
 export const useLang = () => useContext(Ctx);
 
-/** Render dictionary markup: `code` → <code>, **bold** → <b>. Everything else is plain text (no HTML injection). */
+/**
+ * Render dictionary markup: `code` → <code>, **bold** → <b>, *italic* → serif italic, ^1 → footnote mark.
+ * Everything else is plain text (no HTML injection).
+ */
 export function Rich({ text }: { text: string }) {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).filter(Boolean);
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\^\d)/g).filter(Boolean);
   return (
     <>
       {parts.map((p, i) =>
-        p.startsWith('`') ? <code key={i} className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[0.88em] text-fg">{p.slice(1, -1)}</code>
-          : p.startsWith('**') ? <b key={i} className="font-semibold text-fg">{p.slice(2, -2)}</b>
+        p.startsWith('`') ? <code key={i} className="rounded-[5px] bg-surface-2 px-1.5 py-px font-mono text-[0.84em] text-fg">{p.slice(1, -1)}</code>
+          : p.startsWith('**') ? <b key={i} className="font-medium text-fg">{p.slice(2, -2)}</b>
+          : p.startsWith('*') ? <em key={i} className="font-serif text-[1.08em] italic">{p.slice(1, -1)}</em>
+          : p.startsWith('^') ? <sup key={i} className="ml-0.5 text-[0.7em] text-faint">{p.slice(1)}</sup>
           : <span key={i}>{p}</span>,
       )}
     </>

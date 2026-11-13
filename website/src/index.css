@@ -1,48 +1,45 @@
 @import "tailwindcss";
 
-/* Dark mode follows the .dark class on <html> (toggled in the navbar, remembered per visitor). */
+/* Dark mode follows the .dark class on <html>. Light is the default (toggle in the header, remembered per visitor). */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Quiet, paper-like palette: near-black ink, warm greys, almost no colour. */
 :root {
-  --bg: #fafafb;
+  --bg: #f9f9f8;
   --surface: #ffffff;
-  --surface-2: #f3f4f7;
-  --border: #e3e5ea;
-  --border-strong: #cfd3db;
-  --fg: #0d1016;
-  --muted: #5a6170;
-  --faint: #8a909c;
-  --accent: #4f5fe8;
-  --accent-soft: #eef0ff;
-  --ok: #13894a;
-  --ok-soft: #e7f6ee;
-  --warn: #9a6200;
-  --warn-soft: #fff4dc;
-  --danger: #c43838;
-  --danger-soft: #fdecec;
-  --term-bg: #0c0e13;
-  --term-border: #1d2029;
-  --term-fg: #d7dae2;
-  --term-muted: #7d8494;
+  --surface-2: #f2f2f0;
+  --border: #e8e8e5;
+  --border-strong: #d4d4d0;
+  --fg: #1d1d1b;
+  --muted: #6f6f6b;
+  --faint: #9c9c97;
+  --accent: #1d1d1b;
+  --accent-soft: #efefec;
+  --ok: #2f7a4b;
+  --ok-soft: #ecf5ef;
+  --warn: #8f6200;
+  --warn-soft: #fbf4e4;
+  --danger: #b03a3a;
+  --danger-soft: #faeeee;
 }
 
 .dark {
-  --bg: #08090c;
-  --surface: #0e1015;
-  --surface-2: #14161d;
-  --border: #1e2129;
-  --border-strong: #2b2f3a;
-  --fg: #e9ebf0;
-  --muted: #9097a6;
-  --faint: #636a78;
-  --accent: #8d9bff;
-  --accent-soft: #161a33;
-  --ok: #43d08f;
-  --ok-soft: #0e2219;
-  --warn: #f2b84b;
-  --warn-soft: #251c0b;
-  --danger: #f47474;
-  --danger-soft: #2a1213;
+  --bg: #141413;
+  --surface: #1b1b1a;
+  --surface-2: #222220;
+  --border: #2c2c2a;
+  --border-strong: #3a3a37;
+  --fg: #ecebe7;
+  --muted: #a3a29d;
+  --faint: #75746f;
+  --accent: #ecebe7;
+  --accent-soft: #262624;
+  --ok: #6cc28f;
+  --ok-soft: #17241c;
+  --warn: #e0b45c;
+  --warn-soft: #2a2314;
+  --danger: #e88484;
+  --danger-soft: #2c1919;
 }
 
 @theme inline {
@@ -62,38 +59,31 @@
   --color-warn-soft: var(--warn-soft);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
-  --color-term: var(--term-bg);
-  --color-term-line: var(--term-border);
-  --color-term-fg: var(--term-fg);
-  --color-term-muted: var(--term-muted);
   --font-sans: "Inter", "Noto Sans Khmer", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, "Noto Sans Khmer", monospace;
+  --font-serif: "Newsreader", "Iowan Old Style", Georgia, "Noto Sans Khmer", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Noto Sans Khmer", monospace;
 }
 
-html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+html { scroll-behavior: smooth; scroll-padding-top: 32px; }
 body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-sans);
+  font-size: 15px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
-::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+::selection { background: color-mix(in srgb, var(--fg) 14%, transparent); }
 code, pre, kbd { font-family: var(--font-mono); }
 
-/* Khmer: stacked subscripts and vowel signs need more vertical room and no negative tracking. */
-html:lang(km) h1, html:lang(km) h2, html:lang(km) h3 { line-height: 1.45 !important; letter-spacing: 0 !important; }
-html:lang(km) p, html:lang(km) li, html:lang(km) td, html:lang(km) label { line-height: 1.9; }
-html:lang(km) h1 { font-size: clamp(30px, 5.2vw, 44px) !important; }
+/* Links in running text: thin grey underline, like a printed note. */
+.ink-link { text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; text-decoration-thickness: 1px; transition: text-decoration-color .15s; }
+.ink-link:hover { text-decoration-color: var(--fg); }
 
-/* Faint grid behind the hero */
-.hero-grid {
-  background-image:
-    linear-gradient(to right, color-mix(in srgb, var(--border) 70%, transparent) 1px, transparent 1px),
-    linear-gradient(to bottom, color-mix(in srgb, var(--border) 70%, transparent) 1px, transparent 1px);
-  background-size: 44px 44px;
-  mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 40%, transparent 100%);
-}
+/* Khmer: stacked subscripts and vowel signs need more vertical room and no negative tracking. */
+html:lang(km) h1, html:lang(km) h2, html:lang(km) h3 { line-height: 1.6 !important; letter-spacing: 0 !important; }
+html:lang(km) p, html:lang(km) li, html:lang(km) td, html:lang(km) label, html:lang(km) dd { line-height: 1.95; }
+html:lang(km) .font-serif { font-family: var(--font-sans); font-style: normal; }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
