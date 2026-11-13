@@ -226,6 +226,17 @@ const REPORT_TICK = line([[139, 54, 2], [143, 59, 2], [154, 50, 2]], true);
 const agentBox = (i: number) => box(AGENT_AT[i], AGENT_SIZE);
 const LED = (i: number): P3 => [AGENT_AT[i][0] + 4, AGENT_AT[i][1] + AGENT_SIZE[1], AGENT_AT[i][2] + 10];
 
+/** An agent's status light: a small green lamp with a dark rim, so it reads as a light even when dim. */
+function Led({ i }: { i: number }) {
+  const [x, y] = proj(LED(i));
+  return (
+    <g>
+      <circle cx={x} cy={y} r={1.9} fill="var(--iso-ink-b)" />
+      <circle cx={x} cy={y} r={1.3} className="machine-led" style={{ animationDelay: `${i * 0.5}s` }} />
+    </g>
+  );
+}
+
 type Label = { at: P3; text: string; side: 'l' | 'r'; dy?: number };
 
 /** The machine, with each part named in two clean columns (left and right). Labels come from the dictionary. */
@@ -263,23 +274,30 @@ export function HarnessMachine({ labels, bare = false, className = '' }: { label
       strokeLinejoin="round" strokeLinecap="round" style={{ ['--ax' as string]: `${ax.toFixed(1)}px`, ['--ay' as string]: `${ay.toFixed(1)}px`, ['--bx' as string]: `${bx.toFixed(1)}px`, ['--by' as string]: `${by.toFixed(1)}px` }}>
       {TOWER.map((s, i) => <Solid key={`t${i}`} s={s} />)}
       {PLINTH.map((s, i) => <Solid key={`p${i}`} s={s} />)}
-      <Solid s={agentBox(0)} />
-      <Solid s={agentBox(1)} />
+      <g className="machine-agent" style={{ animationDelay: `0.0s` }}>
+        <Solid s={agentBox(0)} />
+        <Led i={0} />
+      </g>
+      <g className="machine-agent" style={{ animationDelay: `0.5s` }}>
+        <Solid s={agentBox(1)} />
+        <Led i={1} />
+      </g>
       <Solid s={BACK_POST} />
-      <Solid s={agentBox(2)} />
+      <g className="machine-agent" style={{ animationDelay: `1.0s` }}>
+        <Solid s={agentBox(2)} />
+        <Led i={2} />
+      </g>
       <Solid s={FRONT_POST} />
       <Solid s={BEAM} />
       <circle cx={gx2} cy={gy2} r={1.6} className="machine-gate" />
       {REPORT_TRAY.map((s, i) => <Solid key={`r${i}`} s={s} />)}
       <g className="machine-tick"><Solid s={REPORT_TICK} /></g>
       <g className="machine-packet"><Solid s={box([64, 43, 9.2], [6, 6, 6], 'ink')} /></g>
-      {[0, 1, 2].map((i) => { const [x, y] = proj(LED(i)); return <circle key={i} cx={x} cy={y} r={1.5} className="machine-led" style={{ animationDelay: `${i * 0.45}s` }} />; })}
       {!bare && placed.map((p) => {
         const tx = p.side === 'l' ? left : right;
         return (
           <g key={p.text}>
             <polyline points={`${p.x},${p.y} ${p.x + (tx - p.x) * 0.25},${p.ty} ${tx},${p.ty}`} fill="none" stroke="var(--faint)" strokeWidth={0.45} />
-            <circle cx={p.x} cy={p.y} r={1.3} fill="var(--fg)" />
             <text x={p.side === 'l' ? tx - 3 : tx + 3} y={p.ty + 2.4} textAnchor={p.side === 'l' ? 'end' : 'start'} fontSize={7} className="fill-muted" style={{ fontFamily: 'var(--font-mono)' }}>{p.text}</text>
           </g>
         );
