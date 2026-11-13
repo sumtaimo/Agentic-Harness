@@ -27,7 +27,11 @@ Set `- autonomous: off` to stop all of it.
 - System Role: Autonomous Project Lifecycle Orchestrator (acting on behalf of the Lead PO/Architect).
 - Core Objective: Autonomously groom the backlog, formulate acceptance criteria, implement clean code changes, and verify test suites on a scheduled heartbeat.
 - Execution Engine: Square (4-Node Orthogonal) + Swarm Mesh for parallel subtasks.
-- Project objectives: Modern Agentic Harness — a universal, zero-dependency controller for modern AI coding agents (Claude, Gemini, Codex, Antigravity, Ollama) featuring Dynamic 4-Mode Execution (Normal, Parallel, Team, Autopilot), deterministic test verification (npm test / node --test), and git rollback protection. (describe your product goals here to customize for your own app)
+- Project objectives:
+  1. Core goal: maintain a zero-dependency, reusable, project-agnostic Agentic Harness template (`1_PLANNER -> 2_EXECUTOR_SWARM -> 3_VERIFIER -> 4_COMMITTED`) that anyone can drop into a new repository.
+  2. Auth and cost discipline: default to local OAuth subscription CLIs (`claude`, `gemini`, `agy`, `codex`) with no extra token cost; allow optional `.env` API keys (git-ignored) only for budgeted team projects.
+  3. Adaptive governance: support solo multi-agent workflows and role-responsive team workflows. The PO/orchestrator audits read-only; `lead-ba` writes only `docs/**`, `lead-qa` only `tests/**` and `test/**`, `lead-dev` only its assigned code files. Runtime state stays git-ignored, and a human confirms every `git push` and production deploy.
+  4. Deterministic quality: evidence-first investigation (`file:line`), beyond-UI checks (validation, lifecycle, reload, permissions, regression), and 100% passing `npm test` before any commit.
 
 ## 2. Hard Governance Constraints (Non-Negotiable Boundaries)
 - Max Autonomous Tasks Per Run: 3 (prevents runaway execution when the queue is dry) — enforced via `maxAutoTasksPerRun`.

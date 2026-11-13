@@ -22,6 +22,8 @@ function sandbox({ worktrees = false } = {}) {
   });
   // Isolate from any live harness run in the repo: clean backlog, no active visible-run state.
   fs.rmSync(path.join(dir, '.harness', 'visible'), { recursive: true, force: true });
+  { const ch = path.join(dir, '.harness', 'charter.md'); // the owner's objectives must not leak into tests
+    fs.writeFileSync(ch, fs.readFileSync(ch, 'utf8').replace(/^- Project objectives:[\s\S]*?(?=\n\n|\n## |(?![\s\S]))/m, '- Project objectives: (describe your product goals here to customize for your own app)')); }
   fs.writeFileSync(path.join(dir, '.harness', 'memory', 'profile.md'), '# User profile\n\n- Name: (fill me)\n- Role / what I do: (fill me)\n'); // the owner's profile must not leak into tests
   fs.writeFileSync(path.join(dir, '.harness', 'memory', 'lessons.md'), '# Lessons the user taught\n'); // the owner's taught rules must not leak into tests
   fs.writeFileSync(path.join(dir, '.harness', 'backlog.json'), JSON.stringify({ version: '2.0.0', project: '', maxAutoTasksPerRun: 3, tasks: [] }, null, 2));

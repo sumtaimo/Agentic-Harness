@@ -50,6 +50,7 @@ Rules here are injected into every harness worker prompt and should be read by a
 editor AI before it starts work. Add with:  node .harness/memory.mjs remember "..."
 Remove with:  node .harness/memory.mjs forget L3
 `;
+const OBJECTIVES_PLACEHOLDER = '- Project objectives: (describe your product goals here to customize for your own app)';
 const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|roles[\\/]|skills[\\/]|config\.json$|charter\.md$|backlog\.json$|team\.json$)/;
 
 function copyDir(from, to, rel = '.harness') {
@@ -71,6 +72,11 @@ function copyDir(from, to, rel = '.harness') {
     if (relPath === path.join('.harness', 'memory', 'profile.md')) { // the template owner's personal profile never travels
       fs.writeFileSync(d, PROFILE_TEMPLATE);
       report.push(`wrote  ${relPath} (blank profile to fill in)`); continue;
+    }
+    if (relPath === path.join('.harness', 'charter.md')) { // the template owner's project objectives never travel
+      const text = fs.readFileSync(s, 'utf8').replace(/^- Project objectives:[\s\S]*?(?=\n\n|\n## |(?![\s\S]))/m, OBJECTIVES_PLACEHOLDER);
+      fs.writeFileSync(d, text);
+      report.push(`wrote  ${relPath} (objectives left for you to fill in)`); continue;
     }
     if (relPath === path.join('.harness', 'backlog.json')) { // the template's own tasks never travel: a new project starts with an empty backlog
       let src = {}; try { src = JSON.parse(fs.readFileSync(s, 'utf8')); } catch { /* broken source backlog: use defaults */ }
@@ -171,7 +177,7 @@ if (optI > -1) {
   const want = String(process.argv[optI + 1] || '').toLowerCase();
   if (!['on', 'off'].includes(want)) { console.error('--autonomous takes "on" or "off".'); process.exit(1); }
   const cp = path.join(target, '.harness', 'charter.md');
-  if (want === 'off' && report.includes('wrote  .harness/charter.md') && fs.existsSync(cp)) {
+  if (want === 'off' && report.some((r) => r.startsWith('wrote  .harness/charter.md')) && fs.existsSync(cp)) {
     fs.writeFileSync(cp, fs.readFileSync(cp, 'utf8').replace(/^- autonomous: on$/m, '- autonomous: off'));
     report.push('set   autonomous mode OFF in the new .harness/charter.md');
   }
