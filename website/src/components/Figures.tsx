@@ -243,7 +243,7 @@ type Label = { at: P3; text: string; side: 'l' | 'r'; dy?: number };
 export function HarnessMachine({ labels, bare = false, className = '' }: { labels: { orchestrator: string; gate: string; report: string; rules: string }; bare?: boolean; className?: string }) {
   const parts: Label[] = [
     { at: [-25, 46, 30], text: labels.orchestrator, side: 'l', dy: -14 },
-    { at: [44, 12, 24.2], text: 'lead-ba', side: 'l', dy: -10 },
+    { at: [49, 12, 24.2], text: 'lead-ba', side: 'r', dy: -22 },
     { at: [24, 46, 18], text: 'lead-dev', side: 'l', dy: 6 },
     { at: [56, 80, 14], text: 'lead-qa', side: 'l', dy: 14 },
     { at: [89, 20, 49.2], text: labels.gate, side: 'r', dy: -12 },

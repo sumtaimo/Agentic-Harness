@@ -116,9 +116,10 @@ html:lang(km) .font-serif { font-family: var(--font-sans); font-style: normal; }
 @keyframes tick { 0%, 66% { stroke-dashoffset: 1; } 74%, 94% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 1; } }
 .machine-led { fill: var(--ok); animation: led 1.35s ease-in-out infinite; }
 @keyframes led { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
-/* The three agents on the board: each lifts a little in turn while it works. */
-.machine-agent { animation: agent-work 1.5s ease-in-out infinite; }
-@keyframes agent-work { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2.5px); } }
+/* The three agents on the board: each slides a little along its own lane while it works (never leaves the lane).
+   3 units along the lane's x axis = (2.6, 1.5) on screen. */
+.machine-agent { animation: agent-work 2.4s ease-in-out infinite; }
+@keyframes agent-work { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(2.6px, 1.5px); } }
 
 /* Small figures: gentle, looping motion. Translations use the drawing's own units (set per shape as --mx / --my). */
 .iso-slide { animation: iso-slide 3.6s cubic-bezier(.45,.05,.4,1) infinite both; }
