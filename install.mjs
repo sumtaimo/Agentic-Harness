@@ -36,7 +36,7 @@ function copyDir(from, to, rel = '.harness') {
     const relPath = path.join(rel, entry.name);
     const s = path.join(from, entry.name); const d = path.join(to, entry.name);
     if (entry.isDirectory()) {
-      if (['worktrees', 'staging', 'releases'].includes(entry.name)) { fs.mkdirSync(d, { recursive: true }); continue; } // never copy history
+      if (['worktrees', 'staging', 'releases', 'visible'].includes(entry.name)) { fs.mkdirSync(d, { recursive: true }); continue; } // never copy history or open runs
       if (entry.name === 'sessions') { fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, '.gitkeep'), ''); continue; }
       copyDir(s, d, relPath); continue;
     }
