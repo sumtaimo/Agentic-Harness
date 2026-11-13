@@ -67,8 +67,8 @@ succeeds. Today only `claude` is `"verified": true`.
 
 | Profile | Configured now | Status |
 |---|---|---|
-| `gemini` | binary `gemini`, args `--approval-mode yolo -p ""`, prompt on stdin | unverified |
-| `antigravity` | binary `agy`, args `-p ""`, prompt on stdin, no auto-approve | unverified |
+| `gemini` | binary `gemini`, args `--skip-trust --approval-mode yolo -p ""`, prompt on stdin | unverified: flags exist in `--help` (0.68.0); a full headless run is not done yet |
+| `antigravity` | binary `agy`, args `-p {prompt}` (prompt as argument), no auto-approve | unverified: `-p ""` with stdin fails (`empty prompt`); a full run with the argument form is not done yet |
 
 New projects (made with `node install.mjs <folder>`) start with Gemini auto-approve OFF: the installer drops
 `--approval-mode yolo` from the Gemini profile. To allow it for one project, add `"--approval-mode", "yolo"` to the
@@ -79,8 +79,10 @@ Decided by the owner: the Antigravity command is `agy`; Gemini may auto-approve 
 
 Still to confirm on a real machine (the probe rejects the engine and falls back if a flag is wrong):
 
-- `gemini --help` lists `-p` and `--approval-mode`.
-- `agy --help` lists `-p`, that `agy` reads the prompt from stdin when `-p` is empty, and which flag (if any) it uses for approvals.
+- Checked on Windows 11 / Node 24: `gemini --help` (0.68.0) lists `-p`, `--approval-mode` and `--skip-trust`. Without `--skip-trust`, an untrusted folder makes it override approval mode and exit 55.
+- Checked: `agy --help` (1.5.0) lists `-p` (alias of `--print`), `--model`, `--effort`, `--mode`, `--dangerously-skip-permissions`. `agy` does NOT read the prompt from stdin when `-p` is empty. Still to confirm: that `-p "<prompt>"` runs a task. Windows limit: a command line is at most 32,767 characters (8,191 through `cmd.exe`, which `.cmd` shims use), so a very long prompt passed as an argument can fail; multi-line prompts also depend on Windows argument quoting.
+- `agy.exe` lives in `~/.gemini/bin`, which was not on PATH; add it or doctor reports `agy` as not installed.
+- `codex` was not installed, so nothing about it is confirmed.
 - `doctor` warns when your first-choice engine (first in `autoOrder`) is not installed.
 
 To fix a profile: run `<binary> --help`, propose the change to the owner, then edit
