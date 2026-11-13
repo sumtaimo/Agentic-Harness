@@ -14,6 +14,51 @@ only point here.
 
 ---
 
+## UNIVERSAL AGENTIC HARNESS CONSTITUTION (SINGLE MASTER PROMPT)
+
+### 0. FLEXIBLE AUTH & ENGINE POLICY (SUBSCRIPTION OR API)
+- **Default Mode (`subscription-first`):** Prefer local authenticated OAuth CLI sessions (`claude /login`, `gemini` Google OAuth, `agy`, `codex`) as resolved by `autoOrder` and `node .harness/doctor.mjs`.
+- **Optional Paid API Mode:** Projects with an approved API budget or CI/CD runner may use `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` via local `.env` (must be git-ignored).
+- **Non-Blocking Pre-Flight Notice:** If an `*_API_KEY` env var is detected in the shell, display a brief 1-line notice (*"Note: Paid API key is active in shell env—unset it if you intend to use your personal subscription"*) and continue without blocking.
+- **Secret Hygiene & Auth Fallback:** Never hardcode secrets or commit `.env`. Rely on engine `--help` probe and `ENGINE_FALLBACK` logging when an engine is unavailable.
+
+---
+
+### 1. ADAPTIVE GOVERNANCE (SOLO & TEAM RESPONSIVE)
+- **Charter & Memory Compliance:** Strictly obey `.harness/charter.md` (auto-agents may only modify `src/**`, `docs/**`, `tests/**`, `test/**`; `.harness/**` is locked unless explicitly approved by the Product Owner) and always read `.harness/memory/profile.md` and `.harness/memory/lessons.md`.
+- **Mode-Responsive Execution (`Normal` | `Parallel` | `Team` | `Autopilot`):**
+  - **Solo Mode (`npm run run` / `--mode parallel`):** Single user acts as PO/Architect/QA Lead; orchestrator delegates disjoint file ownership to workers so parallel edits never collide.
+  - **Team Mode (`--mode team`):** Orchestrator assigns scoped charters to leads (`lead-ba`, `lead-dev`, `lead-qa`):
+    - `lead-ba`: specs and acceptance criteria; writes only `docs/**`.
+    - `lead-qa`: tests and verification; writes only `tests/**` and `test/**`.
+    - Read-only investigation and QA reports (`.agent-state/`) are written by the orchestrator, not by the leads.
+    - `lead-dev` / workers: Scoped implementation strictly inside assigned file paths.
+  - **Autopilot Mode (`npm run auto`):** Executes backlog tasks autonomously onto branch `uat` ONLY—never `main` or `prod`.
+- **Per-Person State Isolation:** Keep `.agent-state/`, `.env`, and active local run artifacts in `.gitignore` so teammates never collide in Git.
+- **Hard Governance Gate:** NEVER push to `origin/uat`, `main`, or `prod`, run `git reset --hard`, or deploy without explicit in-chat Product Owner confirmation.
+
+---
+
+### 2. PRODUCT, SYSTEM & QA EVIDENCE LAWS
+- **Evidence-First:** Never invent business rules, API payloads, permissions, database schemas, or implementation status. Cite exact `file:line` references from the repository.
+- **Learn Existing Patterns First:** Inspect neighboring components, hooks, state management, and styling patterns before proposing or writing code.
+- **Minimal Blast Radius:** Solve the exact requirement or bug with the smallest safe change within assigned file boundaries.
+- **Think Beyond Visible UI:** Evaluate Validation states, Lifecycle/State transitions (loading, cancel, reset, re-open), Reload/Refresh persistence, Permissions, Related Modules, and Regression risks. Include clear Layout/Visual AC for UI changes.
+- **Ask Only Business Decisions:** Investigate technical facts from the codebase yourself. Only stop to ask the Product Owner for genuine business-rule ambiguities or scope trade-offs.
+
+---
+
+### 3. DETERMINISTIC EXECUTION LOOP & ORCHESTRATOR DISCIPLINE
+- **Core Controller Lifecycle:**
+  `1_PLANNER` -> `2_EXECUTOR_SWARM` -> `3_VERIFIER` -> `4_COMMITTED` (max 3 retry cycles on check failure, otherwise automatic rollback + `HALTED_HITL_REQUIRED`).
+- **Orchestrator & Lead Workflow (`brief` -> `assign` -> `work` -> `verify` -> `report`):**
+  1. **Brief & Assign:** Define exact task scope, allowed file paths, and deterministic verification command (`npm test`, typecheck, lint) before any worker edits code.
+  2. **Audit / Investigation Output (`.agent-state/01-audit-and-plan.md`):** Document *Where (`file:line`) -> Current vs. Expected -> Rule & Permissions -> Gap/Root Cause -> System & Beyond-UI Impact -> Smallest Safe Fix Plan -> Validation Checklist*.
+  3. **Deterministic Verification:** Never claim `"PASSED"` based on LLM self-assessment—only report `"PASSED"` after the real controller check (`npm test` / linter / typecheck) succeeds and out-of-scope edits are reverted.
+  4. **QA & Agent Report Audit (`.agent-state/02-qa-verdict.md`):** Verify `git diff` against acceptance criteria for missing requirements, scope creep, state/reload bugs, and regression risks.
+
+---
+
 ## Core Architecture Mandate: Lightweight Native Harness (Modern Standard)
 
 Every AI agent working in or extending this repository MUST follow the **Lightweight Native Harness** philosophy:
