@@ -100,14 +100,20 @@ html:lang(km) h1, html:lang(km) h2, html:lang(km) h3 { line-height: 1.6 !importa
 html:lang(km) p, html:lang(km) li, html:lang(km) td, html:lang(km) label, html:lang(km) dd { line-height: 1.95; }
 html:lang(km) .font-serif { font-family: var(--font-sans); font-style: normal; }
 
-/* The hero machine: a packet of work rides the middle lane; the agents' lights blink in turn. */
-.machine-packet { animation: packet 4.8s cubic-bezier(.45,.05,.4,1) infinite; }
+/* The hero machine, one 5s story: the packet leaves lead-dev's lane (0–55%), passes the gate (~26%, the gate
+   light flashes green), drops onto the report (55–66%), the report's tick draws (66–74%), then everything resets. */
+.machine-packet { animation: packet 5s cubic-bezier(.4,0,.3,1) infinite; }
 @keyframes packet {
   0% { transform: translate(0, 0); opacity: 0; }
-  10% { opacity: 1; }
-  80% { transform: translate(var(--px), var(--py)); opacity: 1; }
-  92%, 100% { transform: translate(var(--px), var(--py)); opacity: 0; }
+  8% { opacity: 1; }
+  55% { transform: translate(var(--ax), var(--ay)); opacity: 1; }
+  66%, 88% { transform: translate(var(--bx), var(--by)); opacity: 1; }
+  96%, 100% { transform: translate(var(--bx), var(--by)); opacity: 0; }
 }
+.machine-gate { fill: var(--ok); animation: gate 5s ease-in-out infinite; }
+@keyframes gate { 0%, 18% { opacity: .2; } 26% { opacity: 1; } 38%, 100% { opacity: .2; } }
+.machine-tick polyline { stroke-dasharray: 1; animation: tick 5s ease-out infinite; }
+@keyframes tick { 0%, 66% { stroke-dashoffset: 1; } 74%, 94% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 1; } }
 .machine-led { fill: var(--ok); animation: led 1.35s ease-in-out infinite; }
 @keyframes led { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 
@@ -133,6 +139,11 @@ html:lang(km) .font-serif { font-family: var(--font-sans); font-style: normal; }
 }
 .iso-draw polyline { stroke-dasharray: 1; animation: iso-draw 3.2s ease-out infinite; }
 @keyframes iso-draw { 0%, 45% { stroke-dashoffset: 1; } 70%, 100% { stroke-dashoffset: 0; } }
+
+/* A thin, quiet scrollbar for panels that scroll inside the page. */
+.cmd-scroll { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.cmd-scroll::-webkit-scrollbar { width: 6px; }
+.cmd-scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }

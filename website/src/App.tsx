@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Moon, Sun } from 'lucide-react';
+import { Download, Moon, Sun } from 'lucide-react';
 import { HarnessMachine } from './components/Figures';
 import { Controller, Flow, Gate, Limits, People, Task } from './components/Sections';
 import { RoutingSimulator } from './components/RoutingSimulator';
@@ -103,16 +103,20 @@ function Sidebar({ active, pos }: { active: string; pos: number }) {
             <li key={k} ref={(el) => { refs.current[i] = el; }}>
               <a href={`#${SECTION_ID[k]}`} aria-current={cur ? 'true' : undefined}
                 className={`group relative flex items-center gap-3 py-[5px] text-[13.5px] transition duration-300 ${cur ? 'translate-x-1 text-fg' : done ? 'text-muted hover:text-fg' : 'text-faint hover:text-fg'}`}>
-                <span className={`relative z-10 h-[9px] w-[9px] shrink-0 rounded-full border transition ${done ? 'border-fg bg-fg' : 'border-line-strong bg-bg group-hover:border-fg'}`} aria-hidden="true" />
+                <span className={`relative z-10 h-[9px] w-[9px] shrink-0 rounded-full border transition ${cur ? 'opacity-0' : done ? 'border-fg bg-fg' : 'border-line-strong bg-bg group-hover:border-fg'}`} aria-hidden="true" />
                 {t.sections[k]}
               </a>
             </li>
           );
         })}
       </ol>
-      <div className="mt-8 space-y-1 border-t border-line pt-4 text-[13px]">
-        <a href="#setup" className="block text-muted transition hover:text-fg">{t.hero.install} ↓</a>
-        <a href={REPO_URL} target="_blank" rel="noreferrer" className="block text-muted transition hover:text-fg">{t.nav.github} ↗</a>
+      <div className="mt-8 flex gap-2 border-t border-line pt-5">
+        <a href="#setup" className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg bg-fg px-3 text-[12.5px] font-medium text-bg transition hover:opacity-85">
+          <Download size={13} />{t.hero.install}
+        </a>
+        <a href={REPO_URL} target="_blank" rel="noreferrer" className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-line bg-surface px-3 text-[12.5px] text-fg transition hover:border-line-strong">
+          <GithubMark size={13} />{t.nav.github}
+        </a>
       </div>
     </nav>
   );
@@ -125,8 +129,7 @@ function Header({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => v
   const [open, setOpen] = useState(false);
   return (
     <header className="relative flex items-center gap-3">
-      <a href="#top" className="flex min-w-0 flex-1 items-center gap-2.5 text-[14.5px]">
-        <Logo size={20} />
+      <a href="#top" className="flex min-w-0 flex-1 items-center gap-1.5 text-[14.5px]">
         <span className="shrink-0 font-medium text-fg">Agentic Harness</span>
         <span className="hidden truncate text-faint sm:inline">· {t.hero.kind}</span>
       </a>

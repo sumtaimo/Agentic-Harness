@@ -219,8 +219,9 @@ const BEAM = box([84, -1, 43.2], [11, 94, 6], 'ink');
 const REPORT_TRAY: Shape[] = [
   box([132, 28, 0], [30, 40, 2]),
   ...[35, 40, 45].map((y) => line([[137, y, 2], [156, y, 2]])),
-  line([[139, 54, 2], [143, 59, 2], [154, 50, 2]], true),
 ];
+/** The tick on the report, drawn when the packet lands. */
+const REPORT_TICK = line([[139, 54, 2], [143, 59, 2], [154, 50, 2]], true);
 
 const agentBox = (i: number) => box(AGENT_AT[i], AGENT_SIZE);
 const LED = (i: number): P3 => [AGENT_AT[i][0] + 4, AGENT_AT[i][1] + AGENT_SIZE[1], AGENT_AT[i][2] + 10];
@@ -238,7 +239,7 @@ export function HarnessMachine({ labels, bare = false, className = '' }: { label
     { at: [150, 48, 2], text: labels.report, side: 'r', dy: 2 },
     { at: [110, 92, 4], text: labels.rules, side: 'r', dy: 16 },
   ];
-  const all = [TOWER, PLINTH, [BACK_POST, FRONT_POST, BEAM], REPORT_TRAY, AGENT_AT.map((_, i) => agentBox(i))].flat();
+  const all = [TOWER, PLINTH, [BACK_POST, FRONT_POST, BEAM, REPORT_TICK], REPORT_TRAY, AGENT_AT.map((_, i) => agentBox(i))].flat();
   const geo = all.flatMap(shapePoints);
   const gx = geo.map((p) => p[0]);
   const left = Math.min(...gx) - 10; const right = Math.max(...gx) + 10;
@@ -252,21 +253,26 @@ export function HarnessMachine({ labels, bare = false, className = '' }: { label
   const widest = (side: 'l' | 'r') => Math.max(0, ...placed.filter((p) => p.side === side).map((p) => p.text.length * charW));
   const ys = [...geo.map((p) => p[1]), ...placed.map((p) => p.ty)];
   const vb = bare ? bounds(geo, 6, 6) : [left - widest('l') - 4, Math.min(...ys) - 10, right - left + widest('l') + widest('r') + 8, Math.max(...ys) - Math.min(...ys) + 20];
-  // A packet of work travels along the middle lane, under the gate, towards the report.
-  const [px, py] = proj([70, 0, 0]);
+  // One story on a loop: a packet of finished work leaves lead-dev's lane, passes under the controller gate
+  // (its light flashes green: the check passed), drops onto the report, and the report gets its tick.
+  const [ax, ay] = proj([50, 0, 0]);
+  const [bx, by] = proj([76, 0, -7.2]);
+  const [gx2, gy2] = proj([89.5, 93, 46.2]);
   return (
     <svg viewBox={vb.map((v) => v.toFixed(1)).join(' ')} className={`h-auto w-full ${className}`} role="img" aria-label={`${labels.orchestrator} → lead-ba · lead-dev · lead-qa → ${labels.gate} → ${labels.report}`}
-      strokeLinejoin="round" strokeLinecap="round" style={{ ['--px' as string]: `${px.toFixed(1)}px`, ['--py' as string]: `${py.toFixed(1)}px` }}>
+      strokeLinejoin="round" strokeLinecap="round" style={{ ['--ax' as string]: `${ax.toFixed(1)}px`, ['--ay' as string]: `${ay.toFixed(1)}px`, ['--bx' as string]: `${bx.toFixed(1)}px`, ['--by' as string]: `${by.toFixed(1)}px` }}>
       {TOWER.map((s, i) => <Solid key={`t${i}`} s={s} />)}
       {PLINTH.map((s, i) => <Solid key={`p${i}`} s={s} />)}
       <Solid s={agentBox(0)} />
       <Solid s={agentBox(1)} />
-      <g className="machine-packet"><Solid s={box([46, 43, 9.2], [6, 6, 6], 'ink')} /></g>
       <Solid s={BACK_POST} />
       <Solid s={agentBox(2)} />
       <Solid s={FRONT_POST} />
       <Solid s={BEAM} />
+      <circle cx={gx2} cy={gy2} r={1.6} className="machine-gate" />
       {REPORT_TRAY.map((s, i) => <Solid key={`r${i}`} s={s} />)}
+      <g className="machine-tick"><Solid s={REPORT_TICK} /></g>
+      <g className="machine-packet"><Solid s={box([64, 43, 9.2], [6, 6, 6], 'ink')} /></g>
       {[0, 1, 2].map((i) => { const [x, y] = proj(LED(i)); return <circle key={i} cx={x} cy={y} r={1.5} className="machine-led" style={{ animationDelay: `${i * 0.45}s` }} />; })}
       {!bare && placed.map((p) => {
         const tx = p.side === 'l' ? left : right;
