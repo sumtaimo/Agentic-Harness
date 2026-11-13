@@ -29,14 +29,20 @@
       "title": "Write docs/ENGINES.md: running Gemini and Antigravity with a subscription",
       "goal": "Create docs/ENGINES.md for a developer who uses Gemini and Antigravity and a subscription-only, no-API-key policy. Sections: which engines exist and how autoOrder picks one (first installed engine whose flags pass '<binary> --help'); log in with the subscription (Gemini: run 'gemini' and choose Login with Google; no GEMINI_API_KEY or ANTHROPIC_API_KEY in the environment); check with 'node .harness/doctor.mjs'; what ENGINE_FALLBACK in .harness/telemetry.log means; cloud sessions cannot do browser login so they use Claude Code; engine profiles in config.json are marked verified false until a real run succeeds. Only mention scripts and paths that exist in this repo. Plain English, short. Do not edit anything under .harness/.",
       "priority": 5,
-      "status": "READY",
+      "status": "DONE",
       "source": "human",
       "createdAt": "2026-11-13T02:03:09.957Z",
       "targetFiles": [
         "docs/ENGINES.md"
       ],
       "role": "BA_ANALYST",
-      "verifyCmd": "npm test"
+      "verifyCmd": "npm test",
+      "startedAt": "2026-11-13T02:27:22.651Z",
+      "visibleRun": "V-20261113022722-6tw",
+      "updatedAt": "2026-11-13T02:29:21.802Z",
+      "completedAt": "2026-11-13T02:29:21.801Z",
+      "result": "VERIFIED",
+      "cyclesUsed": 1
     }
   ]
 }
