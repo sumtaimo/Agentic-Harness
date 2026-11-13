@@ -1,0 +1,194 @@
+{
+  "maxCycles": 3,
+  "workerTimeoutMs": 300000,
+  "verifyTimeoutMs": 600000,
+  "useGitWorktrees": false,
+  "rollbackOnFailure": true,
+  "autoGitCommit": false,
+  "activeProfile": "auto",
+  "autoOrder": [
+    "gemini",
+    "antigravity",
+    "claude",
+    "codex"
+  ],
+  "defaultVerifyCmd": "node -e \"process.exit(0)\"",
+  "liveAgentOutput": true,
+  "autonomous": {
+    "intervalSeconds": 60
+  },
+  "git": {
+    "integrationBranch": "uat",
+    "integrationMode": "autonomous",
+    "integrationBase": "HEAD",
+    "protectedBranches": [
+      "main",
+      "master",
+      "production",
+      "prod"
+    ],
+    "keepFailedBranches": true,
+    "linkIntoWorktrees": [
+      "node_modules"
+    ]
+  },
+  "planner": {
+    "defaultAutoPlan": false,
+    "maxWorkers": 4,
+    "maxAttempts": 2,
+    "maxFilesListed": 400,
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep"
+    ]
+  },
+  "memory": {
+    "enabled": true,
+    "recordSessions": true,
+    "autoLessons": true,
+    "maxAutoLessons": 10,
+    "maxLessonLines": 50,
+    "maxContextChars": 6000
+  },
+  "profiles": {
+    "claude": {
+      "verified": true,
+      "note": "Claude Code headless mode. Prompt goes on stdin. {output} = json (quiet) or stream-json (live agent activity in the terminal). Role tools -> --allowedTools; charter forbiddenPaths/forbiddenTools -> --disallowedTools. CLAUDE.md @imports profile.md + lessons.md, so the harness does not inject those twice (except in worktrees).",
+      "binary": "claude",
+      "args": [
+        "-p",
+        "{output}",
+        "--allowedTools",
+        "{allowedTools}",
+        "--disallowedTools",
+        "{disallowedTools}"
+      ],
+      "promptVia": "stdin",
+      "instructionFile": "CLAUDE.md",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "Bash(git:*)",
+        "Bash(npm:*)",
+        "Bash(node:*)"
+      ],
+      "useMcp": false,
+      "mcpArgs": [
+        "--mcp-config",
+        "{mcpConfig}"
+      ],
+      "mcpConfigPath": ".harness/mcp.json",
+      "output": {
+        "batch": [
+          "--output-format",
+          "json"
+        ],
+        "stream": [
+          "--output-format",
+          "stream-json",
+          "--verbose"
+        ]
+      },
+      "modelArgs": [
+        "--model",
+        "{model}"
+      ],
+      "models": {
+        "fast": "haiku",
+        "medium": "sonnet",
+        "high": "opus"
+      },
+      "modelsNote": "CLI aliases, never pinned versions: Claude Code resolves haiku / sonnet / opus to the newest release of each family. The controller picks the tier per job (see docs/MULTI-MODEL-SETUP.md)."
+    },
+    "antigravity": {
+      "verified": false,
+      "note": "UNVERIFIED (confirm with 'agy --help'). The Antigravity terminal agent is 'agy'; '-p \"\"' runs headless with the prompt piped on stdin (avoids argument length limits and Windows newline quoting). Unconfirmed that agy appends stdin to an empty -p; if not, set promptVia to 'arg' and args to ['-p','{prompt}']. No auto-approve flag on purpose (the owner approved auto-approve for Gemini only).",
+      "binary": "agy",
+      "args": [
+        "-p",
+        ""
+      ],
+      "promptVia": "stdin",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Bash"
+      ],
+      "models": {
+        "fast": null,
+        "medium": null,
+        "high": null
+      },
+      "modelsNote": "No model flag is known for agy yet: it always uses its own newest default. If `agy --help` documents a model flag and aliases, add modelArgs (e.g. [\"--model\",\"{model}\"]) and the aliases here."
+    },
+    "orca": {
+      "verified": false,
+      "note": "UNVERIFIED: flags from the original spec. Doctor probes 'orca run --help'; falls back to 'auto' if a flag is missing. Prompt goes on stdin.",
+      "binary": "orca",
+      "args": [
+        "run",
+        "--non-interactive",
+        "--format",
+        "json"
+      ],
+      "promptVia": "stdin",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Bash"
+      ]
+    },
+    "gemini": {
+      "verified": false,
+      "note": "UNVERIFIED (confirm with 'gemini --help'). Headless: '-p' with the prompt piped on stdin (stdin is appended to the -p text). '--approval-mode yolo' (replaces the deprecated --yolo) auto-approves every tool; the owner approved this for this project.",
+      "binary": "gemini",
+      "args": [
+        "--approval-mode",
+        "yolo",
+        "-p",
+        ""
+      ],
+      "promptVia": "stdin",
+      "instructionFile": "GEMINI.md",
+      "allowedTools": [],
+      "modelArgs": [
+        "--model",
+        "{model}"
+      ],
+      "models": {
+        "fast": null,
+        "medium": null,
+        "high": null
+      },
+      "modelsNote": "No alias set: no --model flag is passed, so the CLI uses its own newest default model on every tier. To save quota on the fast tier, set models.fast to an ALIAS that `gemini --help` documents (not a pinned version)."
+    },
+    "codex": {
+      "verified": false,
+      "note": "UNVERIFIED here (not installed on the test machine). OpenAI Codex CLI; '-' means read the prompt from stdin.",
+      "binary": "codex",
+      "args": [
+        "exec",
+        "--full-auto",
+        "-"
+      ],
+      "promptVia": "stdin",
+      "allowedTools": [],
+      "modelArgs": [
+        "--model",
+        "{model}"
+      ],
+      "models": {
+        "fast": null,
+        "medium": null,
+        "high": null
+      },
+      "modelsNote": "No alias set: no --model flag is passed, so the CLI uses its own newest default model on every tier. To save quota on the fast tier, set models.fast to an ALIAS that `codex --help` documents (not a pinned version)."
+    }
+  }
+}

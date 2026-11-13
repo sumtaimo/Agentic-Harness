@@ -1,0 +1,35 @@
+name: test
+
+# Runs the harness's own test suite (zero dependencies, Node.js standard library only).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  npm-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # No "npm install": the project has no dependencies.
+      # Each failing test is also raised as an annotation, so it is visible on the run page (and the public API)
+      # without opening the full log.
+      - name: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.txt || {
+            grep -E '^\s*✖|^not ok|Error' test-output.txt | head -40 | sed 's/^\s*/::error title=npm test::/'
+            exit 1
+          }

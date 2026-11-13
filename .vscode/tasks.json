@@ -1,0 +1,302 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Harness: Run (normal, one task now)",
+      "detail": "Single direct worker, no planner: fastest and cheapest. Files are restored if the check fails.",
+      "type": "process",
+      "command": "node",
+      "args": [".harness/dispatch.mjs", "--mode", "normal", "--goal", "${input:goal}", "--files", "${input:files}", "--check", "${input:check}", "--wait"],
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: Autopilot (work the READY backlog)",
+      "detail": "Same as task 6: runs READY backlog tasks by itself inside charter.md; results land on the 'uat' branch.",
+      "type": "process",
+      "command": "node",
+      "args": [".harness/daemon.mjs", "--autonomous"],
+      "isBackground": true,
+      "runOptions": { "instanceLimit": 1 },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true, "group": "harness" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: 1. Start (live screen)",
+      "detail": "Starts the background agentic harness and shows its live screen. Starts by itself when the folder opens (after you allow automatic tasks once).",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/daemon.mjs",
+        "--watch"
+      ],
+      "isBackground": true,
+      "runOptions": {
+        "runOn": "folderOpen",
+        "instanceLimit": 1
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "focus": false,
+        "group": "harness"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: 2. New task (type what you want)",
+      "detail": "Describe the job in plain words. Optionally let the AI planner split it into parallel workers. The harness runs it and checks the result; on failure your files are restored.",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/dispatch.mjs",
+        "--goal",
+        "${input:goal}",
+        "--files",
+        "${input:files}",
+        "--check",
+        "${input:check}",
+        "--engine",
+        "${input:engine}",
+        "--auto-plan",
+        "${input:autoplan}",
+        "--wait"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: 3. Teach the AI something (remember)",
+      "detail": "Save a rule or preference. Every AI working in this folder will follow it.",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/memory.mjs",
+        "remember",
+        "${input:lesson}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: 4. Show memory",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/memory.mjs",
+        "list"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: 5. Status + recent events",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/status.mjs",
+        "--log",
+        "25"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: Doctor (check my setup)",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/doctor.mjs"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: 6. Start Autonomous Controller (acts on charter.md)",
+      "detail": "Wakes on a heartbeat and works through the backlog (the PO_ARCHITECT plans new tasks when it is empty), only if charter.md says autonomous: on. Work is built on its own branches and merged into 'uat' only after the check passes; your folder and main are never touched. You see each agent working live. Stop task 1 first (one controller per folder).",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/daemon.mjs",
+        "--autonomous"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "group": "harness"
+      },
+      "problemMatcher": [],
+      "isBackground": true,
+      "runOptions": {
+        "instanceLimit": 1
+      }
+    },
+    {
+      "label": "Harness: 7. Run Autonomous Controller Tick",
+      "detail": "One step of the autonomous controller now: run the next READY backlog item (or let the PO_ARCHITECT plan one). Works whether or not the controller is running.",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/daemon.mjs",
+        "--tick"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: 8. View Backlog & Releases",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/backlog.mjs",
+        "overview"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: 9. Import New Goal/Backlog with Snapshot",
+      "detail": "Replace the backlog (.json), the charter (.md) or the skills (folder). The old version is saved to .harness/releases/ first; memory is kept.",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/backlog.mjs",
+        "import",
+        "${input:importPath}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: 10. Add a goal to the backlog",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/backlog.mjs",
+        "add",
+        "${input:goal}",
+        "--files",
+        "${input:files}",
+        "--status",
+        "${input:backlogStatus}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: Run Self-Test Cycle",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/daemon.mjs",
+        "--self-test"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "goal",
+      "type": "promptString",
+      "description": "What should the AI do? Write it like you would tell a person."
+    },
+    {
+      "id": "files",
+      "type": "promptString",
+      "description": "Which files/folders may it change? (comma separated, e.g. src/ \u2014 leave empty to let it decide; needed for automatic undo)",
+      "default": ""
+    },
+    {
+      "id": "check",
+      "type": "promptString",
+      "description": "Command that proves it worked, e.g. npm test (leave empty = pick from package.json check/typecheck/test/build/lint; if none, NO real check)",
+      "default": ""
+    },
+    {
+      "id": "engine",
+      "type": "pickString",
+      "description": "Which AI engine?",
+      "options": [
+        "auto",
+        "claude",
+        "antigravity",
+        "orca",
+        "gemini",
+        "codex"
+      ],
+      "default": "auto"
+    },
+    {
+      "id": "autoplan",
+      "type": "pickString",
+      "description": "Split into parallel AI workers automatically? (AI planner)",
+      "options": [
+        "no",
+        "yes"
+      ],
+      "default": "no"
+    },
+    {
+      "id": "lesson",
+      "type": "promptString",
+      "description": "What should every AI remember? (e.g. Always explain changes in simple English)"
+    },
+    {
+      "id": "importPath",
+      "type": "promptString",
+      "description": "Path of the new backlog .json, charter .md, or skills folder (e.g. .harness/examples/backlog.sample.json)"
+    },
+    {
+      "id": "backlogStatus",
+      "type": "pickString",
+      "description": "Ready to run now, or just an idea for the PO to groom later?",
+      "options": [
+        "READY",
+        "BACKLOG"
+      ],
+      "default": "READY"
+    }
+  ]
+}

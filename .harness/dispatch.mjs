@@ -1,0 +1,180 @@
+#!/usr/bin/env node
+/**
+ * .harness/dispatch.mjs — put a job into .harness/inbox/ for the daemon.
+ *
+ * Simple (one AI worker):
+ *   node .harness/dispatch.mjs --goal "Add a dark-mode toggle to the settings page" \
+ *        [--files "src/settings.tsx,src/theme.css"] [--check "npm test"] [--engine claude] [--wait]
+ *
+ * AI planner (the AI splits the goal into parallel workers with separate files):
+ *   node .harness/dispatch.mjs --goal "Add a /health API endpoint with tests" --auto-plan --wait
+ *   (--files then limits which files the planner may hand out; --auto-plan no turns it off)
+ *
+ * No --check?  The planner picks the strongest check from package.json scripts
+ *   (check > typecheck + test > build > lint). With none, nothing really checks the work.
+ *
+ * Swarm (original spec form — several workers in parallel, each owning its files):
+ *   node .harness/dispatch.mjs "Build API & Tests" --engine claude --verify "npm test" \
+ *     --worker "w1:src/api.ts:Implement endpoint" \
+ *     --worker "w2:src/api.test.ts:Write tests"
+ *
+ * Team hierarchy (orchestrator → leads → workers, as defined in .harness/team.json):
+ *   node .harness/dispatch.mjs --goal "Build a login feature with spec, code and tests" --hierarchy [--max-cost 1.5] [--wait]
+ *   (--max-cost: the controller stops the task if the agents spend more than this many dollars)
+ *
+ * --mode normal    one direct worker, no planner (fastest, fewest tokens)  — npm run run -- --goal "…"
+ * --mode parallel  AI planner splits into parallel workers (same as --auto-plan)
+ * --mode team      orchestrator → leads → workers (same as --hierarchy)
+ * Autopilot (backlog loop) is not a dispatch mode: npm run auto
+ *
+ * --branch uat   build on its own git branches, verify, then merge into 'uat' only if the check passes
+ *                (your working folder and main are not touched)
+ * --model fast|medium|high   force a model tier for every agent of this job (default: the controller picks
+ *                (or an alias, e.g. --model opus)  the cheapest tier that fits each agent's job; see docs/MULTI-MODEL-SETUP.md)
+ * --wait   block until the job finishes and print the result (exit 0 = committed).
+ *          If no background daemon is running, this command processes the job itself.
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd } from './lib/common.mjs';
+
+if (process.env.HARNESS_WORKER === '1') {
+  console.error('Refusing to dispatch from inside a harness worker (prevents agents spawning agents in a loop).');
+  process.exit(2);
+}
+
+const args = process.argv.slice(2);
+if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+  console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('*/')[0].replace(/^#!.*\n\/\*\*?/, '').replace(/^ \* ?/gm, ''));
+  process.exit(args.length === 0 ? 1 : 0);
+}
+
+const config = loadConfig();
+let title = args[0] && !args[0].startsWith('--') ? args[0] : '';
+let goal = '';
+let engine;
+let model;
+let verifyCmd;
+let files = [];
+let wait = false;
+let autoPlan = !!config.planner?.defaultAutoPlan;
+let branch;
+let hierarchy = false;
+let maxCost;
+const subtasks = [];
+
+for (let i = 0; i < args.length; i++) {
+  const a = args[i]; const v = args[i + 1];
+  if (a === '--engine' && v !== undefined) { engine = args[++i].trim().toLowerCase(); }
+  else if (a === '--model' && v !== undefined) { model = args[++i].trim(); if (!/^[\w.:@/-]+$/.test(model)) { console.error('--model takes a tier (fast | medium | high) or a model alias such as opus'); process.exit(1); } }
+  else if ((a === '--verify' || a === '--check') && v !== undefined) { verifyCmd = args[++i].trim(); }
+  else if (a === '--goal' && v !== undefined) { goal = args[++i].trim(); }
+  else if (a === '--title' && v !== undefined) { title = args[++i].trim(); }
+  else if (a === '--files' && v !== undefined) { files = args[++i].split(',').map((f) => f.trim()).filter(Boolean); }
+  else if (a === '--wait') { wait = true; }
+  else if (a === '--branch' && v !== undefined) { branch = args[++i].trim() || undefined; }
+  else if (a === '--hierarchy') { hierarchy = true; }
+  else if (a === '--mode' && v !== undefined) {
+    const m = args[++i].trim().toLowerCase();
+    if (m === 'normal' || m === 'direct' || m === 'run') { autoPlan = false; hierarchy = false; }
+    else if (m === 'parallel') { autoPlan = true; hierarchy = false; }
+    else if (m === 'team' || m === 'hierarchy') { hierarchy = true; }
+    else if (m === 'auto' || m === 'autopilot') {
+      console.error('Autopilot works from the backlog, not from one goal. Add the task with:\n  node .harness/backlog.mjs add "<title>" --status READY\nthen start autopilot with:  npm run auto');
+      process.exit(1);
+    } else { console.error(`Unknown --mode '${m}'. Use: normal | parallel | team (autopilot: npm run auto)`); process.exit(1); }
+  }
+  else if (a === '--max-cost' && v !== undefined) {
+    maxCost = Number(args[++i]);
+    if (!Number.isFinite(maxCost) || maxCost < 0) { console.error('--max-cost must be a number of dollars, e.g. --max-cost 1.5'); process.exit(1); }
+  }
+  else if (a === '--auto-plan') {
+    autoPlan = true;
+    if (/^(yes|no|true|false|on|off)$/i.test(v || '')) autoPlan = /^(yes|true|on)$/i.test(args[++i]);
+  }
+  else if (a === '--worker' && v !== undefined) {
+    const [id, filesCsv, ...promptParts] = args[++i].split(':');
+    subtasks.push({
+      id: id || `worker-${subtasks.length + 1}`,
+      targetFiles: (filesCsv || '').split(',').map((f) => f.trim()).filter(Boolean),
+      prompt: promptParts.join(':').trim() || title
+    });
+  }
+}
+if (!engine || engine === 'auto') engine = undefined;
+if (engine && !config.profiles[engine]) {
+  console.error(`Unknown engine '${engine}'. Choose one of: auto, ${Object.keys(config.profiles).join(', ')}`);
+  process.exit(1);
+}
+if (!title) title = goal ? goal.slice(0, 80) : 'Dispatched Swarm Task';
+if (!goal && subtasks.length === 0) goal = title;
+
+// No --check: the planner (Node 1) picks one from package.json when the job runs. Preview it here.
+let checkLine;
+if (verifyCmd) checkLine = verifyCmd;
+else {
+  const d = detectVerifyCmd(ROOT, config);
+  checkLine = `${d.cmd}  (${d.source})${d.real ? '' : ' — WARNING: any result will "pass". Add --check "<command>" for a real gate.'}`;
+}
+
+for (const s of subtasks) if (engine) s.engine = engine;
+const usePlanner = autoPlan && subtasks.length === 0;
+const job = {
+  id: `job-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 6)}`,
+  ...(engine ? { engine } : {}),
+  ...(model ? { model } : {}),
+  title,
+  ...(verifyCmd ? { verifyCmd } : {}),
+  ...(branch ? { integrationBranch: branch } : {}),
+  createdAt: new Date().toISOString(),
+  ...(maxCost !== undefined ? { maxCostUsd: maxCost } : {}),
+  ...(hierarchy && subtasks.length === 0
+    ? { hierarchy: true, goal, targetFiles: files }
+    : usePlanner
+    ? { autoPlan: true, goal, targetFiles: files }
+    : {
+        subtasks: subtasks.length > 0
+          ? subtasks
+          : [{ id: 'worker-main', ...(engine ? { engine } : {}), targetFiles: files, prompt: goal }]
+      })
+};
+
+ensureDirs();
+const inboxPath = path.join(DIRS.inbox, `${job.id}.json`);
+fs.writeFileSync(`${inboxPath}.tmp`, JSON.stringify(job, null, 2)); // atomic hand-off:
+fs.renameSync(`${inboxPath}.tmp`, inboxPath);                       // the daemon never sees half a file
+console.log(`Dispatched [${(engine || config.activeProfile).toUpperCase()}] job ${job.id} (${job.hierarchy ? 'orchestrator → leads → workers, per team.json' : usePlanner ? 'AI planner will choose the workers' : `${job.subtasks.length} worker[s]`}) -> ${path.relative(ROOT, inboxPath)}`);
+console.log(`Check: ${checkLine}`);
+console.log(`JOB_ID=${job.id}`);
+console.log(`LIVE_FROM=${(() => { try { return fs.statSync(path.join(ROOT, '.harness', 'live.log')).size; } catch { return 0; } })()}`);
+if (branch) console.log(`Git: result is merged into '${branch}' only if the check passes; your folder and protected branches are not touched.`);
+
+if (!wait) process.exit(0);
+
+// ── --wait: follow the job to the end ──
+const daemonPid = (() => {
+  try { const pid = Number(fs.readFileSync(path.join(ROOT, '.harness', 'daemon.pid'), 'utf8')); process.kill(pid, 0); return pid; } catch { return 0; }
+})();
+if (!daemonPid) {
+  console.log('No background daemon running — processing the job in this terminal…');
+  const child = spawn(process.execPath, [path.join(ROOT, '.harness', 'daemon.mjs'), '--once'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, HARNESS_SILENT: process.env.HARNESS_SILENT ?? '1' } });
+  await new Promise((r) => child.on('close', r));
+} else {
+  console.log(`Background daemon (PID ${daemonPid}) is working on it — watch the Harness panel. Waiting…`);
+}
+
+const find = (dir) => fs.readdirSync(dir).find((f) => f.startsWith(job.id));
+for (;;) {
+  const done = find(DIRS.completed); const failed = find(DIRS.failed);
+  if (done || failed) {
+    const sessions = fs.readdirSync(DIRS.sessions).filter((f) => f.includes(job.id));
+    const note = sessions.length ? path.join('.harness', 'memory', 'sessions', sessions[sessions.length - 1]) : '(none)';
+    if (done) { console.log(`RESULT: COMMITTED ✔  (session note: ${note})`); process.exit(0); }
+    const body = readJsonSafe(path.join(DIRS.failed, failed));
+    console.log(`RESULT: NOT DONE ✖  ${body.haltReason || ''}\nSession note: ${note}`);
+    process.exit(1);
+  }
+  await new Promise((r) => setTimeout(r, 1000));
+}

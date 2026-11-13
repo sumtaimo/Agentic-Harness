@@ -1,0 +1,155 @@
+@import "tailwindcss";
+
+/* Dark mode follows the .dark class on <html>. Light is the default (toggle in the header, remembered per visitor). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Quiet, paper-like palette: near-black ink, warm greys, almost no colour. */
+:root {
+  --bg: #f9f9f8;
+  --surface: #ffffff;
+  --surface-2: #f2f2f0;
+  --border: #e8e8e5;
+  --border-strong: #d4d4d0;
+  --fg: #1d1d1b;
+  --muted: #6f6f6b;
+  --faint: #9c9c97;
+  --accent: #1d1d1b;
+  --accent-soft: #efefec;
+  --ok: #2f7a4b;
+  --ok-soft: #ecf5ef;
+  --warn: #8f6200;
+  --warn-soft: #fbf4e4;
+  --danger: #b03a3a;
+  --danger-soft: #faeeee;
+  /* isometric drawings */
+  --iso-top: #ffffff;
+  --iso-a: #eeeeeb;
+  --iso-b: #dededa;
+  --iso-ink: #8a8a85;
+  --iso-ink-top: #4a4a46;
+  --iso-ink-a: #2f2f2c;
+  --iso-ink-b: #1f1f1d;
+}
+
+.dark {
+  --bg: #141413;
+  --surface: #1b1b1a;
+  --surface-2: #222220;
+  --border: #2c2c2a;
+  --border-strong: #3a3a37;
+  --fg: #ecebe7;
+  --muted: #a3a29d;
+  --faint: #75746f;
+  --accent: #ecebe7;
+  --accent-soft: #262624;
+  --ok: #6cc28f;
+  --ok-soft: #17241c;
+  --warn: #e0b45c;
+  --warn-soft: #2a2314;
+  --danger: #e88484;
+  --danger-soft: #2c1919;
+  --iso-top: #2a2a28;
+  --iso-a: #222220;
+  --iso-b: #1a1a19;
+  --iso-ink: #6e6d68;
+  --iso-ink-top: #d8d7d2;
+  --iso-ink-a: #b9b8b2;
+  --iso-ink-b: #9a9993;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --font-sans: "Inter", "Noto Sans Khmer", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-serif: "Newsreader", "Iowan Old Style", Georgia, "Noto Sans Khmer", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Noto Sans Khmer", monospace;
+}
+
+html { scroll-behavior: smooth; scroll-padding-top: 32px; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+::selection { background: color-mix(in srgb, var(--fg) 14%, transparent); }
+code, pre, kbd { font-family: var(--font-mono); }
+
+/* Links in running text: thin grey underline, like a printed note. */
+.ink-link { text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; text-decoration-thickness: 1px; transition: text-decoration-color .15s; }
+.ink-link:hover { text-decoration-color: var(--fg); }
+
+/* Khmer: stacked subscripts and vowel signs need more vertical room and no negative tracking. */
+html:lang(km) h1, html:lang(km) h2, html:lang(km) h3 { line-height: 1.6 !important; letter-spacing: 0 !important; }
+html:lang(km) p, html:lang(km) li, html:lang(km) td, html:lang(km) label, html:lang(km) dd { line-height: 1.95; }
+html:lang(km) .font-serif { font-family: var(--font-sans); font-style: normal; }
+
+/* The hero machine, one 5s story: the packet leaves lead-dev's lane (0–55%), passes the gate (~26%, the gate
+   light flashes green), drops onto the report (55–66%), the report's tick draws (66–74%), then everything resets. */
+.machine-packet { animation: packet 5s cubic-bezier(.4,0,.3,1) infinite; }
+@keyframes packet {
+  0% { transform: translate(0, 0); opacity: 0; }
+  8% { opacity: 1; }
+  55% { transform: translate(var(--ax), var(--ay)); opacity: 1; }
+  66%, 88% { transform: translate(var(--bx), var(--by)); opacity: 1; }
+  96%, 100% { transform: translate(var(--bx), var(--by)); opacity: 0; }
+}
+.machine-gate { fill: var(--ok); animation: gate 5s ease-in-out infinite; }
+@keyframes gate { 0%, 18% { opacity: .2; } 26% { opacity: 1; } 38%, 100% { opacity: .2; } }
+.machine-tick polyline { stroke-dasharray: 1; animation: tick 5s ease-out infinite; }
+@keyframes tick { 0%, 66% { stroke-dashoffset: 1; } 74%, 94% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 1; } }
+.machine-led { fill: var(--ok); animation: led 1.35s ease-in-out infinite; }
+@keyframes led { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+/* The three agents on the board: each slides a little along its own lane while it works (never leaves the lane).
+   3 units along the lane's x axis = (2.6, 1.5) on screen. */
+.machine-agent { animation: agent-work 2.4s ease-in-out infinite; }
+@keyframes agent-work { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(2.6px, 1.5px); } }
+
+/* Small figures: gentle, looping motion. Translations use the drawing's own units (set per shape as --mx / --my). */
+.iso-slide { animation: iso-slide 3.6s cubic-bezier(.45,.05,.4,1) infinite both; }
+@keyframes iso-slide {
+  0% { transform: translate(0, 0); opacity: 0; }
+  12% { opacity: 1; }
+  78% { transform: translate(var(--mx), var(--my)); opacity: 1; }
+  90%, 100% { transform: translate(var(--mx), var(--my)); opacity: 0; }
+}
+.iso-blink { animation: iso-blink 1.1s steps(1) infinite; }
+@keyframes iso-blink { 50% { opacity: 0; } }
+.iso-led { animation: led 1.6s ease-in-out infinite; }
+.iso-bob { animation: iso-bob 2.4s ease-in-out infinite; }
+@keyframes iso-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+.iso-stamp { animation: iso-stamp 3.2s cubic-bezier(.3,1.6,.6,1) infinite; }
+@keyframes iso-stamp {
+  0%, 30% { transform: translateY(-9px); opacity: 0; }
+  45% { transform: translateY(0); opacity: 1; }
+  92% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(0); opacity: 0; }
+}
+.iso-draw polyline { stroke-dasharray: 1; animation: iso-draw 3.2s ease-out infinite; }
+@keyframes iso-draw { 0%, 45% { stroke-dashoffset: 1; } 70%, 100% { stroke-dashoffset: 0; } }
+
+/* A thin, quiet scrollbar for panels that scroll inside the page. */
+.cmd-scroll { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.cmd-scroll::-webkit-scrollbar { width: 6px; }
+.cmd-scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}

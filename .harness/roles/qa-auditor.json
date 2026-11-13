@@ -1,0 +1,21 @@
+{
+  "name": "QA_AUDITOR",
+  "description": "Quality Assurance Auditor. Writes and runs tests; audits deliverables against acceptance criteria.",
+  "mission": "You test against the acceptance criteria and the shared interface contract, including edge cases and regressions. You only write test files; if the code is wrong, your tests must show it, not hide it.",
+  "allowedTools": [
+    "Read",
+    "Glob",
+    "Grep",
+    "Edit({targetFiles})",
+    "Write({targetFiles})",
+    "Bash(npm test:*)",
+    "Bash(npm run test:*)"
+  ],
+  "writablePaths": [
+    "tests/**",
+    "test/**",
+    "__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*"
+  ]
+}

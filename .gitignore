@@ -1,0 +1,39 @@
+# agentic-harness runtime (machine-specific or personal; never commit to a public template)
+.harness/state.json
+.harness/*.tmp
+.harness/telemetry.log
+.harness/daemon.pid
+.harness/engine-probe.json
+.harness/auto-state.json
+.harness/live.log
+.harness/inbox/*
+.harness/completed/*
+.harness/failed/*
+.harness/staging/*
+.harness/releases/*
+.harness/visible/*
+.harness/worktrees/*
+.harness/memory/sessions/*
+.harness/memory/auto-lessons.md
+# The folder/* form (instead of folder/) keeps each folder's .gitkeep, so the folders exist in the template.
+!.harness/**/.gitkeep
+
+# charter.md, backlog.json, roles/ and skills/ ARE committed (they define the project's governance).
+# profile.md and lessons.md ARE committed (the template ships generic starter versions).
+# In your own PUBLIC project, if they hold personal details, uncomment these two lines:
+# .harness/memory/profile.md
+# .harness/memory/lessons.md
+
+# Personal Claude Code overrides (never commit)
+.claude/settings.local.json
+# Personal profile and rules for this checkout (Claude Code loads it automatically)
+CLAUDE.local.md
+
+# A demo project created by `npm run demo` (examples/make-demo.mjs) lives next to the template, not in it
+/demo-project/
+
+# Per-person state and secrets (never commit)
+.agent-state/
+.env
+.env.*
+!.env.example
