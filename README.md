@@ -532,7 +532,7 @@ node .harness/memory.mjs list|remember|forget|context|sessions
 node .harness/doctor.mjs                 # setup check + engine flag probe
 node .harness/status.mjs --log 25        # state + recent JSONL events
 node .harness/watch.mjs --job <id>       # live feed of every agent action until that job finishes
-node test/run-tests.mjs                  # 89 end-to-end tests with a mock engine (no AI account needed, free)
+node test/run-tests.mjs                  # end-to-end tests with a mock engine (no AI account needed, free)
 npm run test:live                        # REAL Claude agents end to end, 6 scenarios (manual task, autonomous uat run, headless team, the editor workflow with named agents, autonomous editor mode, editor config); ~$2.5, needs `claude` logged in
 node .harness/visible.mjs status          # runs of the editor workflow
 node .harness/team.mjs show|validate     # the agent team and its guardrails
