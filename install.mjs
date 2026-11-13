@@ -43,6 +43,13 @@ like to work. Replace each "(fill me)". You can also just tell your editor AI:
 - How I like answers: (fill me — e.g. "short, step by step, one command at a time")
 - Things the AI must always ask me before doing: (fill me — e.g. "deleting files, pushing to GitHub, paying for anything")
 `;
+// A new project starts with no taught rules, never the rules of whoever owns this template copy.
+const LESSONS_TEMPLATE = `# Lessons the user taught
+
+Rules here are injected into every harness worker prompt and should be read by any
+editor AI before it starts work. Add with:  node .harness/memory.mjs remember "..."
+Remove with:  node .harness/memory.mjs forget L3
+`;
 const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|roles[\\/]|skills[\\/]|config\.json$|charter\.md$|backlog\.json$|team\.json$)/;
 
 function copyDir(from, to, rel = '.harness') {
@@ -57,6 +64,10 @@ function copyDir(from, to, rel = '.harness') {
     }
     if (RUNTIME.has(entry.name) || (/^(inbox|completed|failed)$/.test(path.basename(from)) && entry.name !== '.gitkeep')) continue;
     if (fs.existsSync(d) && KEEP_IF_PRESENT.test(relPath)) { report.push(`kept   ${relPath} (already existed)`); continue; }
+    if (relPath === path.join('.harness', 'memory', 'lessons.md')) { // the template owner's taught rules never travel
+      fs.writeFileSync(d, LESSONS_TEMPLATE);
+      report.push(`wrote  ${relPath} (no rules yet)`); continue;
+    }
     if (relPath === path.join('.harness', 'memory', 'profile.md')) { // the template owner's personal profile never travels
       fs.writeFileSync(d, PROFILE_TEMPLATE);
       report.push(`wrote  ${relPath} (blank profile to fill in)`); continue;
