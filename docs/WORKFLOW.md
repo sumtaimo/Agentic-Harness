@@ -32,7 +32,8 @@ The agents are *named* on purpose: in Claude Code you see **`lead-dev`**, **`lea
 3. **Each agent owns only its files.** After the agents finish, `verify` compares the whole project with the snapshot. Any changed file that is not inside some agent's assigned files is a **violation** and is **reverted automatically**. The rules themselves (`charter.md`, `team.json`, `config.json`, roles, skills), `.claude/`, and root `.env*` files are watched too.
 4. **Done means the real check passed.** `verify` runs the task's check (your `--check`, the backlog item's `verifyCmd`, or the best script in `package.json`). A failure goes back to the responsible agent; after **3 cycles** the run stops as `HALTED_HITL_REQUIRED`, every file is restored to how it was before the run, the backlog item becomes BLOCKED, and a lesson is saved.
 5. **You decide about the result.** Nothing is committed, pushed or merged for you. A passed run leaves the changes in your working folder for you to review (`git diff`).
-6. **A report always comes back**, in plain words: what each named agent did, the check result, what needs your decision. The report is also saved (`.harness/visible/<run>/report.md`) and a session note is written to memory.
+6. **The report says what tests cannot prove.** When UI files changed it reads **PASSED — NEEDS A VISUAL REVIEW** (open it at desktop and phone width, light and dark); skipped tests are counted and called out (a skipped visual test proves nothing); files the check itself created that git does not ignore (such as `dist/`) are flagged. The brief also warns when a project with UI files has a check that never opens a browser.
+7. **A report always comes back**, in plain words: what each named agent did, the check result, what needs your decision. The report is also saved (`.harness/visible/<run>/report.md`) and a session note is written to memory.
 
 ### Autonomous mode (ON by default)
 

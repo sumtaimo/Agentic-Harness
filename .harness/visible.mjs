@@ -147,7 +147,8 @@ function leadPrompt(run, lead, a, roles, skills) {
 function reportText(run, v) {
   const L = [];
   const head = { PASSED: 'PASSED ✔', FAILED: 'NOT PASSED YET ✖ (can be fixed and re-verified)', HALTED_HITL_REQUIRED: 'STOPPED ✖ — a human decision is needed', ROLLED_BACK: 'ROLLED BACK', ESCALATED: 'ESCALATED — a human decision is needed' }[v.status] || v.status;
-  L.push(`HARNESS REPORT — run ${run.id} — ${head}`, '', `Task:    ${run.title}`, `Source:  ${run.source === 'backlog' ? `backlog item ${run.backlogId}` : 'goal given by the human'}${run.autonomous ? ' (autonomous mode)' : ''}`,
+  const visual = v.status === 'PASSED' && v.uiFiles?.length;
+  L.push(`HARNESS REPORT — run ${run.id} — ${head}${visual ? ' — NEEDS A VISUAL REVIEW' : ''}`, '', `Task:    ${run.title}`, `Source:  ${run.source === 'backlog' ? `backlog item ${run.backlogId}` : 'goal given by the human'}${run.autonomous ? ' (autonomous mode)' : ''}`,
     `Flow:    controller → orchestrator (editor session) → ${run.assignments.map((a) => a.lead).join(', ')} → controller verify → this report`, '');
   L.push('What each agent did:');
   for (const a of run.assignments) {
@@ -155,6 +156,12 @@ function reportText(run, v) {
     L.push(`  • ${a.lead}: ${mine.length ? mine.join(', ') : 'no file changes'}${v.reports?.[a.lead] ? `\n      says: ${v.reports[a.lead]}` : ''}`);
   }
   L.push('', `Check:   ${run.check.cmd}  (${run.check.source})`, `         → ${v.checkResult}`);
+  if (v.skipped) L.push(`  ⚠ ${v.skipped} test(s) were SKIPPED. A skipped test proves nothing: find out why (for example a missing browser) before trusting this result.`);
+  if (visual) L.push('', `Visual review needed: ${v.uiFiles.length} UI file(s) changed (${v.uiFiles.slice(0, 6).join(', ')}${v.uiFiles.length > 6 ? ', …' : ''}).`,
+    `  Passing tests do not prove a page looks right${v.browserCheck ? '' : ', and this check never opened a browser (a broken page script would still pass)'}.`,
+    '  Open it at desktop and phone width, in light and dark, and compare it with the spec before you commit.');
+  if (v.checkCreated?.length) L.push('', `⚠ The check created ${v.checkCreated.length} file(s) that git does not ignore (${v.checkCreated.slice(0, 4).join(', ')}${v.checkCreated.length > 4 ? ', …' : ''}).`,
+    '  Add them (for example dist/) to .gitignore, or they will be committed by accident and counted as out-of-scope changes next time.');
   if (v.violations.length) L.push('', 'Violations (changes outside the assigned files):', ...v.violations.map((x) => `  ✖ ${x}`));
   if (v.reverted.length) L.push(`         The controller reverted ${v.reverted.length} out-of-scope change(s): ${v.reverted.join(', ')}`);
   if (v.revertFailed?.length) L.push(`  ⚠ COULD NOT be reverted automatically (secrets are never copied): ${v.revertFailed.join(', ')} — check and restore them by hand before anything else.`);
@@ -222,6 +229,7 @@ function brief() {
   if (run.acceptanceCriteria.length) console.log(`Acceptance criteria:\n${run.acceptanceCriteria.map((c) => `  - ${c}`).join('\n')}`);
   if (run.interfaceContract) console.log(`Interface contract:\n${run.interfaceContract}`);
   console.log(`\nCheck (run by the controller after the agents finish): ${check.cmd}  [${check.source}]${check.real ? '' : '\n  ⚠ NO REAL CHECK: any result would pass. Tell the human and propose a check.'}`);
+  if (check.real && !BROWSER_CHECK.test(check.cmd) && Object.keys(snap.map).some((f) => UI_FILE.test(f))) console.log('  ⚠ This project has UI files but the check never opens a browser: a page with a broken script or layout can still pass. If this task changes UI, tell the human and suggest a browser smoke test; the report will ask for a visual review.');
   console.log('\nTeam — delegate ONLY to these named agents, each at most once (their scope is enforced):');
   for (const l of run.leads) console.log(`  - ${l.id} (${l.role}) may own: ${l.scope.join(', ')}`);
   if (userAllowed.length) console.log(`The human only allows files inside: ${userAllowed.join(', ')}`);
@@ -267,10 +275,30 @@ function assign() {
   }
 }
 
+/**
+ * How many tests the check skipped, read from the common test reporters (node:test TAP and spec, Jest, Vitest,
+ * Playwright, Mocha). A skipped test is not a passed test: a visual test that skips because a browser is missing
+ * proves nothing, so the report says so.
+ */
+function countSkipped(out) {
+  let n = 0;
+  for (const re of [/^# (?:skipped|todo) (\d+)/gm, /^ℹ (?:skipped|todo) (\d+)/gm, /(\d+) (?:skipped|pending|todo)\b/gi]) {
+    for (const m of String(out).matchAll(re)) n += Number(m[1]);
+    if (n) return n;
+  }
+  return 0;
+}
+
+/** Changed files that render as UI: tests passing does not mean they look right. */
+const UI_FILE = /\.(html?|css|scss|sass|less|svg|jsx|tsx|vue|svelte|astro)$/i;
+/** A check that opens a real browser (so a broken page script or layout can fail it). */
+const BROWSER_CHECK = /playwright|puppeteer|cypress|webdriver|selenium|e2e|visual|screenshot|lighthouse/i;
+
 function runCheck(run) {
   const r = spawnSync(run.check.cmd, { cwd: ROOT, shell: true, encoding: 'utf8', timeout: config.verifyTimeoutMs || 600000, maxBuffer: 32 * 1024 * 1024 });
   const out = `${r.stdout || ''}${r.stderr || ''}`.trim();
-  return { ok: r.status === 0, text: r.status === 0 ? `PASS (exit 0)` : `FAIL (exit ${r.status ?? 'timeout'})\n${out.split('\n').slice(-25).join('\n')}` };
+  const skipped = countSkipped(out);
+  return { ok: r.status === 0, skipped, text: r.status === 0 ? `PASS (exit 0)${skipped ? `, ${skipped} test(s) SKIPPED` : ''}` : `FAIL (exit ${r.status ?? 'timeout'})\n${out.split('\n').slice(-25).join('\n')}` };
 }
 
 function verify() {
@@ -291,7 +319,15 @@ function verify() {
   if (violating.length) { const r = restoreFiles(run, violating); reverted.push(...r.restored); revertFailed.push(...r.failed); }
   const changes = d.all.filter((f) => !violating.includes(f) || revertFailed.includes(f)).map((f) => `${d.added.includes(f) ? '+' : d.deleted.includes(f) ? '-' : '~'} ${f}`);
   let check = { ok: false, text: 'not run (fix the violations first)' };
-  if (!violations.length) check = runCheck(run);
+  let checkCreated = [];
+  if (!violations.length) {
+    const before = snapshot().map;
+    check = runCheck(run);
+    // files the check itself wrote (a build output such as dist/) that git does not ignore: they would be committed
+    // by accident, and the next verify would count them as out-of-scope changes
+    checkCreated = Object.keys(snapshot().map).filter((f) => !(f in before));
+  }
+  const uiFiles = d.all.filter((f) => !violating.includes(f) && UI_FILE.test(f));
   const passed = !violations.length && check.ok;
   const maxCycles = config.maxCycles ?? 3;
   const halted = !passed && run.cycles >= maxCycles;
@@ -299,7 +335,8 @@ function verify() {
   if (halted) { const r = restoreFiles(run, diffSnapshots(run.baseline.files, snapshot().map).all); autoRolledBack = r.failed.length === 0 && run.baseline.rollbackAvailable; }
   run.status = passed ? 'PASSED' : halted ? 'HALTED_HITL_REQUIRED' : 'FAILED';
   run.lastVerify = { at: new Date().toISOString(), passed, violations, reverted, check: check.text };
-  const v = { status: run.status, changes, violations, reverted, revertFailed, checkResult: check.text, reports, autoRolledBack };
+  run.lastVerify.skipped = check.skipped || 0; run.lastVerify.needsVisualReview = passed && uiFiles.length > 0;
+  const v = { status: run.status, changes, violations, reverted, revertFailed, checkResult: check.text, reports, autoRolledBack, skipped: check.skipped || 0, uiFiles, checkCreated, browserCheck: BROWSER_CHECK.test(run.check.cmd) };
   const text = reportText(run, v);
   fs.writeFileSync(path.join(runDir(run.id), 'report.md'), `${text}\n`);
   saveRun(run);
