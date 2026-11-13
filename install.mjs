@@ -2,7 +2,8 @@
 /**
  * install.mjs — copy this harness into another project, without overwriting that project's files.
  *
- *   node install.mjs /path/to/your/project
+ *   node install.mjs /path/to/your/project [--autonomous off]
+ *   node install.mjs --reset [/path/to/your/project] [--autonomous off]   (clean a "Use this template" copy)
  *
  * - .harness/ is copied (your existing memory, inbox and logs are kept if already there).
  * - AGENTS.md / CLAUDE.md / GEMINI.md / copilot / cursor / windsurf files: created if missing;
@@ -19,10 +20,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
-const target = process.argv[2] && path.resolve(process.argv[2]);
-if (!target) { console.error('Usage: node install.mjs /path/to/your/project'); process.exit(1); }
+const ARGS = process.argv.slice(2);
+const RESET = ARGS.includes('--reset');
+const positional = ARGS.filter((a, i) => !a.startsWith('--') && ARGS[i - 1] !== '--autonomous');
+const target = (positional[0] || (RESET ? '.' : '')) && path.resolve(positional[0] || '.');
+if (!target) { console.error('Usage: node install.mjs /path/to/your/project [--autonomous off]\n       node install.mjs --reset [/path/to/your/project] [--autonomous off]'); process.exit(1); }
 if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) { console.error(`Not a folder: ${target}`); process.exit(1); }
-if (path.resolve(target) === path.resolve(SRC)) { console.error('Target is this template itself.'); process.exit(1); }
+if (!RESET && path.resolve(target) === path.resolve(SRC)) { console.error('Target is this template itself. (To clear its owner settings, use --reset.)'); process.exit(1); }
 
 const report = [];
 // Runtime + personal history never travels to another project.
@@ -53,6 +57,27 @@ Remove with:  node .harness/memory.mjs forget L3
 const OBJECTIVES_PLACEHOLDER = '- Project objectives: (describe your product goals here to customize for your own app)';
 const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|roles[\\/]|skills[\\/]|config\.json$|charter\.md$|backlog\.json$|team\.json$)/;
 
+// Clean defaults for a new project (used by a normal install and by --reset), so both follow the same rules.
+const GEMINI_SAFE_NOTE = "UNVERIFIED (confirm with 'gemini --help'). Headless: '-p' with the prompt piped on stdin. Auto-approve is OFF in a new project: Gemini will not run tools that need approval, so file edits are blocked. To allow it for THIS project only, add '--approval-mode', 'yolo' to args below (it approves every tool; use only in a project you trust).";
+function cleanCharter(text) {
+  return text.replace(/^- Project objectives:[\s\S]*?(?=\n\n|\n## |(?![\s\S]))/m, OBJECTIVES_PLACEHOLDER)
+    .replace(/^- autonomous: off$/m, '- autonomous: on'); // template default (use --autonomous off to opt out)
+}
+/** Returns the cleaned config text, or null if the config cannot be parsed or has no gemini profile. */
+function cleanConfig(text) {
+  let cfg = null; try { cfg = JSON.parse(text); } catch { return null; }
+  const g = cfg && cfg.profiles && cfg.profiles.gemini;
+  if (!g || !Array.isArray(g.args)) return null;
+  const i = g.args.indexOf('--approval-mode');
+  if (i > -1 && g.args[i + 1] === 'yolo') g.args.splice(i, 2);
+  g.note = GEMINI_SAFE_NOTE;
+  return JSON.stringify(cfg, null, 2) + '\n';
+}
+function cleanBacklog(text) {
+  let src = {}; try { src = JSON.parse(text); } catch { /* broken backlog: use defaults */ }
+  return JSON.stringify({ version: src.version || '2.0.0', project: '', maxAutoTasksPerRun: src.maxAutoTasksPerRun ?? 3, tasks: [] }, null, 2) + '\n';
+}
+
 function copyDir(from, to, rel = '.harness') {
   fs.mkdirSync(to, { recursive: true });
   for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
@@ -74,31 +99,54 @@ function copyDir(from, to, rel = '.harness') {
       report.push(`wrote  ${relPath} (blank profile to fill in)`); continue;
     }
     if (relPath === path.join('.harness', 'charter.md')) { // the template owner's project objectives never travel
-      const text = fs.readFileSync(s, 'utf8').replace(/^- Project objectives:[\s\S]*?(?=\n\n|\n## |(?![\s\S]))/m, OBJECTIVES_PLACEHOLDER)
-        .replace(/^- autonomous: off$/m, '- autonomous: on'); // template default (use --autonomous off to opt out)
-      fs.writeFileSync(d, text);
+      fs.writeFileSync(d, cleanCharter(fs.readFileSync(s, 'utf8')));
       report.push(`wrote  ${relPath} (objectives left for you to fill in)`); continue;
     }
     if (relPath === path.join('.harness', 'config.json')) { // the owner's per-project auto-approve choice never travels
-      let cfg = null; try { cfg = JSON.parse(fs.readFileSync(s, 'utf8')); } catch { /* broken source config: copy it unchanged */ }
-      const g = cfg && cfg.profiles && cfg.profiles.gemini;
-      if (g && Array.isArray(g.args)) {
-        const i = g.args.indexOf('--approval-mode');
-        if (i > -1 && g.args[i + 1] === 'yolo') g.args.splice(i, 2);
-        g.note = "UNVERIFIED (confirm with 'gemini --help'). Headless: '-p' with the prompt piped on stdin. Auto-approve is OFF in a new project: Gemini will not run tools that need approval, so file edits are blocked. To allow it for THIS project only, add '--approval-mode', 'yolo' to args below (it approves every tool; use only in a project you trust).";
-        fs.writeFileSync(d, JSON.stringify(cfg, null, 2) + '\n');
+      const cleaned = cleanConfig(fs.readFileSync(s, 'utf8')); // broken or unexpected config: copy it unchanged
+      if (cleaned) {
+        fs.writeFileSync(d, cleaned);
         report.push(`wrote  ${relPath} (Gemini auto-approve OFF for this project)`); continue;
       }
     }
     if (relPath === path.join('.harness', 'backlog.json')) { // the template's own tasks never travel: a new project starts with an empty backlog
-      let src = {}; try { src = JSON.parse(fs.readFileSync(s, 'utf8')); } catch { /* broken source backlog: use defaults */ }
-      fs.writeFileSync(d, JSON.stringify({ version: src.version || '2.0.0', project: '', maxAutoTasksPerRun: src.maxAutoTasksPerRun ?? 3, tasks: [] }, null, 2) + '\n');
+      fs.writeFileSync(d, cleanBacklog(fs.readFileSync(s, 'utf8')));
       report.push(`wrote  ${relPath} (empty backlog)`); continue;
     }
     fs.copyFileSync(s, d);
     report.push(`wrote  ${relPath}`);
   }
 }
+// --reset: for a copy made with GitHub "Use this template" (or any project that has the harness), put the
+// owner-specific files back to the clean defaults a new install gets. Nothing else is touched; git can undo it.
+if (RESET) {
+  const H = path.join(target, '.harness');
+  if (!fs.existsSync(H)) { console.error(`No .harness/ folder in ${target}: nothing to reset. To install the harness, run without --reset.`); process.exit(1); }
+  const off = (() => { const i = ARGS.indexOf('--autonomous'); return i > -1 && String(ARGS[i + 1]).toLowerCase() === 'off'; })();
+  const steps = [
+    ['memory/profile.md', () => PROFILE_TEMPLATE, 'blank profile to fill in'],
+    ['memory/lessons.md', () => LESSONS_TEMPLATE, 'no taught rules'],
+    ['charter.md', (t) => { const c = cleanCharter(t); return off ? c.replace(/^- autonomous: on$/m, '- autonomous: off') : c; }, `placeholder objectives, autonomous ${off ? 'off' : 'on'}`],
+    ['config.json', (t) => cleanConfig(t), 'Gemini auto-approve off'],
+    ['backlog.json', (t) => cleanBacklog(t), 'empty backlog'],
+  ];
+  const done = [];
+  for (const [rel, make, what] of steps) {
+    const f = path.join(H, rel);
+    if (!fs.existsSync(f)) { console.log(`  skip   .harness/${rel} (not found)`); continue; }
+    const before = fs.readFileSync(f, 'utf8');
+    const after = make(before);
+    if (after == null) { console.log(`  skip   .harness/${rel} (could not read it as expected; left unchanged)`); continue; }
+    if (after === before) { console.log(`  ok     .harness/${rel} (already clean)`); continue; }
+    fs.writeFileSync(f, after);
+    console.log(`  reset  .harness/${rel} (${what})`); done.push(`.harness/${rel}`);
+  }
+  console.log(done.length
+    ? `\nReset ${done.length} file(s) in ${target}. Undo (if this folder is in git): git checkout -- ${done.join(' ')}\nNext: fill in .harness/memory/profile.md and the "Project objectives" in .harness/charter.md, then run: node .harness/doctor.mjs`
+    : `\nNothing to reset in ${target}: it already has the clean defaults.`);
+  process.exit(0);
+}
+
 copyDir(path.join(SRC, '.harness'), path.join(target, '.harness'));
 
 const MARK = '<!-- agentic-harness -->';

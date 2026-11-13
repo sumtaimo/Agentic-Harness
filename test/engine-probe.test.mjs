@@ -163,6 +163,36 @@ test('the installer\'s embedded .gitignore copy (used by npx installs) matches .
   assert.equal(JSON.parse(m[1]), fs.readFileSync(path.join(here, '..', '.gitignore'), 'utf8'), 'update GITIGNORE_BLOCK in install.mjs after editing .gitignore');
 });
 
+test('install.mjs --reset cleans a template copy: owner profile, rules, objectives, autonomy, Gemini, backlog', () => {
+  const copy = fs.mkdtempSync(path.join(tmpRoot, 'tpl-copy-'));
+  const H = path.join(copy, '.harness');
+  fs.mkdirSync(path.join(H, 'memory'), { recursive: true });
+  fs.writeFileSync(path.join(H, 'memory', 'profile.md'), '# User profile\n- Name: Owner\n');
+  fs.writeFileSync(path.join(H, 'memory', 'lessons.md'), '# Lessons\n- [L1] owner rule\n');
+  fs.writeFileSync(path.join(H, 'charter.md'), '# Charter\n- autonomous: off\n\n## 1. Identity\n- Project objectives:\n  1. Owner goal.\n\n## 2. Next\n');
+  fs.writeFileSync(path.join(H, 'config.json'), JSON.stringify({ profiles: { gemini: { args: ['--approval-mode', 'yolo', '-p', ''] } } }));
+  fs.writeFileSync(path.join(H, 'backlog.json'), JSON.stringify({ version: '2.0.0', tasks: [{ id: 'X' }] }));
+  fs.writeFileSync(path.join(H, 'team.json'), '{"keep":true}');
+  const installer = path.join(here, '..', 'install.mjs');
+  const r = spawnSync(process.execPath, [installer, '--reset'], { cwd: copy, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const read = (f) => fs.readFileSync(path.join(H, f), 'utf8');
+  assert.match(read('memory/profile.md'), /- Name: \(fill me\)/);
+  assert.doesNotMatch(read('memory/lessons.md'), /\[L1\]/);
+  assert.match(read('charter.md'), /^- autonomous: on$/m);
+  assert.match(read('charter.md'), /describe your product goals here/);
+  assert.doesNotMatch(read('charter.md'), /Owner goal/);
+  assert.match(read('charter.md'), /## 2\. Next/);
+  assert.deepEqual(JSON.parse(read('config.json')).profiles.gemini.args, ['-p', '']);
+  assert.equal(JSON.parse(read('backlog.json')).tasks.length, 0);
+  assert.equal(read('team.json'), '{"keep":true}', 'other files are not touched');
+  const again = spawnSync(process.execPath, [installer, '--reset', copy, '--autonomous', 'off'], { encoding: 'utf8' });
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(read('charter.md'), /^- autonomous: off$/m);
+  const none = spawnSync(process.execPath, [installer, '--reset', fs.mkdtempSync(path.join(tmpRoot, 'no-harness-'))], { encoding: 'utf8' });
+  assert.notEqual(none.status, 0, 'a folder without .harness/ is refused');
+});
+
 test('winQuote keeps an empty argument on Windows and quotes special characters', async () => {
   const { winQuote } = await import('../.harness/lib/common.mjs');
   assert.equal(winQuote(''), '""');

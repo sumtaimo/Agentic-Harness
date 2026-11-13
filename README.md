@@ -19,7 +19,16 @@ You need **Node.js 18+** and **git**. The harness has no packages to install.
    - `.harness/memory/lessons.md`: remove rules you don't want, with `node .harness/memory.mjs forget L1`.
    - `.harness/charter.md`: write your own "Project objectives" and choose `- autonomous: on` or `off`.
 
-   For a clean start with none of this, use Option B in an empty repo instead.
+   Or do all of that in one command, inside your new repo:
+
+   ```bash
+   node install.mjs --reset
+   ```
+
+   It resets only those owner files: a blank profile, no taught rules, placeholder objectives, `autonomous: on`
+   (add `--autonomous off` to keep it off), Gemini auto-approve off, and an empty backlog. Nothing else changes, and
+   it prints the `git checkout` command to undo it (in a git repo). From any project that already has the harness, the same works
+   with `npx github:sumtaimo/Agentic-Harness --reset`.
 
 **Option B: add it to an existing (or empty) repo, in one line**
 
