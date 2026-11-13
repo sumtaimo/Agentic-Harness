@@ -3,11 +3,13 @@
  *   - FIGURES: five small stations of the workflow (you → controller → orchestrator → agents → report)
  *   - HarnessMachine: the whole harness as one labelled machine, for the top of the page
  */
+import type { ReactElement } from 'react';
+
 type P3 = [number, number, number];
 type Shape =
-  | { kind: 'box'; at: P3; size: P3; tone?: 'ink' }
+  | { kind: 'box'; at: P3; size: P3; tone?: 'ink'; r?: number }
   | { kind: 'line'; pts: P3[]; bold?: boolean }
-  | { kind: 'dot'; at: P3; r?: number };
+  | { kind: 'dot'; at: P3; r?: number; tone?: 'ok' | 'ink' };
 
 const C = 0.866;
 const proj = ([x, y, z]: P3): [number, number] => [(x - y) * C, (x + y) * 0.5 - z];
@@ -27,35 +29,93 @@ function bounds(points: [number, number][], padX: number, padY: number) {
   return [Math.min(...xs) - padX, Math.min(...ys) - padY, Math.max(...xs) - Math.min(...xs) + padX * 2, Math.max(...ys) - Math.min(...ys) + padY * 2];
 }
 
-function Solid({ s }: { s: Shape }) {
-  if (s.kind === 'dot') { const [x, y] = proj(s.at); return <circle cx={x} cy={y} r={s.r ?? 1.6} fill="var(--ok)" />; }
-  if (s.kind === 'line') return <polyline points={pts(s.pts)} fill="none" stroke="var(--iso-ink)" strokeWidth={s.bold ? 1.3 : 0.7} />;
-  const f = boxFaces(s);
+/**
+ * The plan outline of a box with rounded corners: points on the XY plane with their outward normals.
+ * Corner radius defaults to a little (never more than a quarter of the shorter side).
+ */
+function roundedPlan(x: number, y: number, w: number, d: number, r: number, steps = 5) {
+  const rr = Math.max(0.01, Math.min(r, w / 2 - 0.01, d / 2 - 0.01));
+  const corners: [number, number, number][] = [[x + w - rr, y + rr, -90], [x + w - rr, y + d - rr, 0], [x + rr, y + d - rr, 90], [x + rr, y + rr, 180]];
+  const out: { p: [number, number]; n: [number, number] }[] = [];
+  for (const [cx, cy, a0] of corners) {
+    for (let k = 0; k <= steps; k++) {
+      const a = ((a0 + (90 * k) / steps) * Math.PI) / 180;
+      out.push({ p: [cx + rr * Math.cos(a), cy + rr * Math.sin(a)], n: [Math.cos(a), Math.sin(a)] });
+    }
+  }
+  return out;
+}
+
+const defaultRadius = (w: number, d: number) => Math.min(2.2, Math.min(w, d) / 4);
+
+/** A box drawn as a modern solid: rounded vertical edges with smooth shading, a rounded top, a soft outline. */
+function RoundedBox({ s }: { s: Extract<Shape, { kind: 'box' }> }) {
+  const [x, y, z] = s.at; const [w, d, h] = s.size;
+  const plan = roundedPlan(x, y, w, d, s.r ?? defaultRadius(w, d));
   const ink = s.tone === 'ink';
+  const A = ink ? 'var(--iso-ink-a)' : 'var(--iso-a)';
+  const B = ink ? 'var(--iso-ink-b)' : 'var(--iso-b)';
+  const P = (q: [number, number], zz: number) => proj([q[0], q[1], zz]).map((v) => v.toFixed(2)).join(',');
+  const sides: ReactElement[] = []; const bottom: ReactElement[] = []; const verticals: ReactElement[] = [];
+  for (let i = 0; i < plan.length; i++) {
+    const a = plan[i]; const b = plan[(i + 1) % plan.length];
+    const nx = (a.n[0] + b.n[0]) / 2; const ny = (a.n[1] + b.n[1]) / 2;
+    const seen = nx + ny > 0.02;
+    const prevSeen = (() => { const c = plan[(i - 1 + plan.length) % plan.length]; return (c.n[0] + a.n[0]) / 2 + (c.n[1] + a.n[1]) / 2 > 0.02; })();
+    if (seen !== prevSeen && h > 0.6) verticals.push(<line key={`v${i}`} x1={proj([a.p[0], a.p[1], z])[0]} y1={proj([a.p[0], a.p[1], z])[1]} x2={proj([a.p[0], a.p[1], z + h])[0]} y2={proj([a.p[0], a.p[1], z + h])[1]} />);
+    if (!seen || h <= 0) continue;
+    const pctA = Math.round((Math.atan2(Math.max(0, ny), Math.max(0, nx)) / (Math.PI / 2)) * 100);
+    sides.push(<polygon key={i} points={`${P(a.p, z)} ${P(b.p, z)} ${P(b.p, z + h)} ${P(a.p, z + h)}`} fill={`color-mix(in srgb, ${A} ${pctA}%, ${B})`} stroke={`color-mix(in srgb, ${A} ${pctA}%, ${B})`} strokeWidth={0.3} />);
+    bottom.push(<line key={`b${i}`} x1={proj([a.p[0], a.p[1], z])[0]} y1={proj([a.p[0], a.p[1], z])[1]} x2={proj([b.p[0], b.p[1], z])[0]} y2={proj([b.p[0], b.p[1], z])[1]} />);
+  }
   return (
-    <g stroke="var(--iso-ink)" strokeWidth={0.75}>
-      <polygon points={pts(f.left)} fill={ink ? 'var(--iso-ink-a)' : 'var(--iso-a)'} />
-      <polygon points={pts(f.right)} fill={ink ? 'var(--iso-ink-b)' : 'var(--iso-b)'} />
-      <polygon points={pts(f.top)} fill={ink ? 'var(--iso-ink-top)' : 'var(--iso-top)'} />
+    <g>
+      {sides}
+      <g stroke="var(--iso-ink)" strokeWidth={0.7}>{bottom}{verticals}</g>
+      <polygon points={plan.map((q) => P(q.p, z + h)).join(' ')} fill={ink ? 'var(--iso-ink-top)' : 'var(--iso-top)'} stroke="var(--iso-ink)" strokeWidth={0.7} />
     </g>
   );
+}
+
+/** A soft shadow on the ground under every box that stands on z = 0. */
+function Shadows({ shapes }: { shapes: Shape[] }) {
+  return (
+    <g fill="var(--fg)" opacity={0.06}>
+      {shapes.map((s, i) => {
+        if (s.kind !== 'box' || s.at[2] !== 0 || s.size[2] < 1) return null;
+        const [x, y] = s.at; const [w, d] = s.size;
+        const plan = roundedPlan(x + 2.5, y + 2.5, w, d, (s.r ?? defaultRadius(w, d)) + 1.5);
+        return <polygon key={i} points={plan.map((q) => proj([q.p[0], q.p[1], 0]).map((v) => v.toFixed(2)).join(',')).join(' ')} />;
+      })}
+    </g>
+  );
+}
+
+function Solid({ s }: { s: Shape }) {
+  if (s.kind === 'dot') { const [x, y] = proj(s.at); return <circle cx={x} cy={y} r={s.r ?? 1.6} fill={s.tone === 'ink' ? 'var(--iso-ink-b)' : 'var(--ok)'} />; }
+  if (s.kind === 'line') return <polyline points={pts(s.pts)} fill="none" stroke="var(--iso-ink)" strokeWidth={s.bold ? 1.3 : 0.7} />;
+  return <RoundedBox s={s} />;
 }
 
 export function Iso({ shapes }: { shapes: Shape[] }) {
   const vb = bounds(shapes.flatMap(shapePoints), 4, 4);
   return (
     <svg viewBox={vb.map((v) => v.toFixed(1)).join(' ')} className="h-full w-full" aria-hidden="true" strokeLinejoin="round" strokeLinecap="round">
+      <Shadows shapes={shapes} />
       {shapes.map((s, i) => <Solid key={i} s={s} />)}
     </svg>
   );
 }
 
-const box = (at: P3, size: P3, tone?: 'ink'): Shape => ({ kind: 'box', at, size, tone });
+const box = (at: P3, size: P3, tone?: 'ink', r?: number): Shape => ({ kind: 'box', at, size, tone, r });
 const line = (p: P3[], bold = false): Shape => ({ kind: 'line', pts: p, bold });
 
 /* ── The five stations ─────────────────────────────────────────────── */
 
-const dot = (at: P3, r?: number): Shape => ({ kind: 'dot', at, r });
+const dot = (at: P3, r?: number, tone?: 'ok' | 'ink'): Shape => ({ kind: 'dot', at, r, tone });
+/** Four tiny screws, one near each top corner of a plate: the small detail that makes it read as an object. */
+const screws = (x: number, y: number, w: number, d: number, z: number, inset = 2.6): Shape[] =>
+  [[x + inset, y + inset], [x + w - inset, y + inset], [x + w - inset, y + d - inset], [x + inset, y + d - inset]].map(([a, b]) => dot([a, b, z], 0.55, 'ink'));
 const lanes = (x0: number, x1: number, ys: number[], z: number, w = 9): Shape[] => [
   ...ys.map((y) => box([x0, y, z], [x1 - x0, w, 1])),
   ...ys.map((y) => line([[x0 + 3, y + w / 2, z + 1], [x1 - 3, y + w / 2, z + 1]])),
@@ -73,30 +133,37 @@ const YOU: Shape[] = [
   line([[7, 2.9, 25], [24, 2.9, 25]], true),
   line([[7, 2.9, 20], [37, 2.9, 20]]), line([[7, 2.9, 16], [31, 2.9, 16]]),
   box([26, 2.9, 23.5], [1.4, 0.3, 3], 'ink'),
+  dot([23, 2.6, 31.3], 0.6, 'ink'),
+  dot([41, 28, 3], 0.8),
 ];
 
 /** Controller: a dark gate across three lanes; one packet waits at the gate. */
 const CONTROLLER: Shape[] = [
   box([0, 0, 0], [52, 40, 5]),
+  ...screws(0, 0, 52, 40, 5, 1.6),
   ...lanes(2, 50, [5, 16, 27], 5),
   box([6, 29.5, 6], [5, 5, 5], 'ink'),
   box([24, 0, 6], [6, 5, 28]),
   box([22, -1, 34], [10, 42, 6], 'ink'),
   box([24, 35, 6], [6, 5, 28]),
+  dot([27, 41, 37], 0.9),
 ];
 
 /** Orchestrator: a stepped tower that splits the goal into three lanes. */
 const ORCHESTRATOR: Shape[] = [
   ...lanes(30, 62, [6, 17, 28], 0),
   box([0, 4, 0], [30, 34, 9]),
+  ...screws(0, 4, 30, 34, 9, 2.2),
   box([5, 9, 9], [20, 24, 9]),
   box([10, 15, 18], [10, 12, 10], 'ink'),
+  dot([15, 27, 23], 0.9),
   ...[6, 17, 28].map((y) => box([36, y + 2, 1], [5, 5, 5])),
 ];
 
 /** Agents: three blocks, one per lane, each with its light on. */
 const AGENTS: Shape[] = [
   box([0, 0, 0], [60, 44, 4]),
+  ...screws(0, 0, 60, 44, 4, 1.4),
   ...lanes(2, 58, [4, 18, 32], 4),
   box([8, 4, 5], [14, 9, 14]),
   dot([12, 13, 15]),
@@ -112,6 +179,7 @@ const REPORT: Shape[] = [
   ...[8, 14, 20, 26].map((y, i) => line([[6, y, 2], [i === 0 ? 16 : 20, y, 2]], i === 0)),
   box([24, 5, 2], [8, 9, 3], 'ink'),
   line([[8, 36, 2], [13, 41, 2], [26, 32, 2]], true),
+  dot([2.6, 12, 2], 0.8, 'ink'), dot([2.6, 36, 2], 0.8, 'ink'),
 ];
 
 export const FIGURES = [YOU, CONTROLLER, ORCHESTRATOR, AGENTS, REPORT];
@@ -132,6 +200,7 @@ const PLINTH: Shape[] = [
   box([0, 0, 0], [122, 92, 8]),
   ...LANES.map((y) => box([4, y, 8], [114, 14, 1.2])),
   ...LANES.map((y) => line([[8, y + 7, 9.2], [116, y + 7, 9.2]])),
+  ...screws(0, 0, 122, 92, 8, 2),
 ];
 const BACK_POST = box([86, 1, 9.2], [7, 7, 34]);
 const FRONT_POST = box([86, 84, 9.2], [7, 7, 34]);
