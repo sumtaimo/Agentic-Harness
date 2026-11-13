@@ -58,3 +58,12 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 - **លទ្ធផល៖** controller បាននិយាយថា PASSED ដោយ test ឆ្លងកាត់ ៨៩/៨៩។
 
 នេះហើយជាគោលការណ៍ "Deterministic Verification"៖ test ពិតប្រាកដជាអ្នកសម្រេច មិនមែន AI ទេ។
+
+## ៨. ការកែលម្អបន្ថែម
+
+- test មិនខូចទៀតទេ ពេលមានការងារក្នុង backlog ឬមាន run កំពុងបើក (`sandbox()` ក្នុង `test/run-tests.mjs`)។
+- ការដំឡើងថ្មី (`install.mjs`) មិនចម្លង profile, lessons, backlog ឬ run ដែលកំពុងបើក របស់ម្ចាស់ project ទៀតទេ។
+- `agy` ទទួល prompt តាម stdin (`-p ""`)។ នៅលើ Windows harness រក្សា argument ទទេ `""` ដោយមិនបាត់។
+- engine ដែល `--help` ទទេ ហើយ profile មិនទាន់ verified នឹងមិនត្រូវបានប្រើទេ។ probe cache មាន version ដូច្នេះលទ្ធផលចាស់មិនត្រូវបានប្រើឡើងវិញ។
+- `doctor` ព្រមានពេល engine ដែលជ្រើសទីមួយមិនទាន់ដំឡើង។
+- សារ "profile មិនទាន់បំពេញ" ដែលខុស ត្រូវបានជួសជុល៖ ឥឡូវពិនិត្យតែបន្ទាត់ field ដែលចាប់ផ្តើមដោយ `- ` ប៉ុណ្ណោះ។
