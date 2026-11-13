@@ -1,6 +1,6 @@
 # Phase 1 audit: doctor probe for the Gemini and Antigravity engines
 
-Status: READ-ONLY audit. No source file was changed. Waiting for Product Owner approval before Phase 2.
+Status: READ-ONLY audit. PO answers (2026-11-13): Antigravity command is `agy`; Gemini may auto-approve. No source file was changed. Waiting for Product Owner approval before Phase 2.
 Repo state audited: working tree of branch `claude/cloud-environment-setup-cowrnu` (same code as `main` after PR #1, except `main` is a squash).
 
 ## 1. Where
