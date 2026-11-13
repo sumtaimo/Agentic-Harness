@@ -1653,6 +1653,34 @@ await test('install: a fresh team.json is auto-routed to the detected engines; a
   for (const p of [fresh, skip, none, own]) fs.rmSync(p, { recursive: true, force: true });
 });
 
+await test('install: .gitattributes pins LF for the harness files only; a core.autocrlf=true clone gets LF harness files; existing rules kept; idempotent', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-eol-'));
+  const proj = path.join(base, 'proj');
+  fs.mkdirSync(path.join(proj, 'src'), { recursive: true });
+  const gitp = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.autocrlf=false', ...a], { cwd, encoding: 'utf8' });
+  gitp(base, 'init', '-q', '-b', 'main', 'proj');
+  fs.writeFileSync(path.join(proj, '.gitattributes'), '*.png binary\n');
+  fs.writeFileSync(path.join(proj, 'src', 'app.js'), 'a\nb\n');
+  const inst = () => spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj, '--no-auto-assign'], { encoding: 'utf8' });
+  const r = inst();
+  assert(r.status === 0 && /harness line-ending rules to existing \.gitattributes/.test(r.stdout), r.stdout + r.stderr);
+  const ga = fs.readFileSync(path.join(proj, '.gitattributes'), 'utf8');
+  assert(ga.startsWith('*.png binary\n') && /^\.harness\/\*\* text eol=lf$/m.test(ga) && /^\.claude\/\*\* text eol=lf$/m.test(ga) && /^AGENTS\.md text eol=lf$/m.test(ga), `the project's rule must be kept and the harness rules added:\n${ga}`);
+  assert(!/^\* text/m.test(ga), 'must not change line endings for the whole project');
+  inst();
+  assert(fs.readFileSync(path.join(proj, '.gitattributes'), 'utf8') === ga, 're-running the installer must not add the block twice');
+  gitp(proj, 'add', '-A'); gitp(proj, 'commit', '-q', '-m', 'install');
+  // A Windows teammate: clone with core.autocrlf=true
+  execFileSync('git', ['-c', 'core.autocrlf=true', 'clone', '-q', proj, path.join(base, 'mate')], { encoding: 'utf8' });
+  const mate = (f) => fs.readFileSync(path.join(base, 'mate', f), 'utf8');
+  for (const f of ['.harness/charter.md', '.harness/team.json', '.claude/commands/harness/run.md', 'AGENTS.md']) assert(!mate(f).includes('\r'), `${f} must stay LF in an autocrlf clone`);
+  fs.rmSync(base, { recursive: true, force: true });
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-eol-fresh-'));
+  const rf = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), fresh, '--no-auto-assign'], { encoding: 'utf8' });
+  assert(/wrote  \.gitattributes/.test(rf.stdout) && fs.existsSync(path.join(fresh, '.gitattributes')), 'a project without .gitattributes gets one');
+  fs.rmSync(fresh, { recursive: true, force: true });
+});
+
 // ───────────────────────────── token-aware model tiers ─────────────────────────────
 
 const common = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);

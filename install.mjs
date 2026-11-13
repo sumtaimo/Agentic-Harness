@@ -233,6 +233,20 @@ const giBlock = fs.existsSync(giSrc) ? fs.readFileSync(giSrc, 'utf8') : GITIGNOR
 const existing = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : '';
 if (!existing.includes('# agentic-harness runtime')) { fs.writeFileSync(gi, `${existing.replace(/\s*$/, '')}${existing ? '\n\n' : ''}${giBlock}`); report.push('updated .gitignore'); }
 
+// Line endings: the harness parses its own files (charter.md, team.json, slash commands…) with LF-based rules. On Windows
+// with core.autocrlf=true a teammate's clone would get CRLF and those rules could misread them, so pin LF for the files
+// the harness owns. Only these paths: the project's own code keeps whatever line endings it already uses.
+const GA_MARK = '# agentic-harness: keep its files LF on every OS';
+const GA_BLOCK = `${GA_MARK} (its scripts parse them; CRLF from core.autocrlf would break that)\n.harness/** text eol=lf\n.claude/** text eol=lf\nAGENTS.md text eol=lf\nCLAUDE.md text eol=lf\nGEMINI.md text eol=lf\n`;
+{
+  const ga = path.join(target, '.gitattributes');
+  const have = fs.existsSync(ga) ? fs.readFileSync(ga, 'utf8') : '';
+  if (!have.includes(GA_MARK)) {
+    fs.writeFileSync(ga, `${have.replace(/\s*$/, '')}${have ? '\n\n' : ''}${GA_BLOCK}`);
+    report.push(have ? 'added  harness line-ending rules to existing .gitattributes' : 'wrote  .gitattributes (LF for the harness files)');
+  }
+}
+
 // Smart engine routing: a freshly installed team.json gets each role routed to an AI CLI that is actually usable on
 // this machine (team.mjs auto-assign). A team.json the project already had is never touched. --no-auto-assign skips it.
 if (!ARGS.includes('--no-auto-assign') && report.some((r) => r.replaceAll('\\', '/').startsWith('wrote  .harness/team.json'))) {
