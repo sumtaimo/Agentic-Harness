@@ -21,6 +21,14 @@
   --warn-soft: #fbf4e4;
   --danger: #b03a3a;
   --danger-soft: #faeeee;
+  /* isometric drawings */
+  --iso-top: #ffffff;
+  --iso-a: #eeeeeb;
+  --iso-b: #dededa;
+  --iso-ink: #8a8a85;
+  --iso-ink-top: #4a4a46;
+  --iso-ink-a: #2f2f2c;
+  --iso-ink-b: #1f1f1d;
 }
 
 .dark {
@@ -40,6 +48,13 @@
   --warn-soft: #2a2314;
   --danger: #e88484;
   --danger-soft: #2c1919;
+  --iso-top: #2a2a28;
+  --iso-a: #222220;
+  --iso-b: #1a1a19;
+  --iso-ink: #6e6d68;
+  --iso-ink-top: #d8d7d2;
+  --iso-ink-a: #b9b8b2;
+  --iso-ink-b: #9a9993;
 }
 
 @theme inline {
@@ -84,6 +99,17 @@ code, pre, kbd { font-family: var(--font-mono); }
 html:lang(km) h1, html:lang(km) h2, html:lang(km) h3 { line-height: 1.6 !important; letter-spacing: 0 !important; }
 html:lang(km) p, html:lang(km) li, html:lang(km) td, html:lang(km) label, html:lang(km) dd { line-height: 1.95; }
 html:lang(km) .font-serif { font-family: var(--font-sans); font-style: normal; }
+
+/* The hero machine: a packet of work rides the middle lane; the agents' lights blink in turn. */
+.machine-packet { animation: packet 4.8s cubic-bezier(.45,.05,.4,1) infinite; }
+@keyframes packet {
+  0% { transform: translate(0, 0); opacity: 0; }
+  10% { opacity: 1; }
+  80% { transform: translate(var(--px), var(--py)); opacity: 1; }
+  92%, 100% { transform: translate(var(--px), var(--py)); opacity: 0; }
+}
+.machine-led { fill: var(--ok); animation: led 1.35s ease-in-out infinite; }
+@keyframes led { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
