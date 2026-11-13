@@ -76,7 +76,7 @@ Then log in to the AI CLIs you use (`claude`, `gemini`, `agy`, `codex`) and run 
 │ VERIFY:  Check: npm test  (auto-detected from package.json scripts: test)    │
 │ QUEUE:   0 waiting  |  MEMORY: 4 taught rule(s), 1 auto lesson(s)            │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ ENGINES: CLAUDE✓ ANTIGRAVITY· ORCA· GEMINI· CODEX·   (✓ installed)           │
+│ ENGINES: CLAUDE✓ ANTIGRAVITY· GEMINI· CODEX·   (✓ installed)                 │
 │ LOGS: .harness/telemetry.log                       MEMORY: .harness/memory/  │
 └──────────────────────────────────────────────────────────────────────────────┘
   ➜ AI workers are working. Their files are locked so they cannot collide.
@@ -469,7 +469,7 @@ How it reaches each AI:
 ## 6. AI engines
 
 Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; you can also force
-`"claude"`, `"antigravity"`, `"orca"`, `"gemini"` or `"codex"`, per task or globally.
+`"claude"`, `"antigravity"`, `"gemini"` or `"codex"`, per task or globally.
 
 - **The prompt always goes to the engine on stdin** (`"promptVia": "stdin"`), so no
   command-line flag can accidentally swallow it. `"arg"` (with `{prompt}` in `args`) and
@@ -486,7 +486,6 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 |---|---|
 | `claude` (Claude Code) | ✅ verified end-to-end, including the AI planner and two parallel workers |
 | `antigravity` (`agy`) | ⚠️ not verified here: `agy -p ""`, prompt on stdin, no auto-approve |
-| `orca` | ⚠️ flags from the original spec, **not verified**; Doctor's probe will tell you |
 | `gemini` (Gemini CLI) | ⚠️ not verified here: `-p ""`, prompt on stdin. This repo adds `--approval-mode yolo` (auto-approves every tool); new installs do not |
 | `codex` (OpenAI Codex CLI) | ⚠️ not verified here |
 

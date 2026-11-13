@@ -37,7 +37,7 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 
 ## ៥. ការជ្រើសរើស engine
 
-- `auto` ជ្រើស engine ដំបូងក្នុង `autoOrder` (gemini → antigravity → claude → orca → codex) ដែលបានដំឡើងរួច ហើយ flag របស់វាឆ្លងកាត់ការពិនិត្យ `--help`។
+- `auto` ជ្រើស engine ដំបូងក្នុង `autoOrder` (gemini → antigravity → claude → codex) ដែលបានដំឡើងរួច ហើយ flag របស់វាឆ្លងកាត់ការពិនិត្យ `--help`។
 - បើ engine ណាមិនរួចរាល់ harness នឹងប្តូរទៅ engine បន្ទាប់ ហើយកត់ត្រា `ENGINE_FALLBACK` ក្នុង `.harness/telemetry.log`។
 - `node .harness/doctor.mjs` ពិនិត្យសុខភាពនៃការរៀបចំទាំងមូល។
 - ព័ត៌មានលម្អិតអំពី engine មាននៅក្នុង `docs/ENGINES.md`។

@@ -116,7 +116,6 @@ Each member in `.harness/team.json` can carry an `"engine"`, which is any profil
 
 - Remove the `"engine"` field (or don't set it) to use `auto` for that member (`autoOrder` in `config.json`).
 - `node .harness/team.mjs validate` (and the doctor) reject an engine name that is not a profile in `config.json`.
-- `orca` is never chosen by `auto-assign` or `auto`. You can still set `"engine": "orca"` by hand once its profile is fixed.
 - After editing `team.json`, run `node .harness/team.mjs validate`.
 
 ## 6. Model tiers: the right-sized model for each job (saves tokens)

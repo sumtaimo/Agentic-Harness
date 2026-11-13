@@ -7,11 +7,11 @@ which engine will be used.
 ## Engines and how one is picked
 
 Engine profiles live in `.harness/config.json` under `profiles`: `gemini`, `antigravity`,
-`claude`, `orca`, `codex`.
+`claude`, `codex`.
 
 - `activeProfile` is `auto`. You can also pick one per job with `--engine <name>`
   (`node .harness/dispatch.mjs ... --engine gemini`) or the `HARNESS_AGENT` environment variable.
-- `auto` walks `autoOrder`: `gemini`, `antigravity`, `claude`, `codex` (`orca` has a profile but is not in `autoOrder`; opt in with `--engine orca`).
+- `auto` walks `autoOrder`: `gemini`, `antigravity`, `claude`, `codex`.
 - It picks the **first** engine that is installed (its `binary` is on your `PATH`) **and** whose
   configured flags all appear in the output of `<binary> --help`.
 - The logic is in `.harness/lib/common.mjs` (`probeEngine`, `resolveProfile`).
@@ -85,3 +85,7 @@ Still to confirm on a real machine (the probe rejects the engine and falls back 
 
 To fix a profile: run `<binary> --help`, propose the change to the owner, then edit
 `.harness/config.json` and run doctor again.
+
+## Removed: Orca
+
+Orca was removed because its flags could not be verified. It can come back when someone tests it on a real machine and adds a profile to `config.json`. Using `--engine orca` now stops with a clear message.

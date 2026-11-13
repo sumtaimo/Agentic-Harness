@@ -1,7 +1,7 @@
 # AGENTS.md — instructions for any AI working in this folder
 
 This project contains an **Agentic Harness** in `.harness/`. It is a background controller that
-runs AI coding agents (Claude Code, Antigravity, Orca, Gemini, Codex) in a checked loop:
+runs AI coding agents (Claude Code, Antigravity, Gemini, Codex) in a checked loop:
 
 ```
 1_PLANNER → 2_EXECUTOR_SWARM → 3_VERIFIER → 4_COMMITTED
