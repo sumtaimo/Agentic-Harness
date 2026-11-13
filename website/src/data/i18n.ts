@@ -23,6 +23,7 @@ const en = {
     p2: 'Around them sits a **controller** written in plain code. It checks every plan, keeps each agent in its lane, runs your real tests, and only then keeps the work.^1',
     note1: 'The controller is plain JavaScript, not another AI. No prompt can talk it out of a rule.',
     p3: 'It runs on the AI command-line tools you already pay for: `claude`, `agy`, `codex` or `gemini`. No server, no API middleware.',
+    run: { title: 'a real run', after: 'nothing committed · you review', caption: 'Replay of a real run on the demo project: three named agents, one controller check.' },
   },
   flow: {
     intro: 'Every task takes the same five steps.',
@@ -178,6 +179,7 @@ const kh: Dict = {
     p2: 'ជុំវិញពួកវា មាន **controller** ដែលសរសេរជាកូដធម្មតា។ វាពិនិត្យរាល់ផែនការ រក្សា agent នីមួយៗឲ្យនៅក្នុងផ្លូវរបស់ខ្លួន រត់តេស្តពិតរបស់អ្នក ហើយទើបរក្សាទុកការងារ។^1',
     note1: 'Controller គឺជា JavaScript ធម្មតា មិនមែនជា AI មួយទៀតទេ។ គ្មាន prompt ណាអាចបញ្ចុះបញ្ចូលវាឲ្យរំលងច្បាប់បានឡើយ។',
     p3: 'វាដំណើរការលើឧបករណ៍ AI ដែលអ្នកកំពុងបង់ប្រាក់រួចហើយ៖ `claude`, `agy`, `codex` ឬ `gemini`។ គ្មាន server គ្មាន API middleware។',
+    run: { title: 'ការរត់ពិត', after: 'មិនទាន់ commit · អ្នកពិនិត្យ', caption: 'ការចាក់ឡើងវិញនៃការរត់ពិតលើ demo project៖ agents បីដែលមានឈ្មោះ ការពិនិត្យរបស់ controller មួយ។' },
   },
   flow: {
     intro: 'ការងារនីមួយៗឆ្លងកាត់ប្រាំជំហានដូចគ្នា។',

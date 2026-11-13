@@ -17,7 +17,7 @@ function boxFaces({ at: [x, y, z], size: [w, d, h] }: { at: P3; size: P3 }) {
 
 const pts = (p: P3[]) => p.map((q) => proj(q).map((v) => v.toFixed(1)).join(',')).join(' ');
 
-function Iso({ shapes }: { shapes: Shape[] }) {
+export function Iso({ shapes }: { shapes: Shape[] }) {
   // Fit the viewBox to the drawing.
   const all: [number, number][] = shapes.flatMap((s) => (s.kind === 'box' ? Object.values(boxFaces(s)).flat() : s.pts).map(proj));
   const xs = all.map((p) => p[0]); const ys = all.map((p) => p[1]);
@@ -81,21 +81,4 @@ const REPORT: Shape[] = [
   line([[8, 35, 2], [13, 40, 2], [26, 31, 2]], true),
 ];
 
-const FIGURES = [YOU, CONTROLLER, ORCHESTRATOR, AGENTS, REPORT];
-
-export function FigureStrip({ labels, href }: { labels: string[]; href: string }) {
-  return (
-    <div className="border-y border-line py-4">
-      <ul className="grid grid-cols-5 gap-2 sm:gap-4">
-        {FIGURES.map((f, i) => (
-          <li key={i}>
-            <a href={href} className="group block text-center" aria-label={labels[i]}>
-              <div className="mx-auto h-16 w-full max-w-[96px] transition duration-300 group-hover:-translate-y-1 sm:h-20"><Iso shapes={f} /></div>
-              <span className="mt-2 block truncate text-[11.5px] text-faint transition group-hover:text-fg">{labels[i]}</span>
-            </a>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
+export const FIGURES = [YOU, CONTROLLER, ORCHESTRATOR, AGENTS, REPORT];

@@ -48,27 +48,26 @@ export function Cmd({ cmd, prompt = '$' }: { cmd: string; prompt?: string }) {
   );
 }
 
-/** A numbered section: "Title ———— 03". Notes go to the right margin on wide screens, below the text otherwise. */
+/** A numbered section: a station number, then the title on a hairline. Notes go to the right margin on wide screens. */
 export function Section({ id, n, title, children }: { id: string; n: number; title: string; children: ReactNode }) {
   return (
-    <section id={id} data-section className="pt-20">
-      <h2 className="flex items-center gap-4">
-        <span className="font-medium text-fg">{title}</span>
-        <span className="h-px flex-1 bg-line" aria-hidden="true" />
-        <span className="font-serif text-lg italic text-faint">{String(n).padStart(2, '0')}</span>
+    <section id={id} data-section className="pt-24">
+      <h2 className="border-b border-line pb-3">
+        <span className="block font-mono text-[11.5px] tracking-wide text-faint">{String(n).padStart(2, '0')} / 09</span>
+        <span className="mt-1 block text-[21px] font-medium tracking-tight text-fg">{title}</span>
       </h2>
       <div className="mt-6 space-y-5">{children}</div>
     </section>
   );
 }
 
-/** A paragraph with an optional margin note (footnote). */
-export function P({ text, note, n, muted = false }: { text: string; note?: string; n?: number; muted?: boolean }) {
+/** A paragraph with an optional margin note (footnote). `inline` keeps the note under the text at every width. */
+export function P({ text, note, n, muted = false, inline = false }: { text: string; note?: string; n?: number; muted?: boolean; inline?: boolean }) {
   return (
     <div className="relative">
       <p className={`text-pretty leading-7 ${muted ? 'text-muted' : 'text-fg'}`}><Rich text={text} /></p>
       {note && (
-        <aside className="mt-2 flex gap-2 text-[12.5px] leading-5 text-faint xl:absolute xl:left-[calc(100%+48px)] xl:top-1 xl:mt-0 xl:w-[190px]">
+        <aside className={`mt-2 flex gap-2 text-[12.5px] leading-5 text-faint ${inline ? '' : 'xl:absolute xl:left-[calc(100%+48px)] xl:top-1 xl:mt-0 xl:w-[190px]'}`}>
           <span>{n}</span><span><Rich text={note} /></span>
         </aside>
       )}

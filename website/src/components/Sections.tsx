@@ -4,6 +4,7 @@ import { Card, CopyButton, P, Row, Section, Segmented, Steps, TierPill } from '.
 import { Rich, useLang } from '../lib/lang';
 import { fmt } from '../data/i18n';
 import { TIERS } from '../lib/routing';
+import { Pipeline } from './Showcase';
 
 export function Flow({ n }: { n: number }) {
   const { t } = useLang();
@@ -11,11 +12,14 @@ export function Flow({ n }: { n: number }) {
   return (
     <Section id="flow" n={n} title={t.sections.flow}>
       <P text={f.intro} muted />
-      <Steps items={f.steps.map((s) => ({ t: s.t, d: <Rich text={s.d} /> }))} />
+      <Pipeline />
       <P text={f.after} note={f.note2} n={2} />
     </Section>
   );
 }
+
+/** Where each duty is decided (shown on the tile, same in every language). */
+const DUTY_TAGS = ['charter.md', 'targetFiles', 'fast · medium · high', 'git worktree', 'exit code', '401 · 429'];
 
 export function Controller({ n }: { n: number }) {
   const { t } = useLang();
@@ -23,7 +27,17 @@ export function Controller({ n }: { n: number }) {
   return (
     <Section id="controller" n={n} title={t.sections.controller}>
       <P text={c.intro} />
-      <Card>{c.rows.map((r) => <Row key={r.k} k={r.k}><Rich text={r.v} /></Row>)}</Card>
+      <ul className="grid gap-px overflow-hidden rounded-2xl border border-line bg-line sm:grid-cols-2">
+        {c.rows.map((r, i) => (
+          <li key={r.k} className="bg-surface px-5 py-4">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="font-medium text-fg">{r.k}</span>
+              <code className="shrink-0 font-mono text-[11px] text-faint">{DUTY_TAGS[i]}</code>
+            </div>
+            <p className="mt-1.5 text-[14px] leading-6 text-muted"><Rich text={r.v} /></p>
+          </li>
+        ))}
+      </ul>
       <P text={c.after} muted />
     </Section>
   );
