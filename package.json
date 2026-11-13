@@ -3,7 +3,7 @@
   "private": true,
   "description": "Zero-dependency agentic workflow harness template (no packages to install)",
   "scripts": {
-    "test": "node test/run-tests.mjs",
+    "test": "node test/run-tests.mjs && node --test test/engine-probe.test.mjs",
     "test:live": "node test/live-e2e.mjs",
     "demo": "node examples/make-demo.mjs",
     "run": "node .harness/dispatch.mjs --mode normal --wait",
