@@ -1,7 +1,7 @@
 You are the ORCHESTRATOR of the agentic harness in this project (read AGENTS.md first, then .harness/memory/profile.md and lessons.md). Run this as ONE harness task with the exact /harness:run workflow: brief → assign → start lead-ba, lead-dev and lead-qa in ONE message → verify → report. Never edit .harness/ or .claude/ yourself, never commit or push.
 
 # BEFORE YOU START
-The skill factory foundation (docs/factory/STANDARD.md, src/factory/, src/skills/_template/, src/skills/skill-smith/) already exists. Follow STANDARD.md and start from src/skills/_template/. The factory check `node src/factory/lint-skills.mjs` must also pass for this skill.
+Prompts 1 (factory) and 2 (showcase site) have passed. Follow docs/factory/STANDARD.md and start from src/skills/_template/. This skill must pass the factory linter, be packable with src/factory/pack.mjs, and appear on the site after a rebuild.
 
 # GOAL
 Build a reusable AI skill called `figure-craft`. Given ONE line ("explain how an LRU cache evicts entries"), an agent that follows this skill produces an explanatory page or figure that looks hand-made and premium: quiet paper palette, a real isometric OBJECT whose parts behave like the idea (not boxes and arrows), short copy, gentle motion that tells one story, light theme by default, dark theme too. It must be general (any idea, any product), not a copy of one site.
@@ -37,6 +37,8 @@ lead-dev (src/**), plain Node ESM, ZERO dependencies:
 - src/skills/figure-craft/SKILL.md — frontmatter `name: figure-craft` and a `description` that says when to use it (any request for an explanatory diagram, technical illustration or interactive explainer). Body: the ordered procedure (size it → choose the object → name its parts → plan the one motion story → build with the engine → run lint and checks → review with CHECKLIST.md → report). Keep it under 150 lines; point to references for detail.
 - src/skills/figure-craft/references/{tokens.md, layout.md, figures.md, motion.md, copy.md} — one file per layer, rules written as MUST/NEVER with a tiny example each.
 - src/skills/figure-craft/engine/tokens.mjs, engine/iso.mjs, engine/lint.mjs — the contract below.
+- src/skills/figure-craft/preview/cover.svg (drawn WITH this skill's own engine: proof that it works) and preview.json (prompt: `explain how a CDN edge cache serves a request, interactive`); also copy examples/demo.html to preview/example.html so the site can show it.
+- src/factory/registry.json: add figure-craft, status `ready`.
 - src/skills/figure-craft/examples/demo.html — one self-contained page built with the engine (a labelled object + one motion story), light default, dark toggle, no external scripts.
 
 lead-qa (tests/**):
@@ -58,7 +60,7 @@ engine/lint.mjs
 - Rule ids: `L1-painter-order` (a shape is drawn before the shape it `rests` on), `L2-face-detail` (a dot with `on` is outside that face or not in its plane), `L3-label-overlap`, `L4-leader-crosses-solid` (warning), `L5-outside-viewbox`, `L6-raw-colour` (any fill/stroke not `var(--…)`), `L7-motion-no-reduced` (an animation without a reduced-motion fallback), `L8-motion-off-axis` (a `move` not parallel to an iso axis of the surface it stands on).
 
 # CHECK (the controller runs it; only its exit code counts)
-`node --test tests/`
+`node --test tests/ && node src/factory/lint-skills.mjs && node src/site/build.mjs --check`
 
 # RULES
 - Zero dependencies, Node standard library only; ask me before adding any package.
