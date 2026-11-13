@@ -1810,5 +1810,27 @@ await test('engine errors: a login problem on stderr is fatal; an ordinary crash
   assert(log(d2).filter((e) => e.phase === 'ENGINE_SPAWN').length === 3, 'an ordinary crash keeps its 3 cycles');
 });
 
+await test('editor verify flags what tests cannot prove: UI changes need a visual review, skipped tests are reported, files the check leaves untracked are flagged; the brief warns when a UI project has no browser check', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-visual-test-'));
+  const demo = path.join(base, 'demo');
+  assert(spawnSync(process.execPath, [path.join(REPO, 'examples', 'make-demo.mjs'), demo], { encoding: 'utf8' }).status === 0, 'demo');
+  fs.writeFileSync(path.join(demo, 'index.html'), '<!doctype html><title>x</title>\n');
+  execFileSync('git', ['add', '-A'], { cwd: demo }); execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'ui'], { cwd: demo });
+  // a check that passes, skips one test (node:test TAP summary) and writes a build output git does not ignore
+  const check = `node -e "require('fs').mkdirSync('dist',{recursive:true});require('fs').writeFileSync('dist/out.txt','x');console.log('# pass 3\\n# skipped 1')"`;
+  const b = spawnSync(process.execPath, ['.harness/visible.mjs', 'brief', '--goal', 'restyle the page', '--check', check], { cwd: demo, encoding: 'utf8' });
+  const id = runIdOf(b);
+  assert(b.status === 0 && id && /UI files but the check never opens a browser/.test(b.stdout), b.stdout + b.stderr);
+  assert(spawnSync(process.execPath, ['.harness/visible.mjs', 'assign', id, deleg([{ lead: 'lead-dev', goal: 'style', files: ['src/style.css'] }])], { cwd: demo, encoding: 'utf8' }).status === 0, 'assign');
+  fs.writeFileSync(path.join(demo, 'src', 'style.css'), 'body{margin:0}\n');
+  const v = spawnSync(process.execPath, ['.harness/visible.mjs', 'verify', id], { cwd: demo, encoding: 'utf8' });
+  assert(v.status === 0, v.stdout);
+  assert(/PASSED ✔ — NEEDS A VISUAL REVIEW/.test(v.stdout) && /src\/style\.css/.test(v.stdout) && /never opened a browser/.test(v.stdout), `visual review not flagged:\n${v.stdout}`);
+  assert(/1 test\(s\) SKIPPED/.test(v.stdout) && /A skipped test proves nothing/.test(v.stdout), `skipped tests not reported:\n${v.stdout}`);
+  assert(/git does not ignore \(dist\/out\.txt\)/.test(v.stdout), `untracked check output not flagged:\n${v.stdout}`);
+  const run = json(path.join(demo, '.harness', 'visible', id, 'run.json'));
+  assert(run.lastVerify.skipped === 1 && run.lastVerify.needsVisualReview === true, JSON.stringify(run.lastVerify));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
