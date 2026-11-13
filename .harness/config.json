@@ -92,7 +92,17 @@
           "stream-json",
           "--verbose"
         ]
-      }
+      },
+      "modelArgs": [
+        "--model",
+        "{model}"
+      ],
+      "models": {
+        "fast": "haiku",
+        "medium": "sonnet",
+        "high": "opus"
+      },
+      "modelsNote": "CLI aliases, never pinned versions: Claude Code resolves haiku / sonnet / opus to the newest release of each family. The controller picks the tier per job (see docs/MULTI-MODEL-SETUP.md)."
     },
     "antigravity": {
       "verified": false,
@@ -108,7 +118,13 @@
         "Edit",
         "Write",
         "Bash"
-      ]
+      ],
+      "models": {
+        "fast": null,
+        "medium": null,
+        "high": null
+      },
+      "modelsNote": "No model flag is known for agy yet: it always uses its own newest default. If `agy --help` documents a model flag and aliases, add modelArgs (e.g. [\"--model\",\"{model}\"]) and the aliases here."
     },
     "orca": {
       "verified": false,
@@ -140,7 +156,17 @@
       ],
       "promptVia": "stdin",
       "instructionFile": "GEMINI.md",
-      "allowedTools": []
+      "allowedTools": [],
+      "modelArgs": [
+        "--model",
+        "{model}"
+      ],
+      "models": {
+        "fast": null,
+        "medium": null,
+        "high": null
+      },
+      "modelsNote": "No alias set: no --model flag is passed, so the CLI uses its own newest default model on every tier. To save quota on the fast tier, set models.fast to an ALIAS that `gemini --help` documents (not a pinned version)."
     },
     "codex": {
       "verified": false,
@@ -152,7 +178,17 @@
         "-"
       ],
       "promptVia": "stdin",
-      "allowedTools": []
+      "allowedTools": [],
+      "modelArgs": [
+        "--model",
+        "{model}"
+      ],
+      "models": {
+        "fast": null,
+        "medium": null,
+        "high": null
+      },
+      "modelsNote": "No alias set: no --model flag is passed, so the CLI uses its own newest default model on every tier. To save quota on the fast tier, set models.fast to an ALIAS that `codex --help` documents (not a pinned version)."
     }
   }
 }

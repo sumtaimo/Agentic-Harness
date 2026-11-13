@@ -16,6 +16,18 @@ Engine profiles live in `.harness/config.json` under `profiles`: `gemini`, `anti
   configured flags all appear in the output of `<binary> --help`.
 - The logic is in `.harness/lib/common.mjs` (`probeEngine`, `resolveProfile`).
 
+## Model tiers and "always latest" aliases
+
+Each profile may have `"models": { "fast", "medium", "high" }` and `"modelArgs"` (e.g. `["--model", "{model}"]`).
+The controller picks a tier per agent from the job's complexity. Small edits, docs and QA get `fast`, normal coding gets `medium`,
+architecture planning gets `high`, and a failed check escalates one tier. The tier's alias is then passed to the CLI.
+
+- Aliases only, never pinned versions. `claude` uses `haiku`, `sonnet` and `opus`, which Claude Code resolves to the newest release.
+- `null` means no `--model` flag, so the CLI uses its own newest default. This is the setting for `gemini`, `codex` and `agy` today.
+- Override with `dispatch --model <tier|alias>` or `"model"` on a `team.json` member.
+
+Details and the full rules: [`MULTI-MODEL-SETUP.md`](MULTI-MODEL-SETUP.md#6-model-tiers-the-right-sized-model-for-each-job-saves-tokens).
+
 ## Log in with your subscription (no API keys)
 
 - Policy: subscription only. Do **not** set `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` in your

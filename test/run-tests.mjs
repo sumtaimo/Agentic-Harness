@@ -1653,5 +1653,96 @@ await test('install: a fresh team.json is auto-routed to the detected engines; a
   for (const p of [fresh, skip, none, own]) fs.rmSync(p, { recursive: true, force: true });
 });
 
+// ───────────────────────────── token-aware model tiers ─────────────────────────────
+
+const common = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);
+const TIERED = { fast: 'm-fast', medium: 'm-medium', high: 'm-high' };
+const tieredProfile = (models = TIERED) => ({ verified: true, binary: process.execPath, args: [MOCK, 'ALLOWED={allowedTools}', 'DENIED={disallowedTools}'], promptVia: 'stdin', allowedTools: [], modelArgs: ['MODEL={model}'], models });
+const withProfiles = (d, profiles) => { const f = path.join(d, '.harness', 'config.json'); const c = json(f); Object.assign(c.profiles, profiles); fs.writeFileSync(f, JSON.stringify(c, null, 2)); };
+const modelArg = (d, id) => (argsOf(d, id).find((a) => a.startsWith('MODEL=')) || '').slice(6) || null;
+const tierLog = (d) => log(d).filter((e) => e.phase === 'MODEL_TIER');
+
+await test('model tiers (pure): low → fast, standard → medium, architecture/planning → high; retries escalate; overrides win', () => {
+  const t = (o) => common.chooseModelTier(o).tier;
+  // low / fast
+  assert(t({ role: 'QA_AUDITOR', targetFiles: ['tests/a.test.js'], prompt: 'run the tests and fix the assertion' }) === 'fast', 'QA test run');
+  assert(t({ role: 'DEV_ENGINEER', targetFiles: ['src/a.js'], prompt: 'rename foo to bar' }) === 'fast', 'single-file small edit');
+  assert(t({ role: 'BA_ANALYST', targetFiles: ['docs/a.md'], prompt: 'document the flag' }) === 'fast', 'simple docs');
+  assert(t({ kind: 'plan', level: 'lead', role: 'QA_AUDITOR' }) === 'fast', 'QA lead planning');
+  // medium / balanced
+  assert(t({ role: 'DEV_ENGINEER', targetFiles: ['src/a.js', 'src/b.js', 'src/c.js'], prompt: 'implement the feature' }) === 'medium', 'multi-file coding');
+  assert(t({ role: 'DEV_ENGINEER', targetFiles: ['src/a.js'], prompt: 'x'.repeat(2000) }) === 'medium', 'single file but a large job');
+  assert(t({ role: 'QA_AUDITOR', targetFiles: ['t/a', 't/b', 't/c'], prompt: 'write tests' }) === 'medium', 'QA over many files');
+  assert(t({ kind: 'plan', level: 'lead', role: 'DEV_ENGINEER' }) === 'medium', 'lead-dev planning');
+  // high / deep reasoning
+  assert(t({ kind: 'plan', level: 'orchestrator', role: 'PO_ARCHITECT' }) === 'high', 'orchestrator');
+  assert(t({ kind: 'plan', level: 'lead', role: 'BA_ANALYST' }) === 'high', 'lead-ba research planning');
+  assert(t({ role: 'PO_ARCHITECT', targetFiles: ['docs/arch.md'], prompt: 'x' }) === 'high', 'architecture work');
+  // escalation after a failed check
+  const small = { role: 'DEV_ENGINEER', targetFiles: ['src/a.js'], prompt: 'fix it' };
+  assert([1, 2, 3, 4].map((cycle) => t({ ...small, cycle })).join() === 'fast,medium,high,high', 'retries must escalate one tier per failed cycle, capped at high');
+  assert(/escalated fast → medium/.test(common.chooseModelTier({ ...small, cycle: 2 }).reasons.join()), 'the escalation reason is recorded');
+  // tier → model for a profile (aliases only, never pinned versions)
+  const cfg = json(path.join(REPO, '.harness', 'config.json'));
+  const c = cfg.profiles.claude;
+  assert(c.models.fast === 'haiku' && c.models.medium === 'sonnet' && c.models.high === 'opus' && c.modelArgs.join(' ') === '--model {model}', `claude aliases: ${JSON.stringify(c.models)}`);
+  for (const [name, p] of Object.entries(cfg.profiles)) for (const m of Object.values(p.models || {})) assert(m === null || !/\d/.test(m), `${name}: model "${m}" looks like a pinned version; use an alias`);
+  assert(common.resolveModel(c, { tier: 'fast' }).model === 'haiku' && common.resolveModel(c, { tier: 'high' }).model === 'opus', 'claude tier → alias');
+  for (const k of ['gemini', 'codex', 'antigravity']) assert(common.resolveModel(cfg.profiles[k], { tier: 'fast' }).model === null, `${k}: no alias → no --model (the CLI uses its newest default)`);
+  assert(JSON.stringify(common.resolveModel(c, { tier: 'fast', override: 'high' })) === JSON.stringify({ tier: 'high', model: 'opus', source: 'override-tier' }), 'a tier override picks that tier');
+  assert(common.resolveModel(c, { tier: 'fast', override: 'fable' }).model === 'fable', 'an alias override is passed through');
+  assert(common.profileFlags(c).includes('--model') && !common.profileFlags(cfg.profiles.gemini).includes('--model'), 'the probe checks --model only where an alias is configured');
+});
+
+await test('model tiers end to end (1 engine): orchestrator/lead-ba high, lead-dev medium, QA + small edits fast, multi-file coding medium', () => {
+  const d = sandbox();
+  withProfiles(d, { mock: tieredProfile() });
+  hierJob(d, 'tiers', hierGoal(happyPlan()));
+  runOnce(d);
+  assert(stateOf(d).phase === '4_COMMITTED', `${stateOf(d).phase} ${stateOf(d).lastGateStatus}`);
+  const want = { orchestrator: 'm-high', 'lead-ba': 'm-high', 'lead-dev': 'm-medium', 'lead-qa': 'm-fast', 'lead-ba.spec': 'm-fast', 'lead-dev.impl': 'm-fast', 'lead-dev.util': 'm-fast', 'lead-qa.tests': 'm-fast' };
+  for (const [id, m] of Object.entries(want)) assert(modelArg(d, id) === m, `${id}: --model ${modelArg(d, id)}, want ${m}`);
+  assert(tierLog(d).some((e) => e.worker === 'lead-qa.tests' && e.tier === 'fast' && /QA/.test(e.reasons.join())), 'MODEL_TIER telemetry with the reason');
+  // a multi-file coding worker is medium
+  const d2 = sandbox();
+  withProfiles(d2, { mock: tieredProfile() });
+  drop(d2, { id: 'multi', title: 'multi', verifyCmd: PASS, subtasks: [{ id: 'w', targetFiles: ['src/a.js', 'src/b.js', 'src/c.js'], prompt: 'WRITE src/a.js a\nWRITE src/b.js b\nWRITE src/c.js c' }] });
+  runOnce(d2);
+  assert(stateOf(d2).phase === '4_COMMITTED' && modelArg(d2, 'w') === 'm-medium', `multi-file: ${modelArg(d2, 'w')}`);
+});
+
+await test('model tiers: a failing check escalates fast → medium → high across the 3 cycles', () => {
+  const d = sandbox();
+  withProfiles(d, { mock: tieredProfile() });
+  drop(d, { id: 'esc', title: 'esc', verifyCmd: 'node -e "process.exit(1)"', subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'WRITE a.txt hi' }] });
+  runOnce(d);
+  const tiers = tierLog(d).filter((e) => e.worker === 'w').map((e) => `${e.tier}:${e.model}`);
+  assert(tiers.join() === 'fast:m-fast,medium:m-medium,high:m-high', `escalation: ${tiers.join()}`);
+});
+
+await test('model tiers (multi-engine): each engine gets its own alias, an engine with no alias gets no --model; member "model" and --model override', () => {
+  const d = sandbox();
+  withProfiles(d, { mockplan: tieredProfile({ fast: 'p-fast', medium: 'p-medium', high: 'p-high' }), mockcode: tieredProfile({ fast: 'c-fast', medium: 'c-medium', high: 'c-high' }), mockqa: tieredProfile({ fast: null, medium: null, high: null }) });
+  const t = teamOf(d);
+  const route = { PO_ARCHITECT: 'mockplan', BA_ANALYST: 'mockplan', DEV_ENGINEER: 'mockcode', QA_AUDITOR: 'mockqa' };
+  t.members = t.members.map((m) => ({ ...m, engine: route[m.role], ...(m.id === 'lead-dev' ? { model: 'high' } : {}) }));
+  fs.writeFileSync(path.join(d, '.harness', 'team.json'), JSON.stringify(t, null, 2));
+  assert(node(d, ['.harness/team.mjs', 'validate']).status === 0, 'a team with "model" must validate');
+  hierJob(d, 'multi', hierGoal(happyPlan()));
+  runOnce(d);
+  assert(stateOf(d).phase === '4_COMMITTED', `${stateOf(d).phase} ${stateOf(d).lastGateStatus}`);
+  const want = { orchestrator: 'p-high', 'lead-ba': 'p-high', 'lead-ba.spec': 'p-fast', 'lead-dev': 'c-high', 'lead-dev.impl': 'c-high', 'lead-dev.util': 'c-high', 'lead-qa': null, 'lead-qa.tests': null };
+  for (const [id, m] of Object.entries(want)) assert(modelArg(d, id) === m, `${id}: --model ${modelArg(d, id)}, want ${m}`);
+  assert(tierLog(d).some((e) => e.worker === 'lead-dev.impl' && e.source === 'override-tier'), 'member override recorded');
+  // --model on the job overrides everything (an alias is passed through as-is)
+  const d2 = sandbox();
+  withProfiles(d2, { mock: tieredProfile() });
+  const r = node(d2, ['.harness/dispatch.mjs', '--goal', 'WRITE a.txt hi', '--files', 'a.txt', '--model', 'fable', '--check', PASS, '--wait']);
+  assert(r.status === 0 && modelArg(d2, 'worker-main') === 'fable', `--model: ${modelArg(d2, 'worker-main')} ${r.stdout}`);
+  t.members[1].model = 'bad model!';
+  fs.writeFileSync(path.join(d, '.harness', 'team.json'), JSON.stringify(t, null, 2));
+  assert(node(d, ['.harness/team.mjs', 'validate']).status === 1, 'an invalid model must be rejected');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

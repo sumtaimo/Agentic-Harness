@@ -278,6 +278,7 @@ export function validateTeam(team, { roles = {}, charter = null, plannerMaxWorke
     if (!m || typeof m.id !== 'string' || !m.id) { errors.push('every member needs an "id"'); continue; }
     if (ids.has(m.id)) errors.push(`duplicate member id "${m.id}"`);
     ids.add(m.id);
+    if (m.model !== undefined && (typeof m.model !== 'string' || !/^[\w.:@/-]+$/.test(m.model))) errors.push(`member "${m.id}": model must be a tier (fast | medium | high) or a model alias such as "opus"`);
     if (m.engine !== undefined && (typeof m.engine !== 'string' || (engines && !engines.includes(m.engine)))) errors.push(`member "${m.id}": engine "${m.engine}" is not an engine in config.json profiles${engines ? ` (${engines.join(', ')})` : ''}`);
     if (!['orchestrator', 'lead'].includes(m.level)) errors.push(`member "${m.id}": level must be "orchestrator" or "lead" (workers are created by leads at run time)`);
   }

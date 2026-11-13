@@ -119,7 +119,48 @@ Each member in `.harness/team.json` can carry an `"engine"`, which is any profil
 - `orca` is never chosen by `auto-assign` or `auto`. You can still set `"engine": "orca"` by hand once its profile is fixed.
 - After editing `team.json`, run `node .harness/team.mjs validate`.
 
-## 6. Troubleshooting
+## 6. Model tiers: the right-sized model for each job (saves tokens)
+
+The harness doesn't send every call to the heaviest model. Before it starts the orchestrator, a lead or a
+worker, the controller judges how complex that job is and picks the cheapest **tier** that fits:
+
+| Tier | Used for | Claude Code alias |
+|---|---|---|
+| `fast` | QA / test runs, single-file small edits (1 file, short prompt), simple docs (≤ 2 doc files), the QA lead's planning | `haiku` |
+| `medium` | standard feature work and multi-file coding, `lead-dev`'s planning | `sonnet` |
+| `high` | multi-module architecture planning: the orchestrator, `PO_ARCHITECT`, `lead-ba`'s research planning, the AI planner | `opus` |
+
+- **Inputs:** the number of `targetFiles`, the size of the job's own prompt (not the harness instructions around it), the role, and whether this is a retry.
+- **Retries escalate.** If the check fails, the next cycle moves up one tier: fast → medium → high. A job that failed on a cheaper model gets a stronger one, instead of the strongest model running every time.
+- **Every choice is logged.** Each spawn writes a `MODEL_TIER` line to `.harness/telemetry.log` with the tier, the model and the reason.
+
+### Always the latest model: aliases, never pinned versions
+
+Each profile maps the tiers to the CLI's own **aliases** in `config.json`, so a new model release is used
+automatically, with nothing to edit:
+
+```json
+"claude": { "modelArgs": ["--model", "{model}"], "models": { "fast": "haiku", "medium": "sonnet", "high": "opus" } }
+```
+
+Claude Code resolves `haiku`, `sonnet` and `opus` to the newest release of each family itself
+(`claude --help`: "Provide an alias for the latest model"). A test fails if anyone puts a pinned version
+number in `models`.
+
+- **`gemini`, `codex`, `agy`:** every tier is `null`. No `--model` is passed, so each CLI uses **its own newest default
+  model** on every tier. To save quota on the fast tier, set `models.fast` to an alias that `<tool> --help` documents.
+  Use an alias, not a dated version. `agy` has no `modelArgs` yet, because its model flag isn't known.
+- **Flag probe:** the doctor only requires `--model` in `<tool> --help` when at least one tier has an alias, so an unused model flag can never disable an engine.
+
+### Override the tier
+
+- **For one job:** `node .harness/dispatch.mjs --goal "…" --model high`. A tier name (`fast`, `medium`, `high`) picks that tier
+  on each agent's own engine. Any other value is passed to the CLI as-is (e.g. `--model fable`).
+- **For one team member:** `"model": "high"` on a member in `team.json`. It applies to that member and, for a lead, to its workers.
+  `team.mjs validate` rejects a malformed value.
+- **Precedence:** `--model` on the job, then the member's `"model"`, then the controller's automatic choice.
+
+## 7. Troubleshooting
 
 | You see | Do this |
 |---|---|
@@ -127,3 +168,5 @@ Each member in `.harness/team.json` can carry an `"engine"`, which is any profil
 | A tool works in your terminal but the doctor says `not installed` | The harness looks on `PATH`. Open a new terminal after installing, or add the tool's folder to `PATH`. |
 | `--help does NOT list: …` | Your tool version has different flags. Fix that profile's `args` in `.harness/config.json`. |
 | `ENGINE_FALLBACK` in `.harness/telemetry.log` | A routed engine was not usable at run time. Run the doctor, log in again, then `auto-assign`. |
+| `--help does NOT list: --model` | You configured a model alias for a CLI whose version has no `--model` flag. Set its `models` back to `null`. |
+| A job keeps using a strong model | Look at the `MODEL_TIER` lines in the telemetry log for the reason. A retry escalates, and a member `"model"` or `--model` forces a tier. |

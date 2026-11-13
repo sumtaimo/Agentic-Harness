@@ -87,7 +87,9 @@ export function winQuote(a) {
 
 /** Flags a profile relies on: every arg starting with "-" (placeholders excluded). */
 export function profileFlags(profile) {
-  const all = [...(profile.args || []), ...(profile.output?.batch || []), ...(profile.output?.stream || [])];
+  // The model flag is only relied on when the profile maps at least one tier to an alias.
+  const modelFlags = Object.values(profile.models || {}).some(Boolean) ? (profile.modelArgs || []) : [];
+  const all = [...(profile.args || []), ...(profile.output?.batch || []), ...(profile.output?.stream || []), ...modelFlags];
   return [...new Set(all.filter((a) => /^-[\w-]/.test(a) && a !== '--' && !a.includes('{')))];
 }
 
@@ -156,6 +158,66 @@ export function detectEngines(config, candidates = ROUTABLE_ENGINES) {
   const usable = []; const skipped = [];
   for (const k of known) { const u = engineUsable(config, k); if (u.ok) usable.push(k); else skipped.push({ name: k, why: u.why }); }
   return { usable, skipped };
+}
+
+// ───────────────────────────── model tiers (token-aware) ─────────────────────────────
+
+/** Model tiers, cheapest first. A profile maps them to the CLI's own model ALIASES (never pinned versions) in "models". */
+export const MODEL_TIERS = ['fast', 'medium', 'high'];
+const PLANNING_ROLES = new Set(['PO_ARCHITECT', 'BA_ANALYST']);
+const DOC_FILE = /\.(md|mdx|markdown|txt|rst|adoc)$/i;
+
+/**
+ * Pick the cheapest tier that fits the job, so the heavy model is only used where it pays off. Pure.
+ *   kind "plan" (orchestrator / lead / AI planner deciding who does what):
+ *     orchestrator, PO_ARCHITECT, BA_ANALYST → high (multi-module architecture / research planning)
+ *     QA lead → fast; other leads (e.g. lead-dev) → medium
+ *   kind "work" (a worker editing files):
+ *     PO_ARCHITECT → high
+ *     QA_AUDITOR, or docs-only work: ≤ 2 files and a short prompt → fast, else medium
+ *     a single-file small edit (1 file, prompt ≤ 600 chars) → fast
+ *     anything else (standard / multi-file feature work) → medium
+ *   retry after a failed check: one tier up per failed cycle (cycle 2 → +1, cycle 3 → +2), capped at high.
+ * Returns { tier, reasons[] }.
+ */
+export function chooseModelTier({ kind = 'work', level = null, role = null, targetFiles = [], prompt = '', cycle = 1 } = {}) {
+  const r = String(role || '').toUpperCase();
+  const files = Array.isArray(targetFiles) ? targetFiles.length : 0;
+  const size = String(prompt || '').length;
+  let tier; let why;
+  if (kind === 'plan') {
+    if (level === 'orchestrator' || PLANNING_ROLES.has(r)) { tier = 'high'; why = `${level === 'orchestrator' ? 'orchestrator' : r} plans across modules`; }
+    else if (r === 'QA_AUDITOR') { tier = 'fast'; why = 'QA lead only splits test work'; }
+    else { tier = 'medium'; why = `${r || 'lead'} plans its own slice`; }
+  } else if (r === 'PO_ARCHITECT') { tier = 'high'; why = 'architecture work'; }
+  else if (r === 'QA_AUDITOR' || (files > 0 && targetFiles.every((f) => DOC_FILE.test(String(f))))) {
+    const what = r === 'QA_AUDITOR' ? 'QA / test work' : 'docs-only work';
+    if (files <= 2 && size <= 2000) { tier = 'fast'; why = `${what}, ${files} file(s), short prompt`; } else { tier = 'medium'; why = `${what}, ${files} file(s), ${size} chars`; }
+  } else if (files <= 1 && size <= 600) { tier = 'fast'; why = 'single-file small edit'; }
+  else { tier = 'medium'; why = `standard coding: ${files} file(s), ${size} chars`; }
+  const reasons = [why];
+  const bump = Math.max(0, (Number(cycle) || 1) - 1);
+  if (bump) {
+    const from = tier;
+    tier = MODEL_TIERS[Math.min(MODEL_TIERS.length - 1, MODEL_TIERS.indexOf(tier) + bump)];
+    if (tier !== from) reasons.push(`escalated ${from} → ${tier}: retry ${bump} after a failed check`);
+  }
+  return { tier, reasons };
+}
+
+/**
+ * Turn a tier (or an explicit override) into the model for this profile.
+ *   override: a tier name ("fast" | "medium" | "high") picks that tier; any other string is passed to the CLI as-is.
+ *   No alias configured for the tier → model null: no --model flag, so the CLI uses its own latest default.
+ * Returns { tier, model, source: "auto" | "override-tier" | "override" }.
+ */
+export function resolveModel(profile, { tier = 'medium', override = null } = {}) {
+  if (override && MODEL_TIERS.includes(String(override).toLowerCase())) {
+    const t = String(override).toLowerCase();
+    return { tier: t, model: profile?.models?.[t] || null, source: 'override-tier' };
+  }
+  if (override) return { tier, model: String(override), source: 'override' };
+  return { tier, model: profile?.models?.[tier] || null, source: 'auto' };
 }
 
 /**

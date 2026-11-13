@@ -29,6 +29,8 @@
  *
  * --branch uat   build on its own git branches, verify, then merge into 'uat' only if the check passes
  *                (your working folder and main are not touched)
+ * --model fast|medium|high   force a model tier for every agent of this job (default: the controller picks
+ *                (or an alias, e.g. --model opus)  the cheapest tier that fits each agent's job; see docs/MULTI-MODEL-SETUP.md)
  * --wait   block until the job finishes and print the result (exit 0 = committed).
  *          If no background daemon is running, this command processes the job itself.
  */
@@ -53,6 +55,7 @@ const config = loadConfig();
 let title = args[0] && !args[0].startsWith('--') ? args[0] : '';
 let goal = '';
 let engine;
+let model;
 let verifyCmd;
 let files = [];
 let wait = false;
@@ -65,6 +68,7 @@ const subtasks = [];
 for (let i = 0; i < args.length; i++) {
   const a = args[i]; const v = args[i + 1];
   if (a === '--engine' && v !== undefined) { engine = args[++i].trim().toLowerCase(); }
+  else if (a === '--model' && v !== undefined) { model = args[++i].trim(); if (!/^[\w.:@/-]+$/.test(model)) { console.error('--model takes a tier (fast | medium | high) or a model alias such as opus'); process.exit(1); } }
   else if ((a === '--verify' || a === '--check') && v !== undefined) { verifyCmd = args[++i].trim(); }
   else if (a === '--goal' && v !== undefined) { goal = args[++i].trim(); }
   else if (a === '--title' && v !== undefined) { title = args[++i].trim(); }
@@ -120,6 +124,7 @@ const usePlanner = autoPlan && subtasks.length === 0;
 const job = {
   id: `job-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 6)}`,
   ...(engine ? { engine } : {}),
+  ...(model ? { model } : {}),
   title,
   ...(verifyCmd ? { verifyCmd } : {}),
   ...(branch ? { integrationBranch: branch } : {}),

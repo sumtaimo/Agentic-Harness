@@ -32,7 +32,7 @@ import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd,
   listProjectFiles, safeTarget,
-  winQuote,
+  winQuote, chooseModelTier, resolveModel,
 } from './lib/common.mjs';
 import {
   readCharter, loadRoles, loadSkills, matchSkills, computeAllowedTools, computeDisallowedTools,
@@ -175,7 +175,7 @@ const fatal = (msg) => Object.assign(new Error(msg), { fatal: true });
 /** Live agent output in the terminal: HARNESS_LIVE=1/0 overrides config.liveAgentOutput (default on). */
 const liveOn = () => (process.env.HARNESS_LIVE === '1' ? true : process.env.HARNESS_LIVE === '0' ? false : config.liveAgentOutput !== false);
 
-function buildArgs(profile, prompt, allowedTools, disallowedTools = [], stream = false) {
+function buildArgs(profile, prompt, allowedTools, disallowedTools = [], stream = false, model = null) {
   const allowed = (allowedTools || profile.allowedTools || []).join(',');
   const disallowed = (disallowedTools || []).join(',');
   const via = profile.promptVia || ((profile.args || []).includes('{prompt}') ? 'arg' : 'stdin');
@@ -188,6 +188,8 @@ function buildArgs(profile, prompt, allowedTools, disallowedTools = [], stream =
     if (v === '' && a !== '' && /^-/.test(args[args.length - 1] || '')) { args.pop(); continue; }
     args.push(v);
   }
+  // Model tier: only when the tier maps to an alias; otherwise no flag, so the CLI uses its own newest default.
+  if (model && Array.isArray(profile.modelArgs)) args.push(...profile.modelArgs.map((a) => a.replace('{model}', model)));
   const mcpFile = profile.mcpConfigPath && path.join(ROOT, profile.mcpConfigPath);
   if (profile.useMcp && mcpFile && fs.existsSync(mcpFile)) {
     args.push(...(profile.mcpArgs || []).map((a) => a.replace('{mcpConfig}', mcpFile)));
@@ -235,10 +237,13 @@ function renderStreamEvent(id, ev, cwd) {
 }
 
 /** Spawn an AI engine with a prompt. Resolves { engine, output, denials }. Streams activity live when enabled. */
-function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallowedTools }) {
+function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallowedTools, tier = null, model: modelOverride = null }) {
   return new Promise((resolve, reject) => {
     let profile;
     try { profile = resolveProfile(config, engine); } catch (e) { return reject(e); }
+    const t = tier || { tier: 'medium', reasons: ['no complexity info'] };
+    const pick = resolveModel(profile, { tier: t.tier, override: modelOverride });
+    logTelemetry('MODEL_TIER', `${id}: ${pick.tier} tier → ${pick.model || `${profile.name} default (no --model)`}${pick.source === 'auto' ? '' : ` (${pick.source})`}`, { worker: id, engine: profile.name, tier: pick.tier, model: pick.model, source: pick.source, reasons: t.reasons });
     if (profile.fallbackFrom) {
       logTelemetry('ENGINE_FALLBACK', `Engine '${profile.fallbackFrom}' unavailable (${profile.fallbackReason}); using '${profile.name}'`, { worker: id });
       writeState({ engine: profile.name.toUpperCase(), history: pushHistory(`! ${profile.fallbackFrom} unavailable → using ${profile.name}`) });
@@ -246,7 +251,7 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallo
     const live = liveOn();
     const stream = live && Array.isArray(profile.output?.stream);
     const binPath = which(profile.binary);
-    const { args, viaStdin } = buildArgs(profile, prompt, allowedTools, disallowedTools, stream);
+    const { args, viaStdin } = buildArgs(profile, prompt, allowedTools, disallowedTools, stream, pick.model);
     const isWin = process.platform === 'win32';
     const env = { ...process.env, HARNESS_WORKER: '1', HARNESS_WORKER_ID: id };
     const child = spawn(isWin ? winQuote(binPath) : binPath, isWin ? args.map(winQuote) : args, { cwd, env, shell: isWin, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -394,7 +399,7 @@ function resolveGovernance(sub, gov) {
   return sub;
 }
 
-function runWorker(subtask, cwd, errorContext) {
+function runWorker(subtask, cwd, errorContext, { cycle = 1, model = null } = {}) {
   const timeoutMs = subtask.timeoutMs || config.workerTimeoutMs || 300000;
   // Plain shell command worker (no AI): used by the self-test and for scripted steps.
   if (subtask.cliCommand && !subtask.prompt) {
@@ -415,7 +420,10 @@ function runWorker(subtask, cwd, errorContext) {
   const prompt = buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov);
   return spawnEngine({
     id: subtask.id, engine: subtask.engine, prompt, cwd, timeoutMs,
-    allowedTools: subtask.resolvedTools || subtask.allowedTools, disallowedTools: subtask.deniedTools
+    allowedTools: subtask.resolvedTools || subtask.allowedTools, disallowedTools: subtask.deniedTools,
+    // complexity is judged on the task itself (files, its own prompt, role, retry), not on the harness boilerplate around it
+    tier: chooseModelTier({ kind: 'work', role: subtask.resolvedRole || subtask.role, targetFiles: subtask.targetFiles || [], prompt: subtask.prompt || '', cycle }),
+    model: model || subtask.model || null
   }).then((r) => ({ id: subtask.id, role: subtask.resolvedRole, ...r }));
 }
 
@@ -665,7 +673,8 @@ async function aiDecompose(task, gov) {
     const { output, engine } = await spawnEngine({
       id: 'ai-planner', engine: task.engine, prompt, cwd: ROOT,
       timeoutMs: pc.timeoutMs || config.workerTimeoutMs, allowedTools: pc.allowedTools || ['Read', 'Glob', 'Grep'],
-      disallowedTools: computeDisallowedTools(gov.charter)
+      disallowedTools: computeDisallowedTools(gov.charter),
+      tier: chooseModelTier({ kind: 'plan', level: 'orchestrator' }), model: task.model || null
     });
     try {
       let plan;
@@ -769,7 +778,7 @@ async function hierDecompose(task, gov) {
       feedback ? `\n[YOUR PREVIOUS PLAN WAS REJECTED — fix this]:\n${feedback}` : ''
     ].filter(Boolean).join('\n');
     logTelemetry('1_ORCHESTRATOR', `${orch.id} delegation attempt ${attempt}/${attempts}`, { goal: String(goalText).slice(0, 300) });
-    const { output } = await spawnEngine({ id: orch.id, engine: task.engine || orch.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(orch.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny });
+    const { output } = await spawnEngine({ id: orch.id, engine: task.engine || orch.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(orch.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny, tier: chooseModelTier({ kind: 'plan', level: 'orchestrator', role: orch.role }), model: task.model || orch.model || null });
     try {
       let parsed;
       try { parsed = extractJson(output); } catch { throw new Error(`Reply was not valid JSON: ${output.slice(0, 300)}`); }
@@ -804,7 +813,7 @@ async function hierDecompose(task, gov) {
         fb ? `\n[YOUR PREVIOUS PLAN WAS REJECTED — fix this]:\n${fb}` : ''
       ].filter(Boolean).join('\n');
       logTelemetry('1_LEAD', `${lead.id} planning attempt ${attempt}/${attempts}`, { lead: lead.id });
-      const { output } = await spawnEngine({ id: lead.id, engine: task.engine || lead.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(lead.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny });
+      const { output } = await spawnEngine({ id: lead.id, engine: task.engine || lead.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(lead.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny, tier: chooseModelTier({ kind: 'plan', level: 'lead', role: lead.role }), model: task.model || lead.model || null });
       try {
         let parsed;
         try { parsed = extractJson(output); } catch { throw new Error(`Reply was not valid JSON: ${output.slice(0, 300)}`); }
@@ -837,7 +846,7 @@ async function hierDecompose(task, gov) {
     const lead = leads.find((l) => l.id === a.lead);
     const mine = settled[i].value.map((s) => ({
       id: `${lead.id}.${s.id}`, lead: lead.id, role: lead.role, skills: Array.isArray(s.skills) ? s.skills : (lead.skills && lead.skills.length ? lead.skills : undefined),
-      targetFiles: s.targetFiles, prompt: String(s.prompt).trim(), engine: task.engine || lead.engine, goal: a.goal,
+      targetFiles: s.targetFiles, prompt: String(s.prompt).trim(), engine: task.engine || lead.engine, model: lead.model, goal: a.goal,
       timeoutMs: minutesToMs(lead.budget?.maxMinutes, undefined), maxCostUsd: lead.budget?.maxCostUsd
     }));
     subtasks.push(...mine);
@@ -942,7 +951,7 @@ async function runExecutorSwarm(plan, gitCtx = null) {
         await execFileAsync('git', ['worktree', 'add', '--detach', wtPath, 'HEAD'], { cwd: ROOT });
         workerCwd = wtPath;
       }
-      const result = await runWorker(sub, workerCwd, plan.errorContext);
+      const result = await runWorker(sub, workerCwd, plan.errorContext, { cycle: plan.cycle || 1, model: plan.model || null });
       // per-agent budget (a running agent cannot be stopped by cost, so this is checked when it reports back)
       if (typeof sub.maxCostUsd === 'number' && (taskCost.agents[sub.id] || 0) > sub.maxCostUsd + 1e-9) {
         logTelemetry('BUDGET_AGENT_EXCEEDED', `${sub.id} cost $${(taskCost.agents[sub.id] || 0).toFixed(4)} > its cap $${sub.maxCostUsd}`, { agent: sub.id });
@@ -1092,6 +1101,7 @@ async function executeSquareCycle(taskFile) {
     writeState({ cycle, taskId: task.id, taskTitle: title, lastGateStatus: cycle > 1 ? `Retrying with previous error (cycle ${cycle})` : 'Planning…' });
     try {
       plan = await runPlanner(task, lastErrorTrace, plan);
+      plan.cycle = cycle; plan.model = task.model || null; // model tier: retries escalate; --model on the task overrides
       if (integration && !gitCtx) gitCtx = await startIntegration(task, integration);
       if (cycle === 1 && !backup && !gitCtx) backup = backupScope(plan);
       if (cycle > 1) enforceBudget(task, `cycle ${cycle - 1}`); // never start another cycle once over budget
@@ -1281,7 +1291,8 @@ async function poGenerate(gov, max) {
       const { output } = await spawnEngine({
         id: 'po-architect', prompt: attempt === 1 ? prompt : `${prompt}\n\n[YOUR PREVIOUS REPLY WAS NOT VALID JSON — reply with the JSON object only]: ${lastErr}`,
         cwd: view.dir, timeoutMs: config.workerTimeoutMs,
-        allowedTools: computeAllowedTools(po, [], []), disallowedTools: computeDisallowedTools(gov.charter)
+        allowedTools: computeAllowedTools(po, [], []), disallowedTools: computeDisallowedTools(gov.charter),
+        tier: chooseModelTier({ kind: 'plan', role: 'PO_ARCHITECT' })
       });
       try { parsed = extractJson(output); if (!Array.isArray(parsed.tasks)) throw new Error('no "tasks" list'); } catch (e) { parsed = null; lastErr = `${e.message}: ${output.slice(0, 200)}`; }
     }
