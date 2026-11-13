@@ -23,7 +23,7 @@ function sandbox({ worktrees = false } = {}) {
   // Isolate from any live harness run in the repo: clean backlog, no active visible-run state.
   fs.rmSync(path.join(dir, '.harness', 'visible'), { recursive: true, force: true });
   { const ch = path.join(dir, '.harness', 'charter.md'); // the owner's objectives must not leak into tests
-    fs.writeFileSync(ch, fs.readFileSync(ch, 'utf8').replace(/^- Project objectives:[\s\S]*?(?=\n\n|\n## |(?![\s\S]))/m, '- Project objectives: (describe your product goals here to customize for your own app)')); }
+    fs.writeFileSync(ch, fs.readFileSync(ch, 'utf8').replace(/^- Project objectives:[\s\S]*?(?=\n\n|\n## |(?![\s\S]))/m, '- Project objectives: (describe your product goals here to customize for your own app)').replace(/^- autonomous: off$/m, '- autonomous: on')); }
   fs.writeFileSync(path.join(dir, '.harness', 'memory', 'profile.md'), '# User profile\n\n- Name: (fill me)\n- Role / what I do: (fill me)\n'); // the owner's profile must not leak into tests
   fs.writeFileSync(path.join(dir, '.harness', 'memory', 'lessons.md'), '# Lessons the user taught\n'); // the owner's taught rules must not leak into tests
   fs.writeFileSync(path.join(dir, '.harness', 'backlog.json'), JSON.stringify({ version: '2.0.0', project: '', maxAutoTasksPerRun: 3, tasks: [] }, null, 2));
@@ -1446,7 +1446,10 @@ await test('named editor agents: sync-agents writes one agent per lead from team
 });
 
 await test('auto on by default, safely: the shipped charter is ON; the hook tells the editor AI to start /harness:auto only when work is READY; the headless controller plans nothing from the placeholder charter; installer can opt out', () => {
-  assert(/^- autonomous: on$/m.test(fs.readFileSync(path.join(REPO, '.harness', 'charter.md'), 'utf8')), 'the shipped charter must be autonomous: on');
+  { // The template ships ON for new projects; this repo's own charter may be locked off by its owner.
+    const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-shipped-'));
+    spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), fresh], { encoding: 'utf8' });
+    assert(/^- autonomous: on$/m.test(read(fresh, '.harness/charter.md')), 'a freshly installed charter must be autonomous: on'); }
   const d = sandbox();
   let h = node(d, ['.harness/hook-session.mjs']).stdout;
   assert(/Auto mode is ON but there is nothing READY and the charter objectives are not filled in/.test(h) && !/Start the autonomous workflow now/.test(h), h);

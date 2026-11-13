@@ -74,7 +74,8 @@ function copyDir(from, to, rel = '.harness') {
       report.push(`wrote  ${relPath} (blank profile to fill in)`); continue;
     }
     if (relPath === path.join('.harness', 'charter.md')) { // the template owner's project objectives never travel
-      const text = fs.readFileSync(s, 'utf8').replace(/^- Project objectives:[\s\S]*?(?=\n\n|\n## |(?![\s\S]))/m, OBJECTIVES_PLACEHOLDER);
+      const text = fs.readFileSync(s, 'utf8').replace(/^- Project objectives:[\s\S]*?(?=\n\n|\n## |(?![\s\S]))/m, OBJECTIVES_PLACEHOLDER)
+        .replace(/^- autonomous: off$/m, '- autonomous: on'); // template default (use --autonomous off to opt out)
       fs.writeFileSync(d, text);
       report.push(`wrote  ${relPath} (objectives left for you to fill in)`); continue;
     }

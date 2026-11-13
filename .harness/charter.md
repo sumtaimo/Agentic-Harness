@@ -6,7 +6,7 @@ Edit it in plain words. To replace it and keep the old one, run task
 "Harness: Import New Goal/Backlog with Snapshot" (the old charter goes to `.harness/releases/`).
 
 ## 0. Machine-readable policy (the harness reads these exact bullets)
-- autonomous: on
+- autonomous: off
 - maxAutoTasksPerRun: 3
 - allowedPaths: src/**, docs/**, tests/**, test/**
 - forbiddenPaths: .git/**, .harness/**, node_modules/**, .env*, production-credentials/**
