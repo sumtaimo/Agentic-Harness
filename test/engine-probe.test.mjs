@@ -113,3 +113,13 @@ test('help printing nothing gives checked=false and is treated as compatible', (
   assert.equal(probe.compatible, true);
   assert.equal(resolveProfile(config).name, 'gemini');
 });
+
+test('winQuote keeps an empty argument on Windows and quotes special characters', async () => {
+  const { winQuote } = await import('../.harness/lib/common.mjs');
+  assert.equal(winQuote(''), '""');
+  assert.equal(winQuote('yolo'), 'yolo');
+  assert.equal(winQuote('--approval-mode'), '--approval-mode');
+  assert.equal(winQuote('a b'), '"a b"');
+  assert.equal(winQuote('say "hi"'), '"say ""hi"""');
+  assert.deepEqual(['--approval-mode', 'yolo', '-p', ''].map(winQuote), ['--approval-mode', 'yolo', '-p', '""']);
+});

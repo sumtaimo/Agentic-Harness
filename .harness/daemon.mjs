@@ -31,7 +31,8 @@ import { promisify } from 'node:util';
 import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd,
-  listProjectFiles, safeTarget
+  listProjectFiles, safeTarget,
+  winQuote,
 } from './lib/common.mjs';
 import {
   readCharter, loadRoles, loadSkills, matchSkills, computeAllowedTools, computeDisallowedTools,
@@ -164,7 +165,6 @@ function renderHUD(s) {
 // ───────────────────────────── engine spawning ─────────────────────────────
 
 const fatal = (msg) => Object.assign(new Error(msg), { fatal: true });
-const winQuote = (a) => (/[\s"&|<>^()]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a);
 
 /**
  * Build the engine command line. The prompt is delivered according to profile.promptVia:

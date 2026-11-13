@@ -74,6 +74,15 @@ export function which(binary) {
   return null;
 }
 
+/**
+ * Quote one argument for a Windows shell command line (spawn with shell: true).
+ * An empty string becomes "" so it is not dropped (e.g. gemini -p "").
+ */
+export function winQuote(a) {
+  const s = String(a);
+  return s === '' || /[\s"&|<>^()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
 // ───────────────────────────── engine flag probe ─────────────────────────────
 
 /** Flags a profile relies on: every arg starting with "-" (placeholders excluded). */
