@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -302,7 +303,7 @@ await test('dead-letter queue: failed job → .harness/failed/<id>-<timestamp>.j
 });
 
 await test('auto-verify: detectVerifyCmd picks the strongest package.json check', async () => {
-  const { detectVerifyCmd } = await import(path.join(REPO, '.harness', 'lib', 'common.mjs'));
+  const { detectVerifyCmd } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);
   const cfg = { defaultVerifyCmd: 'NOOP' };
   const proj = (scripts, lock) => {
     const p = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-pkg-'));
@@ -816,7 +817,7 @@ await test('heartbeat: config heartbeatIntervalSeconds wakes the controller agai
 // ───────────── v2.2: skill exact-command rules, PO sees uat + is throttled, --status ─────────────
 
 await test('skill exact rules: DEV gets only "npm test" + node (not npm:*), a skill can never grant what the role lacks, QA never gets node', async () => {
-  const { computeAllowedTools, skillRulesNotGranted, loadRoles, loadSkills } = await import(path.join(REPO, '.harness', 'lib', 'governance.mjs'));
+  const { computeAllowedTools, skillRulesNotGranted, loadRoles, loadSkills } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
   const roles = loadRoles(); const skills = loadSkills();
   const cc = skills['code-craft'];
   const dev = computeAllowedTools(roles.DEV_ENGINEER, [cc], ['src/a.js']);
@@ -1063,7 +1064,7 @@ await test('/harness:team and /harness:run: the editor commands know the team mo
 
 // ───────────── v3.0: hierarchical orchestration (orchestrator → leads → workers), team guardrails, budgets ─────────────
 
-const gov = await import(path.join(REPO, '.harness', 'lib', 'governance.mjs'));
+const gov = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
 const hierGoal = (orch, prefix = '') => `${prefix}Build the slug feature. ORCH_JSON ${JSON.stringify(orch)}`;
 const leadJson = (subtasks, prefix = '') => `${prefix}LEAD_JSON ${JSON.stringify({ subtasks })}`;
 const happyPlan = (cost = '') => ({
