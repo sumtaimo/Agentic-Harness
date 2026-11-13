@@ -42,6 +42,11 @@ function copyDir(from, to, rel = '.harness') {
     }
     if (RUNTIME.has(entry.name) || (/^(inbox|completed|failed)$/.test(path.basename(from)) && entry.name !== '.gitkeep')) continue;
     if (fs.existsSync(d) && KEEP_IF_PRESENT.test(relPath)) { report.push(`kept   ${relPath} (already existed)`); continue; }
+    if (relPath === path.join('.harness', 'backlog.json')) { // the template's own tasks never travel: a new project starts with an empty backlog
+      let src = {}; try { src = JSON.parse(fs.readFileSync(s, 'utf8')); } catch { /* broken source backlog: use defaults */ }
+      fs.writeFileSync(d, JSON.stringify({ version: src.version || '2.0.0', project: '', maxAutoTasksPerRun: src.maxAutoTasksPerRun ?? 3, tasks: [] }, null, 2) + '\n');
+      report.push(`wrote  ${relPath} (empty backlog)`); continue;
+    }
     fs.copyFileSync(s, d);
     report.push(`wrote  ${relPath}`);
   }
