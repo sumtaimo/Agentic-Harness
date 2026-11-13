@@ -6,10 +6,12 @@
 import type { ReactElement } from 'react';
 
 type P3 = [number, number, number];
-type Shape =
+/** Optional motion: a CSS animation class (see index.css), a travel vector for slides, and a start delay. */
+type Motion = { anim?: 'iso-slide' | 'iso-blink' | 'iso-led' | 'iso-bob' | 'iso-stamp' | 'iso-draw'; move?: P3; delay?: number };
+type Shape = Motion & (
   | { kind: 'box'; at: P3; size: P3; tone?: 'ink'; r?: number }
   | { kind: 'line'; pts: P3[]; bold?: boolean }
-  | { kind: 'dot'; at: P3; r?: number; tone?: 'ok' | 'ink' };
+  | { kind: 'dot'; at: P3; r?: number; tone?: 'ok' | 'ink' });
 
 const C = 0.866;
 const proj = ([x, y, z]: P3): [number, number] => [(x - y) * C, (x + y) * 0.5 - z];
@@ -92,9 +94,16 @@ function Shadows({ shapes }: { shapes: Shape[] }) {
 }
 
 function Solid({ s }: { s: Shape }) {
+  if (!s.anim) return <Plain s={s} />;
+  const [mx, my] = s.move ? proj(s.move) : [0, 0];
+  const style = { ['--mx' as string]: `${mx.toFixed(1)}px`, ['--my' as string]: `${my.toFixed(1)}px`, animationDelay: `${s.delay ?? 0}s` };
+  return <g className={s.anim} style={style}><Plain s={s} /></g>;
+}
+
+function Plain({ s }: { s: Shape }) {
   if (s.kind === 'dot') { const [x, y] = proj(s.at); return <circle cx={x} cy={y} r={s.r ?? 1.6} fill={s.tone === 'ink' ? 'var(--iso-ink-b)' : 'var(--ok)'} />; }
-  if (s.kind === 'line') return <polyline points={pts(s.pts)} fill="none" stroke="var(--iso-ink)" strokeWidth={s.bold ? 1.3 : 0.7} />;
-  return <RoundedBox s={s} />;
+  if (s.kind === 'line') return <polyline points={pts(s.pts)} fill="none" stroke="var(--iso-ink)" strokeWidth={s.bold ? 1.3 : 0.7} pathLength={1} />;
+  return <RoundedBox s={s as Extract<Shape, { kind: 'box' }>} />;
 }
 
 export function Iso({ shapes }: { shapes: Shape[] }) {
@@ -109,6 +118,8 @@ export function Iso({ shapes }: { shapes: Shape[] }) {
 
 const box = (at: P3, size: P3, tone?: 'ink', r?: number): Shape => ({ kind: 'box', at, size, tone, r });
 const line = (p: P3[], bold = false): Shape => ({ kind: 'line', pts: p, bold });
+/** Give a shape some motion. */
+const moving = (sh: Shape, anim: NonNullable<Motion['anim']>, opts: { move?: P3; delay?: number } = {}): Shape => ({ ...sh, anim, ...opts });
 
 /* ── The five stations ─────────────────────────────────────────────── */
 
@@ -132,9 +143,9 @@ const YOU: Shape[] = [
   box([3, 2.5, 6], [40, 0.4, 24]),
   line([[7, 2.9, 25], [24, 2.9, 25]], true),
   line([[7, 2.9, 20], [37, 2.9, 20]]), line([[7, 2.9, 16], [31, 2.9, 16]]),
-  box([26, 2.9, 23.5], [1.4, 0.3, 3], 'ink'),
+  moving(box([26, 2.9, 23.5], [1.4, 0.3, 3], 'ink'), 'iso-blink'),
   dot([23, 2.6, 31.3], 0.6, 'ink'),
-  dot([41, 28, 3], 0.8),
+  moving(dot([41, 28, 3], 0.8), 'iso-led'),
 ];
 
 /** Controller: a dark gate across three lanes; one packet waits at the gate. */
@@ -142,11 +153,11 @@ const CONTROLLER: Shape[] = [
   box([0, 0, 0], [52, 40, 5]),
   ...screws(0, 0, 52, 40, 5, 1.6),
   ...lanes(2, 50, [5, 16, 27], 5),
-  box([6, 29.5, 6], [5, 5, 5], 'ink'),
+  moving(box([4, 29.5, 6], [5, 5, 5], 'ink'), 'iso-slide', { move: [40, 0, 0] }),
   box([24, 0, 6], [6, 5, 28]),
-  box([22, -1, 34], [10, 42, 6], 'ink'),
   box([24, 35, 6], [6, 5, 28]),
-  dot([27, 41, 37], 0.9),
+  box([22, -1, 34], [10, 42, 6], 'ink'),
+  moving(dot([27, 41, 37], 0.9), 'iso-led'),
 ];
 
 /** Orchestrator: a stepped tower that splits the goal into three lanes. */
@@ -156,8 +167,8 @@ const ORCHESTRATOR: Shape[] = [
   ...screws(0, 4, 30, 34, 9, 2.2),
   box([5, 9, 9], [20, 24, 9]),
   box([10, 15, 18], [10, 12, 10], 'ink'),
-  dot([15, 27, 23], 0.9),
-  ...[6, 17, 28].map((y) => box([36, y + 2, 1], [5, 5, 5])),
+  moving(dot([15, 27, 23], 0.9), 'iso-led'),
+  ...[6, 17, 28].map((y, i) => moving(box([32, y + 2, 1], [5, 5, 5]), 'iso-slide', { move: [22, 0, 0], delay: i * 0.5 })),
 ];
 
 /** Agents: three blocks, one per lane, each with its light on. */
@@ -165,20 +176,20 @@ const AGENTS: Shape[] = [
   box([0, 0, 0], [60, 44, 4]),
   ...screws(0, 0, 60, 44, 4, 1.4),
   ...lanes(2, 58, [4, 18, 32], 4),
-  box([8, 4, 5], [14, 9, 14]),
-  dot([12, 13, 15]),
-  box([26, 18, 5], [14, 9, 14], 'ink'),
-  dot([30, 27, 15]),
-  box([16, 32, 5], [14, 9, 14]),
-  dot([20, 41, 15]),
+  moving(box([8, 4, 5], [14, 9, 14]), 'iso-bob'),
+  moving(dot([12, 13, 15]), 'iso-led'),
+  moving(box([26, 18, 5], [14, 9, 14], 'ink'), 'iso-bob', { delay: 0.4 }),
+  moving(dot([30, 27, 15]), 'iso-led', { delay: 0.4 }),
+  moving(box([16, 32, 5], [14, 9, 14]), 'iso-bob', { delay: 0.8 }),
+  moving(dot([20, 41, 15]), 'iso-led', { delay: 0.8 }),
 ];
 
 /** Report: a sheet with lines and a tick, and a dark PASSED stamp. */
 const REPORT: Shape[] = [
   box([0, 0, 0], [36, 48, 2]),
   ...[8, 14, 20, 26].map((y, i) => line([[6, y, 2], [i === 0 ? 16 : 20, y, 2]], i === 0)),
-  box([24, 5, 2], [8, 9, 3], 'ink'),
-  line([[8, 36, 2], [13, 41, 2], [26, 32, 2]], true),
+  moving(box([24, 5, 2], [8, 9, 3], 'ink'), 'iso-stamp'),
+  moving(line([[8, 36, 2], [13, 41, 2], [26, 32, 2]], true), 'iso-draw'),
   dot([2.6, 12, 2], 0.8, 'ink'), dot([2.6, 36, 2], 0.8, 'ink'),
 ];
 
@@ -253,8 +264,8 @@ export function HarnessMachine({ labels, bare = false, className = '' }: { label
       <g className="machine-packet"><Solid s={box([46, 43, 9.2], [6, 6, 6], 'ink')} /></g>
       <Solid s={BACK_POST} />
       <Solid s={agentBox(2)} />
-      <Solid s={BEAM} />
       <Solid s={FRONT_POST} />
+      <Solid s={BEAM} />
       {REPORT_TRAY.map((s, i) => <Solid key={`r${i}`} s={s} />)}
       {[0, 1, 2].map((i) => { const [x, y] = proj(LED(i)); return <circle key={i} cx={x} cy={y} r={1.5} className="machine-led" style={{ animationDelay: `${i * 0.45}s` }} />; })}
       {!bare && placed.map((p) => {
