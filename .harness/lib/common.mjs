@@ -93,7 +93,7 @@ export function profileFlags(profile) {
 
 /**
  * Run `<binary> [subcommand] --help` once and check every configured flag appears in the output.
- * Result is cached in .harness/engine-probe.json keyed by binary path + mtime + flags.
+ * Result is cached in .harness/engine-probe.json keyed by probe version + binary path + mtime + verified + flags.
  *   { installed, checked, compatible, missing[], binPath, error? }
  * checked=false means help could not be read; that is treated as "unknown", not "incompatible".
  */
