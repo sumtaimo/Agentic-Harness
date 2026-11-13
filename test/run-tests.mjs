@@ -1832,5 +1832,24 @@ await test('editor verify flags what tests cannot prove: UI changes need a visua
   assert(run.lastVerify.skipped === 1 && run.lastVerify.needsVisualReview === true, JSON.stringify(run.lastVerify));
 });
 
+await test('doctor: a project with UI files but no browser testing tool gets a note with the install command (never installs, never a failure); a project without UI files is not bothered', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-doctor-browser-'));
+  const demo = path.join(base, 'demo');
+  assert(spawnSync(process.execPath, [path.join(REPO, 'examples', 'make-demo.mjs'), demo], { encoding: 'utf8' }).status === 0, 'demo');
+  const doctor = (env = {}) => spawnSync(process.execPath, ['.harness/doctor.mjs'], { cwd: demo, encoding: 'utf8', env: { ...process.env, ...env } });
+  let r = doctor();
+  assert(!/Browser testing/.test(r.stdout), `no UI files, so no browser section:\n${r.stdout}`);
+  fs.writeFileSync(path.join(demo, 'index.html'), '<!doctype html><title>x</title>\n');
+  r = doctor({ HARNESS_BROWSER_MODULES: 'no-such-browser-tool' });
+  assert(r.status === 0 && /Browser testing/.test(r.stdout) && /no browser testing tool is installed/.test(r.stdout) && /npm install -D playwright/.test(r.stdout), r.stdout);
+  assert(!/✖/.test(r.stdout) && /Failures: 0/.test(r.stdout), `must stay a note, not a failure:\n${r.stdout}`);
+  assert(!fs.existsSync(path.join(demo, 'node_modules')) && !/playwright/.test(fs.readFileSync(path.join(demo, 'package.json'), 'utf8')), 'the doctor must never install anything');
+  // a tool that resolves: reported as found (a fake module in the project's node_modules)
+  fs.mkdirSync(path.join(demo, 'node_modules', 'fake-browser-tool'), { recursive: true });
+  fs.writeFileSync(path.join(demo, 'node_modules', 'fake-browser-tool', 'index.js'), 'module.exports = {};\n');
+  r = doctor({ HARNESS_BROWSER_MODULES: 'fake-browser-tool' });
+  assert(/browser testing tool found: fake-browser-tool/.test(r.stdout) && /doctor\.mjs --deep/.test(r.stdout), r.stdout);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

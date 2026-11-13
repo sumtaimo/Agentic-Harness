@@ -6,8 +6,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, detectVerifyCmd } from './lib/common.mjs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, detectVerifyCmd, listProjectFiles } from './lib/common.mjs';
 import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
 
 ensureDirs();
@@ -57,6 +58,28 @@ try {
 console.log('\nAutomatic check (used when a task has no --check)');
 const v = detectVerifyCmd(ROOT, config);
 v.real ? ok(`${v.cmd}  (${v.source})`) : warn(`${v.source}. Add a "test" (or "check") script to package.json, or always pass --check.`);
+
+// A project with UI files needs a real browser in its check, or a broken page script or layout still passes.
+// The doctor only looks and suggests; it never installs anything (that adds a dependency to YOUR project).
+const UI_FILE = /\.(html?|css|scss|sass|less|svg|jsx|tsx|vue|svelte|astro)$/i;
+const uiFiles = listProjectFiles(ROOT, 2000).files.filter((f) => UI_FILE.test(f));
+if (uiFiles.length) {
+  console.log('\nBrowser testing (this project has UI files)');
+  const req = createRequire(path.join(ROOT, 'package.json'));
+  const candidates = (process.env.HARNESS_BROWSER_MODULES || 'playwright,@playwright/test,playwright-core,puppeteer').split(',').map((x) => x.trim()).filter(Boolean);
+  const found = candidates.find((m) => { try { req.resolve(m); return true; } catch { return false; } });
+  if (!found) {
+    note(`${uiFiles.length} UI file(s) (${uiFiles.slice(0, 3).join(', ')}${uiFiles.length > 3 ? ', …' : ''}) but no browser testing tool is installed, so visual and page-script tests will be SKIPPED, and a broken page can still pass. To add one (this installs a dev dependency in YOUR project, so it is your decision):\n      npm install -D playwright && npx playwright install chromium`);
+  } else {
+    ok(`browser testing tool found: ${found}`);
+    if (process.argv.includes('--deep')) {
+      // launch a real browser for a moment: the tool can be installed while the browser itself is missing
+      const code = `const m=require(${JSON.stringify(req.resolve(found))});const t=m.chromium||m;(async()=>{const b=await t.launch({args:['--no-sandbox']});await b.close();})().then(()=>process.exit(0),(e)=>{console.error(String(e.message).split('\\n')[0]);process.exit(1);});`;
+      const r = spawnSync(process.execPath, ['-e', code], { cwd: ROOT, encoding: 'utf8', timeout: 45000 });
+      r.status === 0 ? ok('a real browser launches') : warn(`${found} is installed but the browser did not launch (${(r.stderr || 'timeout').trim().split('\n')[0]}). Try: npx playwright install chromium`);
+    } else note('To prove a real browser launches (takes a few seconds): node .harness/doctor.mjs --deep');
+  }
+}
 
 console.log('\nGovernance (v2: charter, backlog, roles, skills)');
 const charter = readCharter();
