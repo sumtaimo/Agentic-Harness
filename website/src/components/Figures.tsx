@@ -6,7 +6,8 @@
 type P3 = [number, number, number];
 type Shape =
   | { kind: 'box'; at: P3; size: P3; tone?: 'ink' }
-  | { kind: 'line'; pts: P3[]; bold?: boolean };
+  | { kind: 'line'; pts: P3[]; bold?: boolean }
+  | { kind: 'dot'; at: P3; r?: number };
 
 const C = 0.866;
 const proj = ([x, y, z]: P3): [number, number] => [(x - y) * C, (x + y) * 0.5 - z];
@@ -19,7 +20,7 @@ function boxFaces({ at: [x, y, z], size: [w, d, h] }: { at: P3; size: P3 }) {
 }
 
 const pts = (p: P3[]) => p.map((q) => proj(q).map((v) => v.toFixed(1)).join(',')).join(' ');
-const shapePoints = (s: Shape) => (s.kind === 'box' ? Object.values(boxFaces(s)).flat() : s.pts).map(proj);
+const shapePoints = (s: Shape) => (s.kind === 'box' ? Object.values(boxFaces(s)).flat() : s.kind === 'dot' ? [s.at] : s.pts).map(proj);
 
 function bounds(points: [number, number][], padX: number, padY: number) {
   const xs = points.map((p) => p[0]); const ys = points.map((p) => p[1]);
@@ -27,6 +28,7 @@ function bounds(points: [number, number][], padX: number, padY: number) {
 }
 
 function Solid({ s }: { s: Shape }) {
+  if (s.kind === 'dot') { const [x, y] = proj(s.at); return <circle cx={x} cy={y} r={s.r ?? 1.6} fill="var(--ok)" />; }
   if (s.kind === 'line') return <polyline points={pts(s.pts)} fill="none" stroke="var(--iso-ink)" strokeWidth={s.bold ? 1.3 : 0.7} />;
   const f = boxFaces(s);
   const ink = s.tone === 'ink';
@@ -53,42 +55,63 @@ const line = (p: P3[], bold = false): Shape => ({ kind: 'line', pts: p, bold });
 
 /* ── The five stations ─────────────────────────────────────────────── */
 
-/** You: a laptop with a goal on the screen. */
+const dot = (at: P3, r?: number): Shape => ({ kind: 'dot', at, r });
+const lanes = (x0: number, x1: number, ys: number[], z: number, w = 9): Shape[] => [
+  ...ys.map((y) => box([x0, y, z], [x1 - x0, w, 1])),
+  ...ys.map((y) => line([[x0 + 3, y + w / 2, z + 1], [x1 - 3, y + w / 2, z + 1]])),
+];
+
+/** You: a laptop with the goal typed on the screen. */
 const YOU: Shape[] = [
-  box([0, 0, 0], [44, 30, 3]),
-  ...[9, 14, 19].map((y) => line([[6, y, 3], [38, y, 3]])),
-  box([0, 0, 3], [44, 2, 28]),
-  line([[8, 2, 22], [30, 2, 22]], true), line([[8, 2, 15], [36, 2, 15]]), line([[8, 2, 10], [26, 2, 10]]),
+  box([0, 0, 0], [46, 32, 3]),
+  // keyboard: three rows of keys, and a trackpad
+  ...[7, 12, 17].flatMap((y) => [6, 13, 20, 27, 34].map((x) => box([x, y, 3], [5, 3.4, 0.8]))),
+  box([16, 23, 3], [14, 6, 0.4]),
+  // screen with a bezel and the goal on it
+  box([0, 0, 3], [46, 2.5, 30]),
+  box([3, 2.5, 6], [40, 0.4, 24]),
+  line([[7, 2.9, 25], [24, 2.9, 25]], true),
+  line([[7, 2.9, 20], [37, 2.9, 20]]), line([[7, 2.9, 16], [31, 2.9, 16]]),
+  box([26, 2.9, 23.5], [1.4, 0.3, 3], 'ink'),
 ];
 
-/** Controller: a gate on a plinth (the check every task passes through). */
+/** Controller: a dark gate across three lanes; one packet waits at the gate. */
 const CONTROLLER: Shape[] = [
-  box([-6, -4, 0], [58, 22, 4]),
-  box([0, 2, 4], [9, 9, 34]),
-  box([37, 2, 4], [9, 9, 34]),
-  box([-2, 2, 38], [50, 9, 7], 'ink'),
-  line([[9, 7, 22], [37, 7, 22]], true),
+  box([0, 0, 0], [52, 40, 5]),
+  ...lanes(2, 50, [5, 16, 27], 5),
+  box([6, 29.5, 6], [5, 5, 5], 'ink'),
+  box([24, 0, 6], [6, 5, 28]),
+  box([22, -1, 34], [10, 42, 6], 'ink'),
+  box([24, 35, 6], [6, 5, 28]),
 ];
 
-/** Orchestrator: a stepped tower (the plan, level by level). */
+/** Orchestrator: a stepped tower that splits the goal into three lanes. */
 const ORCHESTRATOR: Shape[] = [
-  box([0, 0, 0], [40, 40, 8]),
-  box([7, 7, 8], [26, 26, 8]),
-  box([14, 14, 16], [12, 12, 10], 'ink'),
+  ...lanes(30, 62, [6, 17, 28], 0),
+  box([0, 4, 0], [30, 34, 9]),
+  box([5, 9, 9], [20, 24, 9]),
+  box([10, 15, 18], [10, 12, 10], 'ink'),
+  ...[6, 17, 28].map((y) => box([36, y + 2, 1], [5, 5, 5])),
 ];
 
-/** Agents: three blocks working side by side. */
+/** Agents: three blocks, one per lane, each with its light on. */
 const AGENTS: Shape[] = [
-  box([0, 0, 0], [18, 18, 18]),
-  box([25, 0, 0], [18, 18, 18], 'ink'),
-  box([50, 0, 0], [18, 18, 18]),
+  box([0, 0, 0], [60, 44, 4]),
+  ...lanes(2, 58, [4, 18, 32], 4),
+  box([8, 4, 5], [14, 9, 14]),
+  dot([12, 13, 15]),
+  box([26, 18, 5], [14, 9, 14], 'ink'),
+  dot([30, 27, 15]),
+  box([16, 32, 5], [14, 9, 14]),
+  dot([20, 41, 15]),
 ];
 
-/** Report: a sheet with lines and a tick. */
+/** Report: a sheet with lines and a tick, and a dark PASSED stamp. */
 const REPORT: Shape[] = [
-  box([0, 0, 0], [34, 46, 2]),
-  ...[8, 14, 20, 26].map((y) => line([[6, y, 2], [28, y, 2]])),
-  line([[8, 35, 2], [13, 40, 2], [26, 31, 2]], true),
+  box([0, 0, 0], [36, 48, 2]),
+  ...[8, 14, 20, 26].map((y, i) => line([[6, y, 2], [i === 0 ? 16 : 20, y, 2]], i === 0)),
+  box([24, 5, 2], [8, 9, 3], 'ink'),
+  line([[8, 36, 2], [13, 41, 2], [26, 32, 2]], true),
 ];
 
 export const FIGURES = [YOU, CONTROLLER, ORCHESTRATOR, AGENTS, REPORT];

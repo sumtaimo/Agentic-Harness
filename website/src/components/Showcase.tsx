@@ -30,7 +30,7 @@ export function Pipeline() {
         <span className="absolute left-[10%] top-[80px] h-px bg-fg transition-all duration-700 sm:top-[94px]" style={{ width: `${(at / 4) * 80}%` }} aria-hidden="true" />
         {FIGURES.map((fig, i) => (
           <button key={i} type="button" role="tab" aria-selected={at === i} onClick={() => setPicked(i)} className="group relative flex flex-col items-center">
-            <div className={`h-[72px] w-full max-w-[92px] transition duration-300 sm:h-[86px] ${at === i ? '-translate-y-1' : 'opacity-55 group-hover:opacity-100'}`}><Iso shapes={fig} /></div>
+            <div className={`h-[72px] w-full max-w-[92px] transition duration-300 sm:h-[86px] ${at === i ? '-translate-y-1' : 'opacity-75 group-hover:opacity-100'}`}><Iso shapes={fig} /></div>
             <span className={`relative z-10 mt-1 h-2.5 w-2.5 rounded-full border transition ${i <= at ? 'border-fg bg-fg' : 'border-line-strong bg-bg'}`} aria-hidden="true" />
             <span className={`mt-2 max-w-full truncate text-[11.5px] transition ${at === i ? 'text-fg' : 'text-faint group-hover:text-fg'}`}>{t.hero.figures[i]}</span>
           </button>
