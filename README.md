@@ -409,7 +409,7 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 | `claude` (Claude Code) | ✅ verified end-to-end, including the AI planner and two parallel workers |
 | `antigravity` (`agy`) | ⚠️ not verified here: `agy -p ""`, prompt on stdin, no auto-approve |
 | `orca` | ⚠️ flags from the original spec, **not verified**; Doctor's probe will tell you |
-| `gemini` (Gemini CLI) | ⚠️ not verified here: `--approval-mode yolo -p ""` (auto-approves every tool), prompt on stdin |
+| `gemini` (Gemini CLI) | ⚠️ not verified here: `-p ""`, prompt on stdin. This repo adds `--approval-mode yolo` (auto-approves every tool); new installs do not |
 | `codex` (OpenAI Codex CLI) | ⚠️ not verified here |
 
 Setup, subscription login and checks for Gemini and `agy`: [`docs/ENGINES.md`](docs/ENGINES.md).

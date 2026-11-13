@@ -79,6 +79,17 @@ function copyDir(from, to, rel = '.harness') {
       fs.writeFileSync(d, text);
       report.push(`wrote  ${relPath} (objectives left for you to fill in)`); continue;
     }
+    if (relPath === path.join('.harness', 'config.json')) { // the owner's per-project auto-approve choice never travels
+      let cfg = null; try { cfg = JSON.parse(fs.readFileSync(s, 'utf8')); } catch { /* broken source config: copy it unchanged */ }
+      const g = cfg && cfg.profiles && cfg.profiles.gemini;
+      if (g && Array.isArray(g.args)) {
+        const i = g.args.indexOf('--approval-mode');
+        if (i > -1 && g.args[i + 1] === 'yolo') g.args.splice(i, 2);
+        g.note = "UNVERIFIED (confirm with 'gemini --help'). Headless: '-p' with the prompt piped on stdin. Auto-approve is OFF in a new project: Gemini will not run tools that need approval, so file edits are blocked. To allow it for THIS project only, add '--approval-mode', 'yolo' to args below (it approves every tool; use only in a project you trust).";
+        fs.writeFileSync(d, JSON.stringify(cfg, null, 2) + '\n');
+        report.push(`wrote  ${relPath} (Gemini auto-approve OFF for this project)`); continue;
+      }
+    }
     if (relPath === path.join('.harness', 'backlog.json')) { // the template's own tasks never travel: a new project starts with an empty backlog
       let src = {}; try { src = JSON.parse(fs.readFileSync(s, 'utf8')); } catch { /* broken source backlog: use defaults */ }
       fs.writeFileSync(d, JSON.stringify({ version: src.version || '2.0.0', project: '', maxAutoTasksPerRun: src.maxAutoTasksPerRun ?? 3, tasks: [] }, null, 2) + '\n');

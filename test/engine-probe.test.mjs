@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const realConfig = JSON.parse(fs.readFileSync(path.join(here, '..', '.harness', 'config.json'), 'utf8'));
@@ -138,6 +139,21 @@ test('an old-format cache entry claiming compatible is ignored, and a verified c
   assert.equal(probeEngine(profiles.gemini).compatible, false, 'old cache entry must not be reused');
   assert.equal(probeEngine({ ...profiles.gemini, verified: true }).compatible, true, 'flipping verified must re-probe');
   assert.equal(probeEngine(profiles.gemini).compatible, false, 'unverified result is cached separately');
+});
+
+test('a fresh install has Gemini auto-approve OFF; an existing config and the owner config are untouched', () => {
+  const fresh = fs.mkdtempSync(path.join(tmpRoot, 'inst-fresh-'));
+  const own = fs.mkdtempSync(path.join(tmpRoot, 'inst-own-'));
+  fs.mkdirSync(path.join(own, '.harness'), { recursive: true });
+  const ownCfg = JSON.stringify({ profiles: { gemini: { args: ['--approval-mode', 'yolo', '-p', ''] } } });
+  fs.writeFileSync(path.join(own, '.harness', 'config.json'), ownCfg);
+  const installer = path.join(here, '..', 'install.mjs');
+  spawnSync(process.execPath, [installer, fresh], { encoding: 'utf8' });
+  spawnSync(process.execPath, [installer, own], { encoding: 'utf8' });
+  const freshArgs = JSON.parse(fs.readFileSync(path.join(fresh, '.harness', 'config.json'), 'utf8')).profiles.gemini.args;
+  assert.deepEqual(freshArgs, ['-p', ''], 'fresh install must not auto-approve');
+  assert.equal(fs.readFileSync(path.join(own, '.harness', 'config.json'), 'utf8'), ownCfg, 'existing config must be kept');
+  assert.deepEqual(profiles.gemini.args, ['--approval-mode', 'yolo', '-p', ''], 'the owner repo keeps its own choice');
 });
 
 test('winQuote keeps an empty argument on Windows and quotes special characters', async () => {

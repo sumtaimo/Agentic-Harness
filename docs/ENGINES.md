@@ -58,6 +58,10 @@ succeeds. Today only `claude` is `"verified": true`.
 | `gemini` | binary `gemini`, args `--approval-mode yolo -p ""`, prompt on stdin | unverified |
 | `antigravity` | binary `agy`, args `-p ""`, prompt on stdin, no auto-approve | unverified |
 
+New projects (made with `node install.mjs <folder>`) start with Gemini auto-approve OFF: the installer drops
+`--approval-mode yolo` from the Gemini profile. To allow it for one project, add `"--approval-mode", "yolo"` to the
+`gemini` args in that project's `.harness/config.json`.
+
 Decided by the owner: the Antigravity command is `agy`; Gemini may auto-approve every tool call
 (`--approval-mode yolo`) in this project. `agy` has no auto-approve flag on purpose.
 
