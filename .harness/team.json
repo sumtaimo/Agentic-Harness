@@ -13,9 +13,10 @@
         "lead-qa"
       ],
       "budget": {
-        "maxCostUsd": 2.0,
+        "maxCostUsd": 2,
         "maxMinutes": 30
-      }
+      },
+      "engine": "claude"
     },
     {
       "id": "lead-ba",
@@ -29,7 +30,8 @@
       "budget": {
         "maxCostUsd": 0.4,
         "maxMinutes": 10
-      }
+      },
+      "engine": "claude"
     },
     {
       "id": "lead-dev",
@@ -46,7 +48,8 @@
       },
       "skills": [
         "code-craft"
-      ]
+      ],
+      "engine": "claude"
     },
     {
       "id": "lead-qa",
@@ -64,7 +67,8 @@
       },
       "skills": [
         "code-craft"
-      ]
+      ],
+      "engine": "claude"
     }
   ]
 }
