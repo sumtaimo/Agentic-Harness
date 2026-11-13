@@ -97,6 +97,8 @@ export function profileFlags(profile) {
  *   { installed, checked, compatible, missing[], binPath, error? }
  * checked=false means help could not be read; that is treated as "unknown", not "incompatible".
  */
+const PROBE_VERSION = 2;
+
 export function probeEngine(profile, { force = false } = {}) {
   const binPath = which(profile.binary);
   if (!binPath) return { installed: false, checked: false, compatible: false, missing: [], binPath: null };
@@ -104,7 +106,8 @@ export function probeEngine(profile, { force = false } = {}) {
   if (flags.length === 0) return { installed: true, checked: false, compatible: true, missing: [], binPath };
   let mtime = 0;
   try { mtime = fs.statSync(binPath).mtimeMs; } catch { /* ignore */ }
-  const key = `${binPath}|${mtime}|${flags.join(' ')}`;
+  // Bump PROBE_VERSION when the probe logic changes; verified is in the key because it decides how unreadable help is treated.
+  const key = `v${PROBE_VERSION}|${binPath}|${mtime}|verified=${profile.verified === true}|${flags.join(' ')}`;
   const cache = readJsonSafe(FILES.probe, {});
   if (!force && cache[key]) return cache[key];
 

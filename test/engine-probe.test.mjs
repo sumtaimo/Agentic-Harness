@@ -129,6 +129,17 @@ test('help printing nothing: a verified profile is still trusted', () => {
   assert.equal(resolveProfile({ ...config, profiles: { ...profiles, gemini: verified } }).name, 'gemini');
 });
 
+test('an old-format cache entry claiming compatible is ignored, and a verified change re-probes', async () => {
+  const { FILES } = await import('../.harness/lib/common.mjs');
+  const dir = useBin('stale-cache', { gemini: 'exit 0' });
+  const bin = path.join(dir, 'gemini');
+  const oldKey = `${bin}|${fs.statSync(bin).mtimeMs}|${profileFlags(profiles.gemini).join(' ')}`;
+  fs.writeFileSync(FILES.probe, JSON.stringify({ [oldKey]: { installed: true, checked: false, compatible: true, missing: [], binPath: bin } }));
+  assert.equal(probeEngine(profiles.gemini).compatible, false, 'old cache entry must not be reused');
+  assert.equal(probeEngine({ ...profiles.gemini, verified: true }).compatible, true, 'flipping verified must re-probe');
+  assert.equal(probeEngine(profiles.gemini).compatible, false, 'unverified result is cached separately');
+});
+
 test('winQuote keeps an empty argument on Windows and quotes special characters', async () => {
   const { winQuote } = await import('../.harness/lib/common.mjs');
   assert.equal(winQuote(''), '""');
