@@ -28,6 +28,21 @@ const report = [];
 // Runtime + personal history never travels to another project.
 const RUNTIME = new Set(['state.json', 'telemetry.log', 'daemon.pid', 'engine-probe.json', 'auto-lessons.md', 'live.log', 'auto-state.json']);
 // The target project's own data wins: memory, config, charter, backlog, roles, skills, team.
+// A new project gets a blank profile, never the profile of whoever owns this template copy.
+const PROFILE_TEMPLATE = `# User profile
+
+This file tells every AI (the editor chat AND the harness workers) who you are and how you
+like to work. Replace each "(fill me)". You can also just tell your editor AI:
+"Read AGENTS.md and fill in my profile" — it will ask you a few questions and write this file.
+
+- Name: (fill me)
+- Role / what I do: (fill me)
+- Coding experience: (fill me — e.g. "I don't code; explain everything in plain words")
+- Language I want answers in: (fill me)
+- What this project is: (fill me)
+- How I like answers: (fill me — e.g. "short, step by step, one command at a time")
+- Things the AI must always ask me before doing: (fill me — e.g. "deleting files, pushing to GitHub, paying for anything")
+`;
 const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|roles[\\/]|skills[\\/]|config\.json$|charter\.md$|backlog\.json$|team\.json$)/;
 
 function copyDir(from, to, rel = '.harness') {
@@ -42,6 +57,10 @@ function copyDir(from, to, rel = '.harness') {
     }
     if (RUNTIME.has(entry.name) || (/^(inbox|completed|failed)$/.test(path.basename(from)) && entry.name !== '.gitkeep')) continue;
     if (fs.existsSync(d) && KEEP_IF_PRESENT.test(relPath)) { report.push(`kept   ${relPath} (already existed)`); continue; }
+    if (relPath === path.join('.harness', 'memory', 'profile.md')) { // the template owner's personal profile never travels
+      fs.writeFileSync(d, PROFILE_TEMPLATE);
+      report.push(`wrote  ${relPath} (blank profile to fill in)`); continue;
+    }
     if (relPath === path.join('.harness', 'backlog.json')) { // the template's own tasks never travel: a new project starts with an empty backlog
       let src = {}; try { src = JSON.parse(fs.readFileSync(s, 'utf8')); } catch { /* broken source backlog: use defaults */ }
       fs.writeFileSync(d, JSON.stringify({ version: src.version || '2.0.0', project: '', maxAutoTasksPerRun: src.maxAutoTasksPerRun ?? 3, tasks: [] }, null, 2) + '\n');
