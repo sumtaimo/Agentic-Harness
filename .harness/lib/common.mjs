@@ -142,7 +142,7 @@ export function engineUsable(config, k) {
   return { ok: true, probe };
 }
 
-/** The real AI CLIs the team can be routed to (profile names in config.json). orca is left out on purpose: opt-in only. */
+/** The real AI CLIs the team can be routed to (profile names in config.json). Supported: Claude Code, Antigravity (agy), Gemini and Codex. */
 export const ROUTABLE_ENGINES = ['claude', 'antigravity', 'codex', 'gemini'];
 
 /**
@@ -236,6 +236,7 @@ export function resolveProfile(config, requested, { allowFallback = true } = {})
     return null;
   };
 
+  if (want === 'orca') throw Object.assign(new Error("Engine 'orca' is no longer supported (it could not be verified). Use one of: auto, " + Object.keys(config.profiles).join(', ')), { fatal: true });
   if (want !== 'auto' && !config.profiles[want]) {
     throw Object.assign(new Error(`Unknown engine '${want}'. Known engines: auto, ${Object.keys(config.profiles).join(', ')}`), { fatal: true });
   }

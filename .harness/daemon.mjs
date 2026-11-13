@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * .harness/daemon.mjs
- * Unified Background Agentic Controller (Claude Code / Antigravity / Orca / Gemini / Codex)
+ * Unified Background Agentic Controller (Claude Code / Antigravity / Gemini / Codex)
  *
  *   Square loop:  1_PLANNER -> 2_EXECUTOR_SWARM -> 3_VERIFIER -> 4_COMMITTED
  *                 (verifier failure feeds its error back to the planner, max `maxCycles` times,
@@ -1434,11 +1434,11 @@ if (selfTestMode) {
   const selfTest = {
     id: 'self-test-001',
     engine: 'antigravity',
-    title: 'Antigravity & Orca Square + 2-Worker Swarm Self-Test',
+    title: 'Antigravity & Codex Square + 2-Worker Swarm Self-Test',
     verifyCmd: 'node -e "const fs=require(\'fs\'); if(!fs.existsSync(\'.harness/state.json\')) process.exit(1);"',
     subtasks: [
       { id: 'antigravity-worker-1', engine: 'antigravity', targetFiles: ['src/module-a.lock'], cliCommand: 'node -e "console.log(\'Antigravity worker 1 executed\')"' },
-      { id: 'orca-worker-2', engine: 'orca', targetFiles: ['src/module-b.lock'], cliCommand: 'node -e "console.log(\'Orca worker 2 executed\')"' }
+      { id: 'codex-worker-2', engine: 'codex', targetFiles: ['src/module-b.lock'], cliCommand: 'node -e "console.log(\'Codex worker 2 executed\')"' }
     ]
   };
   const running = daemonAlive();

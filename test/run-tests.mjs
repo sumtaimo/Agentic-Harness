@@ -1877,5 +1877,13 @@ await test('editor verify flags tests that changed after a failed check (fixed o
   assert(!('cycleSnapshot' in json(path.join(demo, '.harness', 'visible', id, 'run.json'))), 'the cycle snapshot must be dropped once the run ends');
 });
 
+await test('Orca is no longer supported: no profile in config.json, and asking for it stops with a clear message listing the supported engines', () => {
+  const cfg = json(path.join(REPO, '.harness', 'config.json'));
+  assert(!('orca' in cfg.profiles) && !(cfg.autoOrder || []).includes('orca'), 'orca must not be a profile or in autoOrder');
+  assert(['claude', 'antigravity', 'gemini', 'codex'].every((e) => e in cfg.profiles), 'the four supported engines must have a profile');
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', "import('./.harness/lib/common.mjs').then((m)=>{try{m.resolveProfile(m.loadConfig(),'orca')}catch(e){console.log(e.message);process.exit(0)}process.exit(3)})"], { cwd: REPO, encoding: 'utf8' });
+  assert(r.status === 0 && /no longer supported/.test(r.stdout) && /claude, antigravity, gemini, codex/.test(r.stdout), r.stdout + r.stderr);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

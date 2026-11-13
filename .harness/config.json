@@ -126,24 +126,6 @@
       },
       "modelsNote": "No model flag is known for agy yet: it always uses its own newest default. If `agy --help` documents a model flag and aliases, add modelArgs (e.g. [\"--model\",\"{model}\"]) and the aliases here."
     },
-    "orca": {
-      "verified": false,
-      "note": "UNVERIFIED: flags from the original spec. Doctor probes 'orca run --help'; falls back to 'auto' if a flag is missing. Prompt goes on stdin.",
-      "binary": "orca",
-      "args": [
-        "run",
-        "--non-interactive",
-        "--format",
-        "json"
-      ],
-      "promptVia": "stdin",
-      "allowedTools": [
-        "Read",
-        "Edit",
-        "Write",
-        "Bash"
-      ]
-    },
     "gemini": {
       "verified": false,
       "note": "UNVERIFIED (confirm with 'gemini --help'). Headless: '-p' with the prompt piped on stdin (stdin is appended to the -p text). '--approval-mode yolo' (replaces the deprecated --yolo) auto-approves every tool; the owner approved this for this project.",
