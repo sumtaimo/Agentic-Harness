@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+/* Dark mode follows the .dark class on <html> (toggled in the navbar, remembered per visitor). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #fafafb;
+  --surface: #ffffff;
+  --surface-2: #f3f4f7;
+  --border: #e3e5ea;
+  --border-strong: #cfd3db;
+  --fg: #0d1016;
+  --muted: #5a6170;
+  --faint: #8a909c;
+  --accent: #4f5fe8;
+  --accent-soft: #eef0ff;
+  --ok: #13894a;
+  --ok-soft: #e7f6ee;
+  --warn: #9a6200;
+  --warn-soft: #fff4dc;
+  --danger: #c43838;
+  --danger-soft: #fdecec;
+  --term-bg: #0c0e13;
+  --term-border: #1d2029;
+  --term-fg: #d7dae2;
+  --term-muted: #7d8494;
+}
+
+.dark {
+  --bg: #08090c;
+  --surface: #0e1015;
+  --surface-2: #14161d;
+  --border: #1e2129;
+  --border-strong: #2b2f3a;
+  --fg: #e9ebf0;
+  --muted: #9097a6;
+  --faint: #636a78;
+  --accent: #8d9bff;
+  --accent-soft: #161a33;
+  --ok: #43d08f;
+  --ok-soft: #0e2219;
+  --warn: #f2b84b;
+  --warn-soft: #251c0b;
+  --danger: #f47474;
+  --danger-soft: #2a1213;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-term: var(--term-bg);
+  --color-term-line: var(--term-border);
+  --color-term-fg: var(--term-fg);
+  --color-term-muted: var(--term-muted);
+  --font-sans: "Inter", "Noto Sans Khmer", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, "Noto Sans Khmer", monospace;
+}
+
+html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+code, pre, kbd { font-family: var(--font-mono); }
+
+/* Khmer: stacked subscripts and vowel signs need more vertical room and no negative tracking. */
+html:lang(km) h1, html:lang(km) h2, html:lang(km) h3 { line-height: 1.45 !important; letter-spacing: 0 !important; }
+html:lang(km) p, html:lang(km) li, html:lang(km) td, html:lang(km) label { line-height: 1.9; }
+html:lang(km) h1 { font-size: clamp(30px, 5.2vw, 44px) !important; }
+
+/* Faint grid behind the hero */
+.hero-grid {
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--border) 70%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--border) 70%, transparent) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 40%, transparent 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
