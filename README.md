@@ -153,6 +153,33 @@ Each team then makes it theirs by editing plain files: `.harness/team.json` (who
 `.harness/charter.md` (what the harness may do on its own), `.harness/roles/` and `.harness/skills/` (personas and rules),
 `.harness/memory/` (what the AIs should remember). Their own versions are kept when the installer is run again.
 
+## Team Collaboration
+
+One developer and a team of people get the same harness: the full AI agent team (`orchestrator`, `lead-ba`,
+`lead-dev`, `lead-qa`), in manual tasks and in autonomous mode (`auto`). The only difference is how people share the repo.
+
+**Shared in Git** (everyone's agents follow the same rules):
+- `.harness/charter.md`: objectives, allowed and forbidden paths, autonomous on/off
+- `.harness/backlog.json`: the task list
+- `.harness/team.json`: the agent team, its scopes and engine routing
+- `.harness/memory/lessons.md`: rules taught to every AI
+- `.claude/`: slash commands, named agents and the shared permission rules
+
+**Kept per person:**
+- `.agent-state/` and `.claude/settings.local.json`: already ignored by `.gitignore`
+- `.harness/memory/profile.md`: who you are and how you like to work. It is committed by default (the template ships a
+  starter one), so on a shared repo uncomment the `.harness/memory/profile.md` line in `.gitignore` and untrack it once
+  with `git rm --cached .harness/memory/profile.md`
+- your own CLI logins and subscriptions (`claude`, `agy`, `codex`, `gemini`); tokens are spent on your own account
+
+**Team rules:**
+1. After cloning, run `node .harness/team.mjs auto-assign` on your own machine, so the routing matches the CLIs you
+   have. It writes the `"engine"` fields into the shared `team.json`, so agree as a team whether that routing is committed;
+   if teammates have different CLIs, leave the change uncommitted (`git checkout -- .harness/team.json` undoes it).
+2. Claim distinct `READY` backlog items before you run `auto`. Coordination is through Git only: there is no lock
+   between machines, so two people running `auto` at once can pick the same item.
+3. Verified work is merged into `uat`; the harness never writes to `main`. A person reviews `uat` and merges it into `main`.
+
 ## 2. One-time setup (about 10 minutes)
 
 1. **Install Node.js 18 or newer** from <https://nodejs.org> (the LTS button).
