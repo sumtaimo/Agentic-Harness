@@ -1541,6 +1541,7 @@ await test('demo project (examples/make-demo.mjs): ready to try — harness inst
   fs.writeFileSync(path.join(demo, 'tests', 'slugify.test.js'), "const t=require('node:test');const a=require('node:assert');const {slugify}=require('../src/slugify.js');t('x',()=>a.strictEqual(slugify('  Hello, World!  '),'hello-world'))\n");
   const v = spawnSync(process.execPath, ['.harness/visible.mjs', 'verify', id], { cwd: demo, encoding: 'utf8' });
   assert(v.status === 0 && /PASSED ✔/.test(v.stdout), v.stdout);
+  assert(/Acceptance criteria — confirm each one yourself/.test(v.stdout) && /☐ slugify\(42\) throws a TypeError/.test(v.stdout), `the report must list the acceptance criteria for the human to confirm:\n${v.stdout}`);
   const tasks = json(path.join(demo, '.harness', 'backlog.json')).tasks;
   assert(tasks[0].status === 'DONE', `backlog item is ${tasks[0].status}`);
   // the demo's check is real: with the files present but no passing test it must fail
@@ -1849,6 +1850,31 @@ await test('doctor: a project with UI files but no browser testing tool gets a n
   fs.writeFileSync(path.join(demo, 'node_modules', 'fake-browser-tool', 'index.js'), 'module.exports = {};\n');
   r = doctor({ HARNESS_BROWSER_MODULES: 'fake-browser-tool' });
   assert(/browser testing tool found: fake-browser-tool/.test(r.stdout) && /doctor\.mjs --deep/.test(r.stdout), r.stdout);
+});
+
+await test('editor verify flags tests that changed after a failed check (fixed or weakened?) and existing tests that were deleted', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-weak-test-'));
+  const demo = path.join(base, 'demo');
+  assert(spawnSync(process.execPath, [path.join(REPO, 'examples', 'make-demo.mjs'), demo], { encoding: 'utf8' }).status === 0, 'demo');
+  fs.mkdirSync(path.join(demo, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(demo, 'tests', 'old.test.js'), '// an existing test\n');
+  execFileSync('git', ['add', '-A'], { cwd: demo }); execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'old test'], { cwd: demo });
+  // the check passes only once the new test file contains the word "weak": the first verify fails, the second passes
+  const check = `node -e "process.exit(require('fs').readFileSync('tests/new.test.js','utf8').includes('weak')?0:1)"`;
+  const vis = (...a) => spawnSync(process.execPath, ['.harness/visible.mjs', ...a], { cwd: demo, encoding: 'utf8' });
+  const id = runIdOf(vis('brief', '--goal', 'add a helper', '--check', check));
+  assert(vis('assign', id, deleg([{ lead: 'lead-dev', goal: 'code', files: ['src/a.js'] }, { lead: 'lead-qa', goal: 'tests', files: ['tests/'] }])).status === 0, 'assign');
+  fs.writeFileSync(path.join(demo, 'src', 'a.js'), 'exports.a = 1;\n');
+  fs.writeFileSync(path.join(demo, 'tests', 'new.test.js'), '// strict test\n');
+  let v = vis('verify', id);
+  assert(v.status === 1 && /NOT PASSED YET/.test(v.stdout) && !/test file\(s\) were changed/.test(v.stdout), `first cycle must fail without the warning:\n${v.stdout}`);
+  fs.writeFileSync(path.join(demo, 'tests', 'new.test.js'), '// weak test\n');
+  fs.rmSync(path.join(demo, 'tests', 'old.test.js'));
+  v = vis('verify', id);
+  assert(v.status === 0 && /PASSED ✔/.test(v.stdout), v.stdout);
+  assert(/After the last failed check, 2 test file\(s\) were changed/.test(v.stdout) && /FIXED, not weakened/.test(v.stdout), `changed tests not flagged:\n${v.stdout}`);
+  assert(/1 test file\(s\) that existed before this run were DELETED \(tests\/old\.test\.js\)/.test(v.stdout), `deleted test not flagged:\n${v.stdout}`);
+  assert(!('cycleSnapshot' in json(path.join(demo, '.harness', 'visible', id, 'run.json'))), 'the cycle snapshot must be dropped once the run ends');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
