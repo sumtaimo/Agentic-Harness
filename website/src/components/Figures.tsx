@@ -3,7 +3,7 @@
  *   - FIGURES: five small stations of the workflow (you → controller → orchestrator → agents → report)
  *   - HarnessMachine: the whole harness as one labelled machine, for the top of the page
  */
-import type { ReactElement } from 'react';
+import type { CSSProperties, ReactElement } from 'react';
 
 type P3 = [number, number, number];
 /** Optional motion: a CSS animation class (see index.css), a travel vector for slides, and a start delay. */
@@ -11,10 +11,24 @@ type Motion = { anim?: 'iso-slide' | 'iso-blink' | 'iso-led' | 'iso-bob' | 'iso-
 type Shape = Motion & (
   | { kind: 'box'; at: P3; size: P3; tone?: 'ink'; r?: number }
   | { kind: 'line'; pts: P3[]; bold?: boolean }
-  | { kind: 'dot'; at: P3; r?: number; tone?: 'ok' | 'ink' });
+  | { kind: 'dot'; at: P3; r?: number; tone?: 'ok' | 'ink'; face?: Face });
 
 const C = 0.866;
 const proj = ([x, y, z]: P3): [number, number] => [(x - y) * C, (x + y) * 0.5 - z];
+
+/** Which plane a flat detail lies in: the top, the front (+y) face, or the side (+x) face. */
+type Face = 'top' | 'y' | 'x';
+/** How one unit along each of the face's two axes looks on screen (an SVG matrix a b c d). */
+const FACE_AXES: Record<Face, [number, number, number, number]> = {
+  top: [C, 0.5, -C, 0.5], // x and y
+  y: [C, 0.5, 0, -1], // x and z
+  x: [-C, 0.5, 0, -1], // y and z
+};
+/** A circle drawn flat on a face, so it follows the drawing's angle instead of facing the screen. */
+function FaceCircle({ at, face, r, fill, className, style }: { at: P3; face: Face; r: number; fill?: string; className?: string; style?: CSSProperties }) {
+  const [x, y] = proj(at); const [a, b, c, d] = FACE_AXES[face];
+  return <circle r={r} fill={fill} className={className} style={style} transform={`matrix(${a} ${b} ${c} ${d} ${x.toFixed(2)} ${y.toFixed(2)})`} />;
+}
 
 function boxFaces({ at: [x, y, z], size: [w, d, h] }: { at: P3; size: P3 }) {
   const top: P3[] = [[x, y, z + h], [x + w, y, z + h], [x + w, y + d, z + h], [x, y + d, z + h]];
@@ -101,7 +115,12 @@ function Solid({ s }: { s: Shape }) {
 }
 
 function Plain({ s }: { s: Shape }) {
-  if (s.kind === 'dot') { const [x, y] = proj(s.at); return <circle cx={x} cy={y} r={s.r ?? 1.6} fill={s.tone === 'ink' ? 'var(--iso-ink-b)' : 'var(--ok)'} />; }
+  if (s.kind === 'dot') {
+    const r = s.r ?? 1.6;
+    if (s.tone === 'ink') return <FaceCircle at={s.at} face={s.face ?? 'top'} r={r} fill="var(--iso-ink-b)" />;
+    // a lamp: dark rim, green light, lying flat on its face
+    return <g><FaceCircle at={s.at} face={s.face ?? 'top'} r={r + 0.55} fill="var(--iso-ink-b)" /><FaceCircle at={s.at} face={s.face ?? 'top'} r={r} fill="var(--ok)" /></g>;
+  }
   if (s.kind === 'line') return <polyline points={pts(s.pts)} fill="none" stroke="var(--iso-ink)" strokeWidth={s.bold ? 1.3 : 0.7} pathLength={1} />;
   return <RoundedBox s={s as Extract<Shape, { kind: 'box' }>} />;
 }
@@ -123,7 +142,9 @@ const moving = (sh: Shape, anim: NonNullable<Motion['anim']>, opts: { move?: P3;
 
 /* ── The five stations ─────────────────────────────────────────────── */
 
-const dot = (at: P3, r?: number, tone?: 'ok' | 'ink'): Shape => ({ kind: 'dot', at, r, tone });
+const dot = (at: P3, r?: number, tone?: 'ok' | 'ink', face: Face = 'top'): Shape => ({ kind: 'dot', at, r, tone, face });
+/** A status light set into the front (+y) face of a block. */
+const lamp = (at: P3, r = 1.1): Shape => dot(at, r, 'ok', 'y');
 /** Four tiny screws, one near each top corner of a plate: the small detail that makes it read as an object. */
 const screws = (x: number, y: number, w: number, d: number, z: number, inset = 2.6): Shape[] =>
   [[x + inset, y + inset], [x + w - inset, y + inset], [x + w - inset, y + d - inset], [x + inset, y + d - inset]].map(([a, b]) => dot([a, b, z], 0.55, 'ink'));
@@ -144,8 +165,8 @@ const YOU: Shape[] = [
   line([[7, 2.9, 25], [24, 2.9, 25]], true),
   line([[7, 2.9, 20], [37, 2.9, 20]]), line([[7, 2.9, 16], [31, 2.9, 16]]),
   moving(box([26, 2.9, 23.5], [1.4, 0.3, 3], 'ink'), 'iso-blink'),
-  dot([23, 2.6, 31.3], 0.6, 'ink'),
-  moving(dot([41, 28, 3], 0.8), 'iso-led'),
+  dot([23, 2.5, 31.3], 0.6, 'ink', 'y'),
+  moving(dot([40, 27.5, 3], 0.8), 'iso-led'),
 ];
 
 /** Controller: a dark gate across three lanes; one packet waits at the gate. */
@@ -157,7 +178,7 @@ const CONTROLLER: Shape[] = [
   box([24, 0, 6], [6, 5, 28]),
   box([24, 35, 6], [6, 5, 28]),
   box([22, -1, 34], [10, 42, 6], 'ink'),
-  moving(dot([27, 41, 37], 0.9), 'iso-led'),
+  moving(lamp([27, 40, 29], 1), 'iso-led'),
 ];
 
 /** Orchestrator: a stepped tower that splits the goal into three lanes. */
@@ -167,7 +188,7 @@ const ORCHESTRATOR: Shape[] = [
   ...screws(0, 4, 30, 34, 9, 2.2),
   box([5, 9, 9], [20, 24, 9]),
   box([10, 15, 18], [10, 12, 10], 'ink'),
-  moving(dot([15, 27, 23], 0.9), 'iso-led'),
+  moving(lamp([15, 27, 23], 1.1), 'iso-led'),
   ...[6, 17, 28].map((y, i) => moving(box([32, y + 2, 1], [5, 5, 5]), 'iso-slide', { move: [22, 0, 0], delay: i * 0.5 })),
 ];
 
@@ -177,11 +198,11 @@ const AGENTS: Shape[] = [
   ...screws(0, 0, 60, 44, 4, 1.4),
   ...lanes(2, 58, [4, 18, 32], 4),
   moving(box([8, 4, 5], [14, 9, 14]), 'iso-bob'),
-  moving(dot([12, 13, 15]), 'iso-led'),
+  moving(lamp([15, 13, 14]), 'iso-led'),
   moving(box([26, 18, 5], [14, 9, 14], 'ink'), 'iso-bob', { delay: 0.4 }),
-  moving(dot([30, 27, 15]), 'iso-led', { delay: 0.4 }),
+  moving(lamp([33, 27, 14]), 'iso-led', { delay: 0.4 }),
   moving(box([16, 32, 5], [14, 9, 14]), 'iso-bob', { delay: 0.8 }),
-  moving(dot([20, 41, 15]), 'iso-led', { delay: 0.8 }),
+  moving(lamp([23, 41, 14]), 'iso-led', { delay: 0.8 }),
 ];
 
 /** Report: a sheet with lines and a tick, and a dark PASSED stamp. */
@@ -224,15 +245,14 @@ const REPORT_TRAY: Shape[] = [
 const REPORT_TICK = line([[139, 54, 2], [143, 59, 2], [154, 50, 2]], true);
 
 const agentBox = (i: number) => box(AGENT_AT[i], AGENT_SIZE);
-const LED = (i: number): P3 => [AGENT_AT[i][0] + 4, AGENT_AT[i][1] + AGENT_SIZE[1], AGENT_AT[i][2] + 10];
+const LED = (i: number): P3 => [AGENT_AT[i][0] + AGENT_SIZE[0] / 2, AGENT_AT[i][1] + AGENT_SIZE[1], AGENT_AT[i][2] + AGENT_SIZE[2] * 0.62];
 
 /** An agent's status light: a small green lamp with a dark rim, so it reads as a light even when dim. */
 function Led({ i }: { i: number }) {
-  const [x, y] = proj(LED(i));
   return (
     <g>
-      <circle cx={x} cy={y} r={1.9} fill="var(--iso-ink-b)" />
-      <circle cx={x} cy={y} r={1.3} className="machine-led" style={{ animationDelay: `${i * 0.5}s` }} />
+      <FaceCircle at={LED(i)} face="y" r={1.9} fill="var(--iso-ink-b)" />
+      <FaceCircle at={LED(i)} face="y" r={1.3} className="machine-led" style={{ animationDelay: `${i * 0.5}s` }} />
     </g>
   );
 }
