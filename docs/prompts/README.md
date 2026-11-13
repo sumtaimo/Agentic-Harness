@@ -8,6 +8,7 @@ Run these in a NEW project that has the harness installed, in this order. Wait f
 |---|---|---|
 | 1 | [`skill-factory.md`](skill-factory.md) | The factory: standard, template, skill linter, eval runner, visual kit, packaging (zip + SHA-256), the `skill-smith` meta-skill, registry and installer, and a README draft for the project as a template. |
 | 2 | [`skill-showcase-site.md`](skill-showcase-site.md) | The public showcase site, generated from the registry: a collection page with a card per skill, one page per skill (preview, try-it prompt, steps, rules, download, install), downloads with checksums, EN and KH, light by default. |
+| 2b | [`site-polish.md`](site-polish.md) | Fixes the showcase site's look after prompt 2: light by default, a card grid, compact cards, a clearer cover, Khmer font weight. Run it when the site works but does not look right. |
 | 3 | [`figure-craft-skill.md`](figure-craft-skill.md) | The first real skill: `figure-craft`, explanatory isometric figures and pages. Its cover is drawn with its own engine. |
 
 ## Before you start (one time)
