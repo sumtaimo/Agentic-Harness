@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, listLessons, probeEngine, profileFlags, detectVerifyCmd } from './lib/common.mjs';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, detectVerifyCmd } from './lib/common.mjs';
 import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
 
 ensureDirs();
@@ -89,12 +89,19 @@ console.log('\nAgent team (hierarchy: orchestrator → leads → workers)');
   const team = loadTeam();
   if (!team) note('No .harness/team.json, so "dispatch --hierarchy" is not set up. Copy it from the template if you want the team mode.');
   else {
-    const { errors, warnings: tw } = validateTeam(team, { roles, charter, plannerMaxWorkers: (config.planner || {}).maxWorkers || 4 });
+    const { errors, warnings: tw } = validateTeam(team, { roles, charter, plannerMaxWorkers: (config.planner || {}).maxWorkers || 4, engines: Object.keys(config.profiles || {}) });
     errors.forEach((e) => { bad(`team.json: ${e}`); problems++; });
     tw.forEach((w) => warn(`team.json: ${w}`));
     if (!errors.length) {
       const orch = team.members.find((m) => m.level === 'orchestrator'); const leads = team.members.filter((m) => m.level === 'lead');
       ok(`team.json valid: ${orch.id} → ${leads.length} lead(s): ${leads.map((l) => `${l.id} [${l.role}] owns ${l.scope.join(', ')}`).join(' | ')}`);
+      const routed = team.members.filter((m) => m.engine);
+      if (!routed.length) note('engine routing: none set, every member uses "auto". Route roles to your installed engines with  node .harness/team.mjs auto-assign');
+      else {
+        ok(`engine routing (headless --hierarchy): ${team.members.map((m) => `${m.id}→${m.engine || 'auto'}`).join(', ')}`);
+        const down = [...new Set(routed.map((m) => m.engine))].filter((e) => !engineUsable(config, e).ok);
+        if (down.length) warn(`routed engine(s) not usable now: ${down.join(', ')} → those members fall back to "auto". Re-run  node .harness/team.mjs auto-assign`);
+      }
       const ag = syncAgents(team, roles, { check: true });
       if (ag.stale.length) warn(`editor agents out of sync with team.json (${ag.stale.join(', ')}): run  node .harness/team.mjs sync-agents  and restart the Claude Code session`);
       else ok(`editor agents in sync: ${leads.map((l) => l.id).join(', ')} are named agents in .claude/agents/ (visible when the orchestrator delegates in Claude Code)`);

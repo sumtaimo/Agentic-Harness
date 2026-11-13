@@ -705,7 +705,7 @@ async function hierDecompose(task, gov) {
   const team = loadTeam();
   if (!team) throw fatal('This task asks for the team hierarchy, but .harness/team.json does not exist.');
   const pc = config.planner || {};
-  const { errors } = validateTeam(team, { roles: gov.roles, charter: gov.charter, plannerMaxWorkers: pc.maxWorkers || 4 });
+  const { errors } = validateTeam(team, { roles: gov.roles, charter: gov.charter, plannerMaxWorkers: pc.maxWorkers || 4, engines: Object.keys(config.profiles || {}) });
   if (errors.length) throw fatal(`team.json is invalid, nothing was started: ${errors.join('; ')}`);
   const orch = team.members.find((m) => m.level === 'orchestrator');
   const leads = team.members.filter((m) => m.level === 'lead');
@@ -769,7 +769,7 @@ async function hierDecompose(task, gov) {
       feedback ? `\n[YOUR PREVIOUS PLAN WAS REJECTED — fix this]:\n${feedback}` : ''
     ].filter(Boolean).join('\n');
     logTelemetry('1_ORCHESTRATOR', `${orch.id} delegation attempt ${attempt}/${attempts}`, { goal: String(goalText).slice(0, 300) });
-    const { output } = await spawnEngine({ id: orch.id, engine: task.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(orch.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny });
+    const { output } = await spawnEngine({ id: orch.id, engine: task.engine || orch.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(orch.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny });
     try {
       let parsed;
       try { parsed = extractJson(output); } catch { throw new Error(`Reply was not valid JSON: ${output.slice(0, 300)}`); }
@@ -804,7 +804,7 @@ async function hierDecompose(task, gov) {
         fb ? `\n[YOUR PREVIOUS PLAN WAS REJECTED — fix this]:\n${fb}` : ''
       ].filter(Boolean).join('\n');
       logTelemetry('1_LEAD', `${lead.id} planning attempt ${attempt}/${attempts}`, { lead: lead.id });
-      const { output } = await spawnEngine({ id: lead.id, engine: task.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(lead.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny });
+      const { output } = await spawnEngine({ id: lead.id, engine: task.engine || lead.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(lead.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny });
       try {
         let parsed;
         try { parsed = extractJson(output); } catch { throw new Error(`Reply was not valid JSON: ${output.slice(0, 300)}`); }
@@ -837,7 +837,7 @@ async function hierDecompose(task, gov) {
     const lead = leads.find((l) => l.id === a.lead);
     const mine = settled[i].value.map((s) => ({
       id: `${lead.id}.${s.id}`, lead: lead.id, role: lead.role, skills: Array.isArray(s.skills) ? s.skills : (lead.skills && lead.skills.length ? lead.skills : undefined),
-      targetFiles: s.targetFiles, prompt: String(s.prompt).trim(), engine: task.engine, goal: a.goal,
+      targetFiles: s.targetFiles, prompt: String(s.prompt).trim(), engine: task.engine || lead.engine, goal: a.goal,
       timeoutMs: minutesToMs(lead.budget?.maxMinutes, undefined), maxCostUsd: lead.budget?.maxCostUsd
     }));
     subtasks.push(...mine);

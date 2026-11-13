@@ -29,6 +29,7 @@
     "ask": [
       "Bash(node .harness/visible.mjs rollback:*)",
       "Edit(.harness/team.json)",
+      "Bash(node .harness/team.mjs auto-assign:*)",
       "Bash(node .harness/daemon.mjs --autonomous:*)",
       "Bash(node .harness/backlog.mjs import:*)",
       "Bash(node .harness/backlog.mjs ready:*)",

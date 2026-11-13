@@ -2,7 +2,7 @@
 /**
  * install.mjs — copy this harness into another project, without overwriting that project's files.
  *
- *   node install.mjs /path/to/your/project [--autonomous off]
+ *   node install.mjs /path/to/your/project [--autonomous off] [--no-auto-assign]
  *   node install.mjs --reset [/path/to/your/project] [--autonomous off]   (clean a "Use this template" copy)
  *
  * - .harness/ is copied (your existing memory, inbox and logs are kept if already there).
@@ -18,6 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const ARGS = process.argv.slice(2);
@@ -232,6 +233,17 @@ const giBlock = fs.existsSync(giSrc) ? fs.readFileSync(giSrc, 'utf8') : GITIGNOR
 const existing = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : '';
 if (!existing.includes('# agentic-harness runtime')) { fs.writeFileSync(gi, `${existing.replace(/\s*$/, '')}${existing ? '\n\n' : ''}${giBlock}`); report.push('updated .gitignore'); }
 
+// Smart engine routing: a freshly installed team.json gets each role routed to an AI CLI that is actually usable on
+// this machine (team.mjs auto-assign). A team.json the project already had is never touched. --no-auto-assign skips it.
+if (!ARGS.includes('--no-auto-assign') && report.some((r) => r.replaceAll('\\', '/').startsWith('wrote  .harness/team.json'))) {
+  const r = spawnSync(process.execPath, [path.join(target, '.harness', 'team.mjs'), 'auto-assign'], { cwd: target, encoding: 'utf8', env: { ...process.env, HARNESS_ROOT: target } });
+  const found = /Usable AI engines on this machine: (.*)/.exec(r.stdout || '');
+  const routed = r.status === 0 && /Wrote the "engine"/.test(r.stdout || '');
+  report.push(routed
+    ? `routed team roles to your engines (${found ? found[1] : '?'}); see them with  node .harness/team.mjs show`
+    : `! no usable AI engine found yet${found ? ` (${found[1]})` : ''}: team members use "auto". After you log in to one, run  node .harness/team.mjs auto-assign`);
+}
+
 // Autonomous mode ships ON (it only acts on READY tasks you add, and plans new ones only once the charter objectives
 // are filled in). `--autonomous off` writes a freshly installed charter with it switched off. A charter that already
 // existed in the project is never touched.
@@ -253,6 +265,7 @@ Done. Your project now has the agentic harness. The workflow:
   human -> controller (task, charter, backlog, team) -> orchestrator (your editor session) -> named agents -> verify -> report to you
 Next steps:
   1. Check it:        node .harness/doctor.mjs        (needs Node 18+ and one AI engine, e.g. Claude Code, logged in)
+                      several engines (claude, agy, codex, gemini)? see docs/MULTI-MODEL-SETUP.md in the harness repo, then  node .harness/team.mjs auto-assign
   2. Fill the charter: describe your project goals in .harness/charter.md ("Project objectives"); see the team with  node .harness/team.mjs show
   3. Prompt it:
        in Claude Code:  open the folder, accept the trust dialog once, restart the session so it loads the agents, then type

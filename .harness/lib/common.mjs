@@ -129,6 +129,35 @@ export function probeEngine(profile, { force = false } = {}) {
   return result;
 }
 
+/** Can this engine profile be used right now? { ok, why?, probe? } (installed + its configured flags pass the probe). */
+export function engineUsable(config, k) {
+  const p = config.profiles?.[k];
+  if (!p) return { ok: false, why: 'unknown engine' };
+  const probe = probeEngine(p);
+  if (!probe.installed) return { ok: false, why: `'${p.binary}' is not installed` };
+  if (!probe.compatible && !probe.checked) return { ok: false, why: `its flags could not be checked (${probe.error}) and the profile is not verified` };
+  if (!probe.compatible) return { ok: false, why: `'${p.binary} --help' does not list ${probe.missing.join(', ')}` };
+  return { ok: true, probe };
+}
+
+/** The real AI CLIs the team can be routed to (profile names in config.json). orca is left out on purpose: opt-in only. */
+export const ROUTABLE_ENGINES = ['claude', 'antigravity', 'codex', 'gemini'];
+
+/**
+ * Which routable engines are usable on this machine? Returns { usable: [names], skipped: [{ name, why }] }.
+ * HARNESS_ENGINES="claude,codex" overrides detection (for tests, or to route only to some engines).
+ */
+export function detectEngines(config, candidates = ROUTABLE_ENGINES) {
+  const known = candidates.filter((k) => config.profiles?.[k]);
+  if (process.env.HARNESS_ENGINES !== undefined) {
+    const want = process.env.HARNESS_ENGINES.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    return { usable: known.filter((k) => want.includes(k)), skipped: known.filter((k) => !want.includes(k)).map((name) => ({ name, why: 'not listed in HARNESS_ENGINES' })) };
+  }
+  const usable = []; const skipped = [];
+  for (const k of known) { const u = engineUsable(config, k); if (u.ok) usable.push(k); else skipped.push({ name: k, why: u.why }); }
+  return { usable, skipped };
+}
+
 /**
  * Resolve which engine profile to use.
  * Order: explicit name -> HARNESS_AGENT env -> config.activeProfile ("auto" by default).
@@ -139,15 +168,7 @@ export function probeEngine(profile, { force = false } = {}) {
 export function resolveProfile(config, requested, { allowFallback = true } = {}) {
   const want = String(requested || process.env.HARNESS_AGENT || config.activeProfile || 'auto').toLowerCase();
   const order = config.autoOrder || Object.keys(config.profiles);
-  const usable = (k) => {
-    const p = config.profiles[k];
-    if (!p) return { ok: false, why: 'unknown engine' };
-    const probe = probeEngine(p);
-    if (!probe.installed) return { ok: false, why: `'${p.binary}' is not installed` };
-    if (!probe.compatible && !probe.checked) return { ok: false, why: `its flags could not be checked (${probe.error}) and the profile is not verified` };
-    if (!probe.compatible) return { ok: false, why: `'${p.binary} --help' does not list ${probe.missing.join(', ')}` };
-    return { ok: true, probe };
-  };
+  const usable = (k) => engineUsable(config, k);
   const auto = () => {
     for (const k of order) if (usable(k).ok) return k;
     return null;

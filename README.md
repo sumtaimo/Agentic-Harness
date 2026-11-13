@@ -203,7 +203,8 @@ L1  orchestrator [PO_ARCHITECT]       plans only; read-only. Splits the goal bet
 └─ L2  lead-qa  [QA_AUDITOR]    owns tests/**  → plans its own workers
       └─ L3  workers (created by each lead, with the lead's role): they do the work, in parallel
 ```
-`node .harness/team.mjs show` prints it with every member's set-up (role, scope, tools, budget). Each member has its own set-up in that file.
+`node .harness/team.mjs show` prints it with every member's set-up (role, engine, scope, tools, budget). Each member has its own set-up in that file.
+Each member can run on its own AI engine (`"engine"` in `team.json`); `node .harness/team.mjs auto-assign` sets that from the engines you have installed ([`docs/MULTI-MODEL-SETUP.md`](docs/MULTI-MODEL-SETUP.md)).
 Run it with `node .harness/dispatch.mjs --goal "…" --hierarchy --max-cost 2` or `/harness:run` (say "use the team").
 
 What the controller enforces deterministically, so no agent can talk its way around it:
@@ -463,6 +464,11 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 | `codex` (OpenAI Codex CLI) | ⚠️ not verified here |
 
 Setup, subscription login and checks for Gemini and `agy`: [`docs/ENGINES.md`](docs/ENGINES.md).
+
+**Several engines? Route each role to the best one.** `node .harness/team.mjs auto-assign` detects which of
+`claude`, `agy`, `codex` and `gemini` work on your machine and writes an engine per team member (planning → agy/gemini,
+coding → claude, QA → codex). With one engine it gets every role. New installs do this automatically. Step-by-step login,
+connectivity checks and custom routing: [`docs/MULTI-MODEL-SETUP.md`](docs/MULTI-MODEL-SETUP.md).
 
 ## 7. Settings (`.harness/config.json`)
 

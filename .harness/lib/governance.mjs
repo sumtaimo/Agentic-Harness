@@ -270,7 +270,7 @@ export const globsOverlap = (a, b) => globProbes(a).some((p) => matchesAny(p, [b
  *  - lead scopes are pairwise disjoint, so teams can never collide on a file
  *  - budgets only shrink downwards (sum of lead cost caps <= orchestrator cap; lead minutes <= orchestrator minutes)
  */
-export function validateTeam(team, { roles = {}, charter = null, plannerMaxWorkers = 4 } = {}) {
+export function validateTeam(team, { roles = {}, charter = null, plannerMaxWorkers = 4, engines = null } = {}) {
   const errors = []; const warnings = [];
   if (!team || !Array.isArray(team.members)) return { errors: ['team.json must be an object with a "members" list'], warnings };
   const ids = new Set();
@@ -278,6 +278,7 @@ export function validateTeam(team, { roles = {}, charter = null, plannerMaxWorke
     if (!m || typeof m.id !== 'string' || !m.id) { errors.push('every member needs an "id"'); continue; }
     if (ids.has(m.id)) errors.push(`duplicate member id "${m.id}"`);
     ids.add(m.id);
+    if (m.engine !== undefined && (typeof m.engine !== 'string' || (engines && !engines.includes(m.engine)))) errors.push(`member "${m.id}": engine "${m.engine}" is not an engine in config.json profiles${engines ? ` (${engines.join(', ')})` : ''}`);
     if (!['orchestrator', 'lead'].includes(m.level)) errors.push(`member "${m.id}": level must be "orchestrator" or "lead" (workers are created by leads at run time)`);
   }
   const orchs = team.members.filter((m) => m.level === 'orchestrator');
@@ -328,8 +329,42 @@ export function describeMember(m, roles) {
   return {
     id: m.id, level: m.level, role: m.role, reportsTo: m.reports_to || null,
     scope: m.scope || [], maxWorkers: m.level === 'lead' ? (m.maxWorkers ?? 3) : null,
-    tools: r.allowedTools || [], budget: m.budget || {}, mission: r.mission || r.description || ''
+    tools: r.allowedTools || [], budget: m.budget || {}, mission: r.mission || r.description || '',
+    engine: m.engine || null
   };
+}
+
+// ───────────────────────────── engine routing (team.mjs auto-assign) ─────────────────────────────
+
+/** Which job each role does, for engine routing. Roles not listed here count as coding. */
+export const ROLE_JOB = { PO_ARCHITECT: 'plan', BA_ANALYST: 'plan', DEV_ENGINEER: 'code', QA_AUDITOR: 'qa' };
+
+/**
+ * Pick an engine for each job from the engines that are actually usable. Pure: no probing, no files.
+ *   3+ engines: planning/research → agy (antigravity) or gemini, coding → claude, QA/review → codex (else claude)
+ *   2 engines:  planning/research on one, coding AND QA on the other
+ *   1 engine:   that engine everywhere
+ *   0 engines:  null (nothing to assign; the harness falls back to "auto" at run time)
+ * Returns { plan, code, qa } (profile names) or null.
+ */
+export function planEngineRouting(available) {
+  const have = [...new Set((available || []).map((s) => String(s).toLowerCase()))];
+  if (!have.length) return null;
+  if (have.length === 1) return { plan: have[0], code: have[0], qa: have[0] };
+  const first = (prefs, pool = have) => prefs.find((k) => pool.includes(k)) || pool[0];
+  // Planning prefers a research engine; without one, give planning to the non-claude engine so claude can code.
+  const plan = first(['antigravity', 'gemini', 'codex', 'claude']);
+  const rest = have.filter((k) => k !== plan);
+  const code = first(['claude', 'codex', 'gemini', 'antigravity'], rest);
+  if (have.length === 2) return { plan, code, qa: code };
+  const qa = have.includes('codex') && code !== 'codex' ? 'codex' : have.includes('claude') ? 'claude' : code;
+  return { plan, code, qa };
+}
+
+/** Write routing.plan/code/qa onto the team members by role (returns a NEW team object; input untouched). */
+export function applyEngineRouting(team, routing) {
+  if (!routing) return team;
+  return { ...team, members: team.members.map((m) => ({ ...m, engine: routing[ROLE_JOB[String(m.role).toUpperCase()] || 'code'] })) };
 }
 
 /**

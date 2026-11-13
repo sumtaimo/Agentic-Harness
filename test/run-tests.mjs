@@ -39,6 +39,9 @@ function sandbox({ worktrees = false } = {}) {
   return dir;
 }
 
+// Engine auto-routing must not depend on the AI CLIs installed on the test machine: every install / auto-assign
+// in this suite sees "no usable engine" unless a test passes HARNESS_ENGINES itself.
+process.env.HARNESS_ENGINES = '';
 const env = { ...process.env, HARNESS_SILENT: '1', HARNESS_AGENT: '', HARNESS_LIVE: '0' };
 delete env.HARNESS_WORKER;
 const node = (dir, args, extraEnv = {}) => spawnSync(process.execPath, args, { cwd: dir, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 60000 });
@@ -1024,8 +1027,9 @@ await test('doctor: a valid setup reports 0 failures and 0 warnings; profile pla
   g('add', '-A'); g('commit', '-q', '-m', 'package.json');
   fs.cpSync(path.join(REPO, '.claude'), path.join(d, '.claude'), { recursive: true }); // an installed project has the editor agents
   const out = node(d, ['.harness/doctor.mjs']).stdout;
-  assert(/Failures: 0 · Warnings: 0 · Notes: 3/.test(out), out.split('\n').filter((l) => /^  [!✖ℹ]|Failures/.test(l)).join('\n'));
+  assert(/Failures: 0 · Warnings: 0 · Notes: 4/.test(out), out.split('\n').filter((l) => /^  [!✖ℹ]|Failures/.test(l)).join('\n'));
   assert(/ℹ memory\/profile\.md/.test(out) && /ℹ The background controller is not running/.test(out), 'the two notes are missing');
+  assert(/ℹ engine routing: none set, every member uses "auto"\. .*team\.mjs auto-assign/.test(out), 'the engine-routing note is missing');
   fs.writeFileSync(path.join(d, '.harness', 'config.json'), '{ broken');
   assert(node(d, ['.harness/doctor.mjs']).status !== 0 || true, 'doctor must not crash silently');
 });
@@ -1540,6 +1544,113 @@ await test('demo project (examples/make-demo.mjs): ready to try — harness inst
   assert(mk(notDemo, '--force').status === 1 && fs.readFileSync(path.join(notDemo, 'important.txt'), 'utf8') === 'keep me', '--force must never delete a folder that is not a demo');
   assert(mk(demo, '--force').status === 0 && !fs.existsSync(path.join(demo, 'src', 'slugify.js')) && json(path.join(demo, '.harness', 'backlog.json')).tasks[0].status === 'READY', '--force should recreate a clean demo');
   assert(mk(REPO).status === 1 && mk(path.join(REPO, 'inside-the-template')).status === 0 && (fs.rmSync(path.join(REPO, 'inside-the-template'), { recursive: true, force: true }), true), 'the demo may not overwrite the template itself');
+});
+
+// ───────────────────────────── smart engine routing (team.mjs auto-assign) ─────────────────────────────
+
+const teamOf = (d) => json(path.join(d, '.harness', 'team.json'));
+const engineOf = (d, id) => teamOf(d).members.find((m) => m.id === id).engine;
+
+await test('engine routing (pure): 0 → null, 1 → everywhere, 2 → planning vs coding+QA, 3 → planning / coding / QA', () => {
+  const r = gov.planEngineRouting;
+  assert(r([]) === null && r(null) === null, '0 engines must give null');
+  for (const one of ['claude', 'antigravity', 'codex', 'gemini']) assert(JSON.stringify(r([one])) === JSON.stringify({ plan: one, code: one, qa: one }), `1 engine ${one}: ${JSON.stringify(r([one]))}`);
+  const eq = (got, want, label) => assert(JSON.stringify(got) === JSON.stringify(want), `${label}: ${JSON.stringify(got)}`);
+  eq(r(['claude', 'antigravity']), { plan: 'antigravity', code: 'claude', qa: 'claude' }, 'agy + claude');
+  eq(r(['gemini', 'claude']), { plan: 'gemini', code: 'claude', qa: 'claude' }, 'gemini + claude');
+  eq(r(['claude', 'codex']), { plan: 'codex', code: 'claude', qa: 'claude' }, 'claude + codex (no research engine)');
+  eq(r(['claude', 'antigravity', 'codex']), { plan: 'antigravity', code: 'claude', qa: 'codex' }, 'agy + claude + codex');
+  eq(r(['gemini', 'claude', 'codex']), { plan: 'gemini', code: 'claude', qa: 'codex' }, 'gemini + claude + codex');
+  eq(r(['antigravity', 'claude', 'gemini']), { plan: 'antigravity', code: 'claude', qa: 'claude' }, 'agy + claude + gemini (no codex → QA on claude)');
+  eq(r(['claude', 'antigravity', 'codex', 'gemini']), { plan: 'antigravity', code: 'claude', qa: 'codex' }, 'all four');
+  const t = { members: [{ id: 'o', role: 'PO_ARCHITECT' }, { id: 'b', role: 'BA_ANALYST' }, { id: 'd', role: 'DEV_ENGINEER' }, { id: 'q', role: 'QA_AUDITOR' }, { id: 'x', role: 'CUSTOM' }] };
+  const applied = gov.applyEngineRouting(t, { plan: 'P', code: 'C', qa: 'Q' });
+  assert(applied.members.map((m) => m.engine).join() === 'P,P,C,Q,C' && t.members.every((m) => m.engine === undefined), `applyEngineRouting by role, input untouched: ${applied.members.map((m) => m.engine)}`);
+});
+
+await test('team.mjs auto-assign: 1, 2 and 3 engines route the real team.json by role; only "engine" changes; validate + Doctor accept it', () => {
+  const cases = [
+    ['claude', { orchestrator: 'claude', 'lead-ba': 'claude', 'lead-dev': 'claude', 'lead-qa': 'claude' }, /1 engine/],
+    ['antigravity,claude', { orchestrator: 'antigravity', 'lead-ba': 'antigravity', 'lead-dev': 'claude', 'lead-qa': 'claude' }, /2 engines/],
+    ['antigravity,claude,codex', { orchestrator: 'antigravity', 'lead-ba': 'antigravity', 'lead-dev': 'claude', 'lead-qa': 'codex' }, /3\+ engines/]
+  ];
+  for (const [engines, want, mode] of cases) {
+    const d = sandbox();
+    const before = teamOf(d);
+    const r = node(d, ['.harness/team.mjs', 'auto-assign'], { HARNESS_ENGINES: engines });
+    assert(r.status === 0 && mode.test(r.stdout) && /Wrote the "engine"/.test(r.stdout), `${engines}: ${r.stdout}${r.stderr}`);
+    const after = teamOf(d);
+    for (const [id, e] of Object.entries(want)) assert(engineOf(d, id) === e, `${engines}: ${id} got ${engineOf(d, id)}, want ${e}`);
+    const strip = (t) => JSON.stringify({ ...t, members: t.members.map(({ engine, ...m }) => m) });
+    assert(strip(after) === strip(before), `${engines}: something other than "engine" changed`);
+    assert(node(d, ['.harness/team.mjs', 'validate']).status === 0, `${engines}: routed team must validate`);
+    const show = node(d, ['.harness/team.mjs', 'show']).stdout;
+    assert(new RegExp(`lead-dev\\s+\\[DEV_ENGINEER\\]\\s+engine: ${want['lead-dev']}`).test(show), `${engines}: show lacks the engine:\n${show}`);
+    assert(/engine routing \(headless --hierarchy\): orchestrator→/.test(node(d, ['.harness/doctor.mjs']).stdout), `${engines}: doctor does not report the routing`);
+    const again = node(d, ['.harness/team.mjs', 'auto-assign'], { HARNESS_ENGINES: engines });
+    assert(/already has this routing; nothing changed/.test(again.stdout), `${engines}: second run should change nothing`);
+  }
+});
+
+await test('team.mjs auto-assign: --dry-run and 0 engines write nothing; an unknown engine in team.json is rejected', () => {
+  const d = sandbox();
+  const before = fs.readFileSync(path.join(d, '.harness', 'team.json'), 'utf8');
+  const dry = node(d, ['.harness/team.mjs', 'auto-assign', '--dry-run'], { HARNESS_ENGINES: 'antigravity,claude,codex' });
+  assert(dry.status === 0 && /--dry-run: team.json was not changed/.test(dry.stdout) && /lead-qa .*→ codex/.test(dry.stdout), dry.stdout);
+  const none = node(d, ['.harness/team.mjs', 'auto-assign'], { HARNESS_ENGINES: '' });
+  assert(none.status === 0 && /Usable AI engines on this machine: none/.test(none.stdout) && /was not changed/.test(none.stdout), none.stdout);
+  assert(fs.readFileSync(path.join(d, '.harness', 'team.json'), 'utf8') === before, 'team.json must be untouched');
+  const t = teamOf(d); t.members[1].engine = 'no-such-engine';
+  fs.writeFileSync(path.join(d, '.harness', 'team.json'), JSON.stringify(t));
+  const v = node(d, ['.harness/team.mjs', 'validate']);
+  assert(v.status === 1 && /engine "no-such-engine" is not an engine in config\.json profiles/.test(v.stdout), v.stdout);
+});
+
+await test('engine routing end to end: orchestrator, leads and workers each spawn their routed engine; --engine on the task overrides it', () => {
+  const d = sandbox();
+  const cfgFile = path.join(d, '.harness', 'config.json');
+  const cfg = json(cfgFile);
+  for (const k of ['mockplan', 'mockcode', 'mockqa']) cfg.profiles[k] = { ...cfg.profiles.mock };
+  fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2));
+  const t = teamOf(d);
+  const route = { PO_ARCHITECT: 'mockplan', BA_ANALYST: 'mockplan', DEV_ENGINEER: 'mockcode', QA_AUDITOR: 'mockqa' };
+  t.members = t.members.map((m) => ({ ...m, engine: route[m.role] }));
+  fs.writeFileSync(path.join(d, '.harness', 'team.json'), JSON.stringify(t, null, 2));
+  hierJob(d, 'routed', hierGoal(happyPlan()));
+  runOnce(d);
+  assert(stateOf(d).phase === '4_COMMITTED', `routed run: ${stateOf(d).phase} ${stateOf(d).lastGateStatus}`);
+  const spawned = {};
+  for (const e of log(d).filter((x) => x.phase === 'ENGINE_SPAWN')) { const m = /^Spawned (\S+) for (\S+)$/.exec(e.message); if (m) spawned[m[2]] = m[1]; }
+  const want = { orchestrator: 'mockplan', 'lead-ba': 'mockplan', 'lead-dev': 'mockcode', 'lead-qa': 'mockqa', 'lead-ba.spec': 'mockplan', 'lead-dev.impl': 'mockcode', 'lead-dev.util': 'mockcode', 'lead-qa.tests': 'mockqa' };
+  for (const [id, e] of Object.entries(want)) assert(spawned[id] === e, `${id} spawned ${spawned[id]}, want ${e} (${JSON.stringify(spawned)})`);
+  // an explicit engine on the task wins over the team routing
+  const d2 = sandbox();
+  fs.writeFileSync(path.join(d2, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
+  fs.writeFileSync(path.join(d2, '.harness', 'team.json'), JSON.stringify(t, null, 2));
+  hierJob(d2, 'forced', hierGoal(happyPlan()), { engine: 'mock' });
+  runOnce(d2);
+  const used = new Set(log(d2).filter((x) => x.phase === 'ENGINE_SPAWN').map((x) => x.engine));
+  assert(stateOf(d2).phase === '4_COMMITTED' && used.size === 1 && used.has('mock'), `override: ${[...used]}`);
+});
+
+await test('install: a fresh team.json is auto-routed to the detected engines; an existing team.json and --no-auto-assign are left alone', () => {
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-route-'));
+  const r = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), fresh], { encoding: 'utf8', env: { ...process.env, HARNESS_ENGINES: 'antigravity,claude' } });
+  assert(r.status === 0 && /routed team roles to your engines \(claude, antigravity \(agy\)\)/.test(r.stdout), r.stdout + r.stderr);
+  assert(engineOf(fresh, 'lead-ba') === 'antigravity' && engineOf(fresh, 'lead-dev') === 'claude' && engineOf(fresh, 'lead-qa') === 'claude', JSON.stringify(teamOf(fresh).members.map((m) => m.engine)));
+  const skip = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-route-skip-'));
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), skip, '--no-auto-assign'], { encoding: 'utf8', env: { ...process.env, HARNESS_ENGINES: 'claude' } });
+  assert(teamOf(skip).members.every((m) => m.engine === undefined), '--no-auto-assign must not route');
+  const none = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-route-none-'));
+  const rn = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), none], { encoding: 'utf8', env: { ...process.env, HARNESS_ENGINES: '' } });
+  assert(/no usable AI engine found yet/.test(rn.stdout) && teamOf(none).members.every((m) => m.engine === undefined), rn.stdout);
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-route-own-'));
+  fs.mkdirSync(path.join(own, '.harness'), { recursive: true });
+  const mine = JSON.stringify({ ...json(path.join(REPO, '.harness', 'team.json')), description: 'my own team' }, null, 2);
+  fs.writeFileSync(path.join(own, '.harness', 'team.json'), mine);
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), own], { encoding: 'utf8', env: { ...process.env, HARNESS_ENGINES: 'claude' } });
+  assert(fs.readFileSync(path.join(own, '.harness', 'team.json'), 'utf8') === mine, 'an existing team.json must never be re-routed');
+  for (const p of [fresh, skip, none, own]) fs.rmSync(p, { recursive: true, force: true });
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

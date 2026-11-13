@@ -11,7 +11,7 @@ Engine profiles live in `.harness/config.json` under `profiles`: `gemini`, `anti
 
 - `activeProfile` is `auto`. You can also pick one per job with `--engine <name>`
   (`node .harness/dispatch.mjs ... --engine gemini`) or the `HARNESS_AGENT` environment variable.
-- `auto` walks `autoOrder`: `gemini`, `antigravity`, `claude`, `orca`, `codex`.
+- `auto` walks `autoOrder`: `gemini`, `antigravity`, `claude`, `codex` (`orca` has a profile but is not in `autoOrder`; opt in with `--engine orca`).
 - It picks the **first** engine that is installed (its `binary` is on your `PATH`) **and** whose
   configured flags all appear in the output of `<binary> --help`.
 - The logic is in `.harness/lib/common.mjs` (`probeEngine`, `resolveProfile`).
