@@ -34,6 +34,50 @@ Open the folder in Claude Code, accept the trust dialog, restart the session, th
 - **To use a skill yourself:** run `node src/factory/install.mjs <skill-name>`, then restart the session.
 - **After every new skill:** rebuild the site with `node src/site/build.mjs`; pushing to `main` publishes it.
 
+## Skill ideas for the factory
+
+`figure-craft` is only the first skill. The factory (with `skill-smith`) can make any kind:
+
+| Group | Skill | What it does |
+|---|---|---|
+| UX | `ux-flow` | one line → a full user flow with every state (loading, empty, error, success) |
+| | `ux-audit` | review a page against 10 heuristics, findings with priority |
+| | `ux-copy` | short, clear, consistent UI text (buttons, errors, empty states) |
+| UI | `ui-polish` | a final pixel pass: spacing, colour, radius, dark mode, phone |
+| | `design-tokens` | colour, type and spacing tokens from a brand, light and dark |
+| | `component-spec` | one component → variants, states, accessibility, props |
+| | `figure-craft` | explanatory isometric figures (the first skill) |
+| PO / BA | `spec-writer` | feature request → spec with acceptance criteria |
+| | `story-split` | a large epic → small, buildable user stories |
+| | `impact-check` | one change → what else it could break |
+| QA | `test-cases` | spec → test cases (happy path, edge, negative) |
+| | `bug-report` | a vague report → steps, expected, actual |
+| | `a11y-check` | contrast, keyboard and ARIA review |
+| Docs | `handoff-doc` | a design → a developer handoff document |
+| | `release-notes` | git log → release notes for users |
+
+### Suggested order
+
+`spec-writer` → `test-cases` → `ux-flow` → `ui-polish` → `component-spec` → `ux-audit` → `bug-report` → `handoff-doc`.
+Each one uses what the one before it produces, so together they form a PO → QA → UX → UI chain.
+
+### For each new skill (repeat)
+
+1. Pick ONE skill.
+2. Type one line, with your own real rules in it:
+   `Use src/skills/skill-smith to create the skill spec-writer: turn a feature request into a short spec with acceptance criteria (Given/When/Then), edge cases and open questions.`
+3. Wait for PASSED, then review it yourself with `docs/factory/REVIEW.md`.
+4. Install it and try it on real work: `node src/factory/install.mjs spec-writer`.
+5. When it is good, set its status to `ready` in `src/factory/registry.json` and rebuild the site: `node src/site/build.mjs`.
+6. Commit and push: the skill appears on the site, ready to download.
+
+### Tips
+
+- One skill, one job.
+- Put your real rules in the one-line request; a skill is only as good as its rules.
+- Try it on 1–2 real tasks before calling it ready, and teach the mistakes back into the skill.
+- Three excellent skills beat ten average ones.
+
 ## More skills later
 
 One line is enough:
