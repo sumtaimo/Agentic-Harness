@@ -36,7 +36,12 @@ console.log('\nAI engines — installed? and does "<engine> --help" list every f
 for (const [name, p] of Object.entries(config.profiles)) {
   const probe = probeEngine(p, { force: true });
   const flags = profileFlags(p);
-  if (!probe.installed) { console.log(`  · ${name.padEnd(12)} not installed`); continue; }
+  const preferred = name === config.activeProfile || (config.activeProfile === 'auto' && (config.autoOrder || [])[0] === name);
+  if (!probe.installed) {
+    if (preferred) warn(`${name.padEnd(12)} not installed, but it is your first-choice engine (${config.activeProfile === 'auto' ? 'first in "autoOrder"' : '"activeProfile"'}) → another engine will be used. Install '${p.binary}' or change config.json.`);
+    else console.log(`  · ${name.padEnd(12)} not installed`);
+    continue;
+  }
   if (!probe.checked && !flags.length) { ok(`${name.padEnd(12)} ${probe.binPath} — no command-line flags to check`); continue; }
   if (!probe.checked) { warn(`${name.padEnd(12)} ${probe.binPath} — flags not checked (${probe.error})`); continue; }
   if (probe.compatible) ok(`${name.padEnd(12)} ${probe.binPath} — all ${flags.length} flag(s) found: ${flags.join(' ')}`);

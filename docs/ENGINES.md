@@ -55,16 +55,17 @@ succeeds. Today only `claude` is `"verified": true`.
 
 | Profile | Configured now | Status |
 |---|---|---|
-| `gemini` | binary `gemini`, args `--yolo`, prompt on stdin | unverified |
-| `antigravity` | binary `antigravity`, args `--headless --json`, prompt on stdin | unverified |
+| `gemini` | binary `gemini`, args `--approval-mode yolo -p ""`, prompt on stdin | unverified |
+| `antigravity` | binary `agy`, args `-p <prompt>` (prompt as an argument), no auto-approve | unverified |
 
-Open (not confirmed, do not rely on them):
+Decided by the owner: the Antigravity command is `agy`; Gemini may auto-approve every tool call
+(`--approval-mode yolo`) in this project. `agy` has no auto-approve flag on purpose.
 
-- Is the Antigravity terminal command `agy` or `antigravity`? Confirm with `agy --help` /
-  `antigravity --help`.
-- The current Gemini headless flags. Some sources suggest `-p` and `--approval-mode`; confirm
-  with `gemini --help`.
-- `--yolo` auto-approves every tool call. Only use it in a project you trust.
+Still to confirm on a real machine (the probe rejects the engine and falls back if a flag is wrong):
+
+- `gemini --help` lists `-p` and `--approval-mode`.
+- `agy --help` lists `-p`, and which flag (if any) `agy` uses for approvals.
+- `doctor` warns when your first-choice engine (first in `autoOrder`) is not installed.
 
 To fix a profile: run `<binary> --help`, propose the change to the owner, then edit
 `.harness/config.json` and run doctor again.

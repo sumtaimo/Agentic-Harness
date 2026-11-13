@@ -97,13 +97,13 @@
     },
     "antigravity": {
       "verified": false,
-      "note": "UNVERIFIED: flags from the original spec. 'Harness: Doctor' runs 'antigravity --help' and checks every flag below; if any is missing the harness falls back to 'auto'. Prompt goes on stdin; set promptVia to 'arg' (+ '{prompt}' in args) or 'after--' if the real CLI needs it.",
-      "binary": "antigravity",
+      "note": "UNVERIFIED (confirm with 'agy --help'). The Antigravity terminal agent is 'agy'; '-p <prompt>' runs one prompt headless and exits. No auto-approve flag on purpose (the owner approved auto-approve for Gemini only); add agy's approval flag here once confirmed from its --help.",
+      "binary": "agy",
       "args": [
-        "--headless",
-        "--json"
+        "-p",
+        "{prompt}"
       ],
-      "promptVia": "stdin",
+      "promptVia": "arg",
       "allowedTools": [
         "Read",
         "Edit",
@@ -131,10 +131,13 @@
     },
     "gemini": {
       "verified": false,
-      "note": "UNVERIFIED here (not installed on the test machine). Gemini CLI reads a piped prompt non-interactively; --yolo auto-approves every tool, so only use it in a project you trust.",
+      "note": "UNVERIFIED (confirm with 'gemini --help'). Headless: '-p' with the prompt piped on stdin (stdin is appended to the -p text). '--approval-mode yolo' (replaces the deprecated --yolo) auto-approves every tool; the owner approved this for this project.",
       "binary": "gemini",
       "args": [
-        "--yolo"
+        "--approval-mode",
+        "yolo",
+        "-p",
+        ""
       ],
       "promptVia": "stdin",
       "instructionFile": "GEMINI.md",

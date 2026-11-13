@@ -49,15 +49,18 @@ after(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
+const GEMINI_HELP = `printf '%s\\n' 'Usage: gemini [options]' '  -p, --prompt         Prompt; runs non-interactively' '  --approval-mode      default | auto_edit | yolo' '  -h, --help           Show help'`;
+const AGY_HELP = `printf '%s\\n' 'Usage: agy [options]' '  -p, --prompt <text>  Run one prompt headless and exit' '  -h, --help           Show help'`;
+
 test('profileFlags extracts dash flags from args', () => {
   assert.deepEqual(profileFlags({ args: ['--yolo', 'sub', '--', '--x={p}'] }), ['--yolo']);
-  assert.deepEqual(profileFlags(profiles.antigravity).sort(), ['--headless', '--json']);
+  assert.deepEqual(profileFlags(profiles.gemini).sort(), ['--approval-mode', '-p']);
+  assert.deepEqual(profileFlags(profiles.antigravity), ['-p']);
+  assert.equal(profiles.antigravity.binary, 'agy');
 });
 
-test('fake gemini listing -y, --yolo is compatible and auto picks it', () => {
-  useBin('gemini-ok', {
-    gemini: `printf '%s\\n' 'Usage: gemini [options]' '  -y, --yolo   Auto-approve all actions' '  -h, --help   Show help'`,
-  });
+test('fake gemini listing -p and --approval-mode is compatible and auto picks it', () => {
+  useBin('gemini-ok', { gemini: GEMINI_HELP });
   const probe = probeEngine(profiles.gemini, { force: true });
   assert.equal(probe.installed, true);
   assert.equal(probe.checked, true);
@@ -66,23 +69,34 @@ test('fake gemini listing -y, --yolo is compatible and auto picks it', () => {
   assert.equal(resolveProfile(config).name, 'gemini');
 });
 
-test('fake antigravity with VS Code style help is incompatible and falls back', () => {
-  useBin('ag-vscode', {
-    gemini: `printf '%s\\n' '  -y, --yolo   Auto-approve'`,
-    antigravity: `printf '%s\\n' 'Visual Studio Code' 'Usage: antigravity [options] [paths...]' '  -d --diff <file> <file>  Compare two files' '  -h --help   Print usage'`,
-  });
+test('an old gemini that only lists --yolo is incompatible and auto falls through to agy', () => {
+  useBin('gemini-old', { gemini: `printf '%s\\n' '  -y, --yolo   Auto-approve'`, agy: AGY_HELP });
+  const probe = probeEngine(profiles.gemini, { force: true });
+  assert.equal(probe.compatible, false);
+  assert.deepEqual([...probe.missing].sort(), ['--approval-mode', '-p']);
+  assert.equal(resolveProfile(config).name, 'antigravity');
+});
+
+test('fake agy listing -p is compatible', () => {
+  useBin('agy-ok', { agy: AGY_HELP });
   const probe = probeEngine(profiles.antigravity, { force: true });
   assert.equal(probe.installed, true);
-  assert.equal(probe.checked, true);
+  assert.equal(probe.compatible, true);
+  assert.equal(resolveProfile(config, 'antigravity').name, 'antigravity');
+});
+
+test('agy whose help lacks -p is incompatible and falls back to gemini', () => {
+  useBin('agy-bad', { gemini: GEMINI_HELP, agy: `printf '%s\\n' 'Usage: agy [options] [paths...]' '  -n --new-window   Open a new window'` });
+  const probe = probeEngine(profiles.antigravity, { force: true });
   assert.equal(probe.compatible, false);
-  assert.deepEqual([...probe.missing].sort(), ['--headless', '--json']);
+  assert.deepEqual(probe.missing, ['-p']);
   const r = resolveProfile(config, 'antigravity');
   assert.equal(r.fallbackFrom, 'antigravity');
   assert.equal(r.name, 'gemini');
-  assert.match(r.fallbackReason, /--headless/);
+  assert.match(r.fallbackReason, /-p/);
 });
 
-test('no gemini or antigravity on PATH gives installed=false', () => {
+test('no gemini or agy on PATH gives installed=false', () => {
   useBin('none', {});
   for (const p of [profiles.gemini, profiles.antigravity]) {
     const probe = probeEngine(p, { force: true });
