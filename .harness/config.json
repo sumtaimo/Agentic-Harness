@@ -97,13 +97,13 @@
     },
     "antigravity": {
       "verified": false,
-      "note": "UNVERIFIED (confirm with 'agy --help'). The Antigravity terminal agent is 'agy'; '-p <prompt>' runs one prompt headless and exits. No auto-approve flag on purpose (the owner approved auto-approve for Gemini only); add agy's approval flag here once confirmed from its --help.",
+      "note": "UNVERIFIED (confirm with 'agy --help'). The Antigravity terminal agent is 'agy'; '-p \"\"' runs headless with the prompt piped on stdin (avoids argument length limits and Windows newline quoting). Unconfirmed that agy appends stdin to an empty -p; if not, set promptVia to 'arg' and args to ['-p','{prompt}']. No auto-approve flag on purpose (the owner approved auto-approve for Gemini only).",
       "binary": "agy",
       "args": [
         "-p",
-        "{prompt}"
+        ""
       ],
-      "promptVia": "arg",
+      "promptVia": "stdin",
       "allowedTools": [
         "Read",
         "Edit",

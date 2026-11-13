@@ -57,6 +57,8 @@ test('profileFlags extracts dash flags from args', () => {
   assert.deepEqual(profileFlags(profiles.gemini).sort(), ['--approval-mode', '-p']);
   assert.deepEqual(profileFlags(profiles.antigravity), ['-p']);
   assert.equal(profiles.antigravity.binary, 'agy');
+  assert.equal(profiles.antigravity.promptVia, 'stdin');
+  assert.deepEqual(profiles.antigravity.args, ['-p', '']);
 });
 
 test('fake gemini listing -p and --approval-mode is compatible and auto picks it', () => {

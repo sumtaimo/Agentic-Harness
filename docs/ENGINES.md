@@ -56,7 +56,7 @@ succeeds. Today only `claude` is `"verified": true`.
 | Profile | Configured now | Status |
 |---|---|---|
 | `gemini` | binary `gemini`, args `--approval-mode yolo -p ""`, prompt on stdin | unverified |
-| `antigravity` | binary `agy`, args `-p <prompt>` (prompt as an argument), no auto-approve | unverified |
+| `antigravity` | binary `agy`, args `-p ""`, prompt on stdin, no auto-approve | unverified |
 
 Decided by the owner: the Antigravity command is `agy`; Gemini may auto-approve every tool call
 (`--approval-mode yolo`) in this project. `agy` has no auto-approve flag on purpose.
@@ -64,7 +64,7 @@ Decided by the owner: the Antigravity command is `agy`; Gemini may auto-approve 
 Still to confirm on a real machine (the probe rejects the engine and falls back if a flag is wrong):
 
 - `gemini --help` lists `-p` and `--approval-mode`.
-- `agy --help` lists `-p`, and which flag (if any) `agy` uses for approvals.
+- `agy --help` lists `-p`, that `agy` reads the prompt from stdin when `-p` is empty, and which flag (if any) it uses for approvals.
 - `doctor` warns when your first-choice engine (first in `autoOrder`) is not installed.
 
 To fix a profile: run `<binary> --help`, propose the change to the owner, then edit
