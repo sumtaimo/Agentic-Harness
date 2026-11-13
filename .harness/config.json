@@ -7,10 +7,10 @@
   "autoGitCommit": false,
   "activeProfile": "auto",
   "autoOrder": [
-    "claude",
-    "antigravity",
-    "orca",
     "gemini",
+    "antigravity",
+    "claude",
+    "orca",
     "codex"
   ],
   "defaultVerifyCmd": "node -e \"process.exit(0)\"",
