@@ -20,6 +20,9 @@ function sandbox({ worktrees = false } = {}) {
     recursive: true,
     filter: (src) => !/(state\.json|telemetry\.log|daemon\.pid)$/.test(src) && !/[\\/](inbox|completed|failed|sessions)[\\/][^.]/.test(src)
   });
+  // Isolate from any live harness run in the repo: clean backlog, no active visible-run state.
+  fs.rmSync(path.join(dir, '.harness', 'visible'), { recursive: true, force: true });
+  fs.writeFileSync(path.join(dir, '.harness', 'backlog.json'), JSON.stringify({ version: '2.0.0', project: '', maxAutoTasksPerRun: 3, tasks: [] }, null, 2));
   const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.harness', 'config.json'), 'utf8'));
   cfg.profiles.mock = { verified: true, binary: process.execPath, args: [MOCK, 'ALLOWED={allowedTools}', 'DENIED={disallowedTools}'], promptVia: 'stdin', allowedTools: [] };
   cfg.activeProfile = 'mock';

@@ -2,5 +2,41 @@
   "version": "2.0.0",
   "project": "",
   "maxAutoTasksPerRun": 3,
-  "tasks": []
+  "tasks": [
+    {
+      "id": "B-20261113020309-4cu",
+      "title": "Test the engine probe with Gemini and Antigravity profile shapes",
+      "goal": "Create test/engine-probe.test.mjs using node:test. Import probeEngine, profileFlags and resolveProfile from ../.harness/lib/common.mjs. Set process.env.HARNESS_ROOT to a fresh temp directory BEFORE importing so the probe cache never touches the repo, and put fake executable shell scripts on PATH. Cases: (1) fake 'gemini' whose --help lists '-y, --yolo' -> compatible, auto picks gemini when it is first in autoOrder; (2) fake 'antigravity' with VS Code style help (no --headless/--json) -> compatible=false, missing lists both flags, resolveProfile('antigravity') falls back with fallbackFrom='antigravity'; (3) no gemini or antigravity on PATH -> installed=false; (4) help text that prints nothing -> checked=false and treated as compatible. Build the config object inline from .harness/config.json profiles (read the JSON). Do not edit anything under .harness/. Use only the Node standard library. ALSO (approved by the human): in test/run-tests.mjs change ONLY the helper sandbox(): keep every static .harness/ config and template file in the sandbox copy, but reset the copied .harness/backlog.json to the clean empty shipped state {\"version\":\"2.0.0\",\"project\":\"\",\"maxAutoTasksPerRun\":3,\"tasks\":[]} and exclude or remove the copied active run state (.harness/visible/), so npm test passes while a real harness run is open. Do not change any test case, other helper, package.json or anything under .harness/.",
+      "priority": 5,
+      "status": "DONE",
+      "source": "human",
+      "createdAt": "2026-11-13T02:03:09.915Z",
+      "targetFiles": [
+        "test/engine-probe.test.mjs",
+        "test/run-tests.mjs"
+      ],
+      "role": "QA_AUDITOR",
+      "verifyCmd": "node --test test/engine-probe.test.mjs && npm test",
+      "startedAt": "2026-11-13T02:19:37.859Z",
+      "visibleRun": "V-20261113021937-cvq",
+      "updatedAt": "2026-11-13T02:22:29.114Z",
+      "completedAt": "2026-11-13T02:22:29.114Z",
+      "result": "VERIFIED",
+      "cyclesUsed": 1
+    },
+    {
+      "id": "B-20261113020309-oy3",
+      "title": "Write docs/ENGINES.md: running Gemini and Antigravity with a subscription",
+      "goal": "Create docs/ENGINES.md for a developer who uses Gemini and Antigravity and a subscription-only, no-API-key policy. Sections: which engines exist and how autoOrder picks one (first installed engine whose flags pass '<binary> --help'); log in with the subscription (Gemini: run 'gemini' and choose Login with Google; no GEMINI_API_KEY or ANTHROPIC_API_KEY in the environment); check with 'node .harness/doctor.mjs'; what ENGINE_FALLBACK in .harness/telemetry.log means; cloud sessions cannot do browser login so they use Claude Code; engine profiles in config.json are marked verified false until a real run succeeds. Only mention scripts and paths that exist in this repo. Plain English, short. Do not edit anything under .harness/.",
+      "priority": 5,
+      "status": "READY",
+      "source": "human",
+      "createdAt": "2026-11-13T02:03:09.957Z",
+      "targetFiles": [
+        "docs/ENGINES.md"
+      ],
+      "role": "BA_ANALYST",
+      "verifyCmd": "npm test"
+    }
+  ]
 }
