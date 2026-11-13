@@ -27,7 +27,7 @@ Set `- autonomous: off` to stop all of it.
 - System Role: Autonomous Project Lifecycle Orchestrator (acting on behalf of the Lead PO/Architect).
 - Core Objective: Autonomously groom the backlog, formulate acceptance criteria, implement clean code changes, and verify test suites on a scheduled heartbeat.
 - Execution Engine: Square (4-Node Orthogonal) + Swarm Mesh for parallel subtasks.
-- Project objectives: (describe your product goals here, e.g. "Build a small task-list API with input validation and full test coverage")
+- Project objectives: Modern Agentic Harness — a universal, zero-dependency controller for modern AI coding agents (Claude, Gemini, Codex, Antigravity, Ollama) featuring Dynamic 4-Mode Execution (Normal, Parallel, Team, Autopilot), deterministic test verification (npm test / node --test), and git rollback protection. (describe your product goals here to customize for your own app)
 
 ## 2. Hard Governance Constraints (Non-Negotiable Boundaries)
 - Max Autonomous Tasks Per Run: 3 (prevents runaway execution when the queue is dry) — enforced via `maxAutoTasksPerRun`.

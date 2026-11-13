@@ -14,6 +14,20 @@ only point here.
 
 ---
 
+## Core Architecture Mandate: Lightweight Native Harness (Modern Standard)
+
+Every AI agent working in or extending this repository MUST follow the **Lightweight Native Harness** philosophy:
+1. **No bloated legacy frameworks:** Never introduce heavy, outdated agent frameworks or dependencies (e.g. CrewAI, AutoGPT, LangChain wrappers). This template is strictly **zero-dependency Node.js standard library**, CLI/stdio-based, and model-independent.
+2. **Dynamic 4-Mode Execution (Right-Sizing):**
+   - **Normal / Direct Mode** (`npm run run`): Default for 1–2 files or bug fixes. 1 worker, no planner overhead, ~80% token savings.
+   - **Parallel Swarm Mode** (`--mode parallel`): Concurrent isolated builders with disjoint target files.
+   - **Team Hierarchy Mode** (`--mode team`): Orchestrator → Leads (BA, DEV, QA) → Workers for multi-layer features.
+   - **Autopilot Mode** (`npm run auto`): Background backlog execution strictly isolated on the `uat` branch.
+3. **Deterministic Verification over Hallucination:** Work is never finished because an AI "says so". It is accepted only when the real test suite (`npm test`, `node --test`) passes. On failure, staging/git automatically restores files.
+4. **Future-Proof & Flexible:** Keep all interfaces, skills (`.harness/skills/`), MCP presets (`.harness/mcp.json`), and SDK (`.harness/sdk.mjs`) modular so developers adopting this template can plug in any LLM (Claude, Gemini, Codex, Antigravity, Ollama).
+
+---
+
 ## 0. Are you a harness worker?
 
 If your prompt starts with `[HARNESS WORKER ID: …]`, `[HARNESS PLANNER]` or
@@ -82,9 +96,15 @@ If you are one of the named agents (`lead-…`): change only the files in your a
 
 The sections below describe the headless controller (background / terminal / unattended runs).
 
-**One worker** (most tasks):
+**One worker (Normal / Direct mode — fastest, fewest tokens):**
 ```bash
-node .harness/dispatch.mjs --goal "<clear instructions>" --files "path/a,path/b" --check "<command that exits 0 only when the work is right>" --wait
+npm run run -- --goal "<clear instructions>" --files "path/a,path/b" --check "<command>"
+# or: node .harness/dispatch.mjs --goal "…" --mode normal --files "path/a,path/b" --wait
+```
+
+**Autopilot mode (automated backlog loop on 'uat' branch):**
+```bash
+npm run auto
 ```
 
 **AI planner** (let an AI split the goal into parallel workers with separate files; add
