@@ -19,6 +19,7 @@ function playbooks(t: Dict): Playbook[] {
       steps: [
         { title: p.new.s1.title, body: R(p.new.s1.body), cmds: [{ cmd: 'git init && git commit --allow-empty -m "init"' }] },
         { title: p.new.s2.title, body: R(p.new.s2.body), cmds: [{ cmd: INSTALL_CMD, comment: p.new.s2.c1 }] },
+        { title: p.new.sReset.title, body: R(p.new.sReset.body), cmds: [{ cmd: 'node install.mjs --reset', comment: p.new.sReset.c1 }] },
         { title: p.new.s3.title, body: R(p.new.s3.body), cmds: [{ cmd: 'node .harness/doctor.mjs' }] },
         { title: p.new.s4.title, body: R(p.new.s4.body) },
         { title: p.new.s5.title, body: R(p.new.s5.body), cmds: [{ cmd: '/harness:team', prompt: '›' }, { cmd: '/harness:run Add a /health endpoint with tests', prompt: '›' }] },
