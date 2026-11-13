@@ -156,6 +156,13 @@ test('a fresh install has Gemini auto-approve OFF; an existing config and the ow
   assert.deepEqual(profiles.gemini.args, ['--approval-mode', 'yolo', '-p', ''], 'the owner repo keeps its own choice');
 });
 
+test('the installer\'s embedded .gitignore copy (used by npx installs) matches .gitignore', () => {
+  const src = fs.readFileSync(path.join(here, '..', 'install.mjs'), 'utf8');
+  const m = src.match(/^const GITIGNORE_BLOCK = (".*");$/m);
+  assert.ok(m, 'GITIGNORE_BLOCK not found in install.mjs');
+  assert.equal(JSON.parse(m[1]), fs.readFileSync(path.join(here, '..', '.gitignore'), 'utf8'), 'update GITIGNORE_BLOCK in install.mjs after editing .gitignore');
+});
+
 test('winQuote keeps an empty argument on Windows and quotes special characters', async () => {
   const { winQuote } = await import('../.harness/lib/common.mjs');
   assert.equal(winQuote(''), '""');

@@ -6,6 +6,47 @@ changes if they fail**, keeps a **memory** of how you like to work, and can **wo
 backlog on its own** as a governed "act as me" controller with PO / BA / DEV / QA roles.
 You can use it without being able to code.
 
+## Quick Install (1-Minute Setup)
+
+You need **Node.js 18+** and **git**. The harness has no packages to install.
+
+**Option A: a brand-new repo (GitHub "Use this template")**
+
+1. On this repo's GitHub page, click **Use this template** → **Create a new repository**.
+2. Clone your new repo.
+3. A template copy is an exact copy of this repo, including its owner's settings. Reset them before you start:
+   - `.harness/memory/profile.md`: replace the answers with your own (or tell your AI "Read AGENTS.md and fill in my profile").
+   - `.harness/memory/lessons.md`: remove rules you don't want, with `node .harness/memory.mjs forget L1`.
+   - `.harness/charter.md`: write your own "Project objectives" and choose `- autonomous: on` or `off`.
+
+   For a clean start with none of this, use Option B in an empty repo instead.
+
+**Option B: add it to an existing (or empty) repo, in one line**
+
+Run this inside your project folder:
+
+```bash
+npx github:sumtaimo/Agentic-Harness .
+```
+
+Autonomous mode is **on** by default (it only runs READY tasks you add). To install with it **off**:
+
+```bash
+npx github:sumtaimo/Agentic-Harness . --autonomous off
+```
+
+The installer never overwrites your files and is safe to re-run. A new project gets a blank profile, no taught
+rules, an empty backlog, placeholder charter objectives, and Gemini auto-approve **off**.
+
+**Check the install**
+
+```bash
+node .harness/doctor.mjs
+```
+
+Then log in to the AI CLIs you use (`claude`, `gemini`, `agy`, `codex`) and run doctor again. See
+[`docs/ENGINES.md`](docs/ENGINES.md).
+
 ```
  you ──► "New task" ──► 1 PLANNER ──► 2 EXECUTOR (1 or many AI workers) ──► 3 VERIFIER ──pass──► 4 COMMITTED
           (goal)        (AI can split          ▲                                │
