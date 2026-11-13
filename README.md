@@ -398,7 +398,8 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
   `"after--"` are available if a CLI needs them.
 - **Flag probe:** before an engine is used, the harness runs `<engine> --help` (or
   `<engine> <subcommand> --help`) once and checks every configured flag is listed. The result is
-  cached in `.harness/engine-probe.json`.
+  cached in `.harness/engine-probe.json`. If `--help` prints nothing, only a profile marked
+  `"verified": true` is trusted; an unverified one is not used.
 - **Graceful fallback:** if the engine you asked for is not installed or fails the probe, the
   harness uses `auto` instead (the first engine in `"autoOrder"` that is installed and passes),
   and shows/logs why (`ENGINE_FALLBACK`). It stops only if no engine is usable at all.
@@ -406,10 +407,12 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 | Engine | Status |
 |---|---|
 | `claude` (Claude Code) | ✅ verified end-to-end, including the AI planner and two parallel workers |
-| `antigravity` | ⚠️ flags from the original spec, **not verified**; Doctor's probe will tell you |
+| `antigravity` (`agy`) | ⚠️ not verified here: `agy -p ""`, prompt on stdin, no auto-approve |
 | `orca` | ⚠️ flags from the original spec, **not verified**; Doctor's probe will tell you |
-| `gemini` (Gemini CLI) | ⚠️ not verified here (uses `--yolo`, which auto-approves everything) |
+| `gemini` (Gemini CLI) | ⚠️ not verified here: `--approval-mode yolo -p ""` (auto-approves every tool), prompt on stdin |
 | `codex` (OpenAI Codex CLI) | ⚠️ not verified here |
+
+Setup, subscription login and checks for Gemini and `agy`: [`docs/ENGINES.md`](docs/ENGINES.md).
 
 ## 7. Settings (`.harness/config.json`)
 
