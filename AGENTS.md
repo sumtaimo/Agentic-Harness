@@ -211,7 +211,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 
 - `charter.md` — the user's rules for autonomous work. The bullets in its section 0 are
   machine-read (`autonomous: on|off`, `maxAutoTasksPerRun`, `allowedPaths`, `forbiddenPaths`,
-  `forbiddenTools`, `requireRealCheck`). **Autonomous mode ships ON (the owner's decision).** Never
+  `forbiddenTools`, `requireRealCheck`). **New installs ship with autonomous mode ON (the owner's decision); this template repository itself keeps it `off` so nothing runs on the template by accident.** Never
   change the charter or widen these limits yourself: only the user does (to stop autonomy they set
   `- autonomous: off`). To replace the charter, use the import command below.
 - `backlog.json` — tasks with status `BACKLOG → READY → IN_PROGRESS → DONE | BLOCKED`.
