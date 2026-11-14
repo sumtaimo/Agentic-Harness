@@ -23,7 +23,7 @@ architecture planning gets `high`, and a failed check escalates one tier. The ti
 
 - Aliases only, never pinned versions. `claude` uses `haiku`, `sonnet` and `opus`, which Claude Code resolves to the newest release.
 - `null` means no `--model` flag, so the CLI uses its own newest default. This is the setting for `codex` today.
-- `agy` has no aliases, so Antigravity uses exact IDs from `agy models`: `fast` = `gemini-3.8-flash-medium`, `medium` (coding) = `gemini-4-argon-medium`, `high` (planning) = `gemini-4-hydrogen-high`. A real run with the fast tier passed on 2026-11-14.
+- `agy` has no aliases, so Antigravity uses exact IDs from `agy models`: `fast` = `gemini-3.8-flash-medium`, `medium` (coding) = `gemini-4-argon-medium`, `high` (planning) = `gemini-4-hydrogen-high`. Real runs on all three tiers passed on 2026-11-14 (Flash: create a file; Argon: write add(a, b); Hydrogen: write mul(a, b); each checked by a real command and COMMITTED).
 
 ## Big runs ask first
 
@@ -74,7 +74,7 @@ succeeds. Today `claude` and `antigravity` are `"verified": true`.
 | Profile | Configured now | Status |
 |---|---|---|
 | `claude` | binary `claude`, `-p`, prompt on stdin | verified |
-| `antigravity` | binary `agy`, args `-p {prompt}` (prompt as argument), no auto-approve | verified on Windows 11 / Node 24 with `agy` 1.5.8 (2026-11-14): a scoped file task ran, the real check passed and the job was COMMITTED, also with a 3,049-character goal |
+| `antigravity` | binary `agy`, args `-p {prompt}` (prompt as argument), no auto-approve | verified on Windows 11 / Node 24 with `agy` 1.5.8 (2026-11-14): a scoped file task ran, the real check passed and the job was COMMITTED, also with a 3,049-character goal; all three model tiers (Flash, Argon, Hydrogen) passed real runs |
 | `codex` | binary `codex`, args `exec --full-auto -`, prompt on stdin | unverified: not installed on the machines tested so far |
 
 Notes for Antigravity:

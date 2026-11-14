@@ -123,7 +123,7 @@
         "medium": "gemini-4-argon-medium",
         "high": "gemini-4-hydrogen-high"
       },
-      "modelsNote": "Exact model IDs from 'agy models' (agy 1.5.8, 2026-11-14); agy has no 'latest' aliases, so these are the one exception to the alias-only rule. fast (docs, QA, small edits) = Gemini 3.8 Flash; medium (normal coding) = Gemini 4 Argon; high (planning, architecture, retry after a failed check) = Gemini 4 Hydrogen. When Google renames a model, run 'agy models' and update these three.",
+      "modelsNote": "Exact model IDs from 'agy models' (agy 1.5.8, 2026-11-14); agy has no 'latest' aliases, so these are the one exception to the alias-only rule. fast (docs, QA, small edits) = Gemini 3.8 Flash; medium (normal coding) = Gemini 4 Argon; high (planning, architecture, retry after a failed check) = Gemini 4 Hydrogen. All three passed real runs on 2026-11-14. When Google renames a model, run 'agy models' and update these three.",
       "modelArgs": [
         "--model",
         "{model}"
