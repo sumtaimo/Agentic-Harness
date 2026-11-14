@@ -1,7 +1,7 @@
 # AGENTS.md — instructions for any AI working in this folder
 
 This project contains an **Agentic Harness** in `.harness/`. It is a background controller that
-runs AI coding agents (Claude Code, Antigravity, Gemini, Codex) in a checked loop:
+runs AI coding agents (Claude Code, Antigravity, Codex) in a checked loop:
 
 ```
 1_PLANNER → 2_EXECUTOR_SWARM → 3_VERIFIER → 4_COMMITTED
@@ -17,8 +17,8 @@ only point here.
 ## UNIVERSAL AGENTIC HARNESS CONSTITUTION (SINGLE MASTER PROMPT)
 
 ### 0. FLEXIBLE AUTH & ENGINE POLICY (SUBSCRIPTION OR API)
-- **Default Mode (`subscription-first`):** Prefer local authenticated OAuth CLI sessions (`claude /login`, `gemini` Google OAuth, `agy`, `codex`) as resolved by `autoOrder` and `node .harness/doctor.mjs`.
-- **Optional Paid API Mode:** Projects with an approved API budget or CI/CD runner may use `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` via local `.env` (must be git-ignored).
+- **Default Mode (`subscription-first`):** Prefer local authenticated OAuth CLI sessions (`claude /login`, `agy`, `codex`) as resolved by `autoOrder` and `node .harness/doctor.mjs`.
+- **Optional Paid API Mode:** Projects with an approved API budget or CI/CD runner may use `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` via local `.env` (must be git-ignored).
 - **Non-Blocking Pre-Flight Notice:** If an `*_API_KEY` env var is detected in the shell, display a brief 1-line notice (*"Note: Paid API key is active in shell env—unset it if you intend to use your personal subscription"*) and continue without blocking.
 - **Secret Hygiene & Auth Fallback:** Never hardcode secrets or commit `.env`. Rely on engine `--help` probe and `ENGINE_FALLBACK` logging when an engine is unavailable.
 
@@ -69,7 +69,7 @@ Every AI agent working in or extending this repository MUST follow the **Lightwe
    - **Team Hierarchy Mode** (`--mode team`): Orchestrator → Leads (BA, DEV, QA) → Workers for multi-layer features.
    - **Autopilot Mode** (`npm run auto`): Background backlog execution strictly isolated on the `uat` branch.
 3. **Deterministic Verification over Hallucination:** Work is never finished because an AI "says so". It is accepted only when the real test suite (`npm test`, `node --test`) passes. On failure, staging/git automatically restores files.
-4. **Future-Proof & Flexible:** Keep all interfaces, skills (`.harness/skills/`), MCP presets (`.harness/mcp.json`), and SDK (`.harness/sdk.mjs`) modular so developers adopting this template can plug in any LLM (Claude, Gemini, Codex, Antigravity, Ollama).
+4. **Future-Proof & Flexible:** Keep all interfaces, skills (`.harness/skills/`), MCP presets (`.harness/mcp.json`), and SDK (`.harness/sdk.mjs`) modular so developers adopting this template can plug in any LLM (Claude, Codex, Antigravity, Ollama).
 
 ---
 

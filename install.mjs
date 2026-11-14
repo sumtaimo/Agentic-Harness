@@ -59,19 +59,18 @@ const OBJECTIVES_PLACEHOLDER = '- Project objectives: (describe your product goa
 const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|roles[\\/]|skills[\\/]|config\.json$|charter\.md$|backlog\.json$|team\.json$)/;
 
 // Clean defaults for a new project (used by a normal install and by --reset), so both follow the same rules.
-const GEMINI_SAFE_NOTE = "UNVERIFIED (confirm with 'gemini --help'). Headless: '-p' with the prompt piped on stdin. Auto-approve is OFF in a new project: Gemini will not run tools that need approval, so file edits are blocked. To allow it for THIS project only, add '--approval-mode', 'yolo' to args below (it approves every tool; use only in a project you trust).";
+const REMOVED_PROFILES = ['gemini', 'orca']; // engines the harness no longer supports (see docs/ENGINES.md)
 function cleanCharter(text) {
   return text.replace(/^- Project objectives:[\s\S]*?(?=\n\n|\n## |(?![\s\S]))/m, OBJECTIVES_PLACEHOLDER)
     .replace(/^- autonomous: off$/m, '- autonomous: on'); // template default (use --autonomous off to opt out)
 }
-/** Returns the cleaned config text, or null if the config cannot be parsed or has no gemini profile. */
+/** Returns the config text without removed engines (profiles and autoOrder), or null if it cannot be parsed or has no profiles. */
 function cleanConfig(text) {
   let cfg = null; try { cfg = JSON.parse(text); } catch { return null; }
-  const g = cfg && cfg.profiles && cfg.profiles.gemini;
-  if (!g || !Array.isArray(g.args)) return null;
-  const i = g.args.indexOf('--approval-mode');
-  if (i > -1 && g.args[i + 1] === 'yolo') g.args.splice(i, 2);
-  g.note = GEMINI_SAFE_NOTE;
+  if (!cfg || !cfg.profiles || typeof cfg.profiles !== 'object') return null;
+  for (const k of REMOVED_PROFILES) delete cfg.profiles[k];
+  if (Array.isArray(cfg.autoOrder)) cfg.autoOrder = cfg.autoOrder.filter((k) => !REMOVED_PROFILES.includes(k));
+  if (REMOVED_PROFILES.includes(String(cfg.activeProfile).toLowerCase())) cfg.activeProfile = 'auto';
   return JSON.stringify(cfg, null, 2) + '\n';
 }
 function cleanBacklog(text) {
@@ -103,11 +102,11 @@ function copyDir(from, to, rel = '.harness') {
       fs.writeFileSync(d, cleanCharter(fs.readFileSync(s, 'utf8')));
       report.push(`wrote  ${relPath} (objectives left for you to fill in)`); continue;
     }
-    if (relPath === path.join('.harness', 'config.json')) { // the owner's per-project auto-approve choice never travels
+    if (relPath === path.join('.harness', 'config.json')) { // removed engines never travel
       const cleaned = cleanConfig(fs.readFileSync(s, 'utf8')); // broken or unexpected config: copy it unchanged
       if (cleaned) {
         fs.writeFileSync(d, cleaned);
-        report.push(`wrote  ${relPath} (Gemini auto-approve OFF for this project)`); continue;
+        report.push(`wrote  ${relPath}`); continue;
       }
     }
     if (relPath === path.join('.harness', 'backlog.json')) { // the template's own tasks never travel: a new project starts with an empty backlog
@@ -128,7 +127,7 @@ if (RESET) {
     ['memory/profile.md', () => PROFILE_TEMPLATE, 'blank profile to fill in'],
     ['memory/lessons.md', () => LESSONS_TEMPLATE, 'no taught rules'],
     ['charter.md', (t) => { const c = cleanCharter(t); return off ? c.replace(/^- autonomous: on$/m, '- autonomous: off') : c; }, `placeholder objectives, autonomous ${off ? 'off' : 'on'}`],
-    ['config.json', (t) => cleanConfig(t), 'Gemini auto-approve off'],
+    ['config.json', (t) => cleanConfig(t), 'removed engines (gemini, orca) dropped'],
     ['backlog.json', (t) => cleanBacklog(t), 'empty backlog'],
   ];
   const done = [];
@@ -279,7 +278,7 @@ Done. Your project now has the agentic harness. The workflow:
   human -> controller (task, charter, backlog, team) -> orchestrator (your editor session) -> named agents -> verify -> report to you
 Next steps:
   1. Check it:        node .harness/doctor.mjs        (needs Node 18+ and one AI engine, e.g. Claude Code, logged in)
-                      several engines (claude, agy, codex, gemini)? see docs/MULTI-MODEL-SETUP.md in the harness repo, then  node .harness/team.mjs auto-assign
+                      several engines (claude, agy, codex)? see docs/MULTI-MODEL-SETUP.md in the harness repo, then  node .harness/team.mjs auto-assign
   2. Fill the charter: describe your project goals in .harness/charter.md ("Project objectives"); see the team with  node .harness/team.mjs show
   3. Prompt it:
        in Claude Code:  open the folder, accept the trust dialog once, restart the session so it loads the agents, then type

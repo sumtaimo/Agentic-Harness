@@ -8,7 +8,7 @@
  *        write the leads as NAMED agents for the editor (.claude/agents/<lead>.md), generated from team.json + roles,
  *        so you see "lead-dev" etc. working in your Claude Code session. --check only reports whether they are in sync.
  *   node .harness/team.mjs auto-assign [--dry-run]
- *        detect which AI CLIs are usable here (claude, agy, codex, gemini) and route each role to one of them in
+ *        detect which AI CLIs are usable here (claude, agy, codex) and route each role to one of them in
  *        team.json ("engine" per member). Only the "engine" fields change. --dry-run prints the routing without writing.
  *        HARNESS_ENGINES="claude,codex" skips detection and routes to exactly those engines.
  *

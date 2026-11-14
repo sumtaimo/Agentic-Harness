@@ -1,4 +1,4 @@
-# GEMINI.md (Gemini CLI / Antigravity)
+# GEMINI.md (Antigravity)
 
 Read and follow `AGENTS.md` in this folder before doing anything — it explains the
 `.harness/` agentic harness and the user's memory in `.harness/memory/`.

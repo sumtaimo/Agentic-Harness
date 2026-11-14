@@ -46,45 +46,45 @@ function useBin(name, scripts) {
   return dir;
 }
 
-const profiles = { gemini: realConfig.profiles.gemini, antigravity: realConfig.profiles.antigravity };
-const config = { profiles, autoOrder: ['gemini', 'antigravity'], activeProfile: 'auto' };
+const profiles = { codex: realConfig.profiles.codex, antigravity: realConfig.profiles.antigravity };
+const config = { profiles, autoOrder: ['codex', 'antigravity'], activeProfile: 'auto' };
 const originalPath = process.env.PATH;
 
 before(() => {
-  assert.ok(profiles.gemini && profiles.antigravity, 'config.json must define gemini and antigravity');
+  assert.ok(profiles.codex && profiles.antigravity, 'config.json must define codex and antigravity');
 });
 after(() => {
   process.env.PATH = originalPath;
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-const GEMINI_HELP = `printf '%s\\n' 'Usage: gemini [options]' '  -p, --prompt         Prompt; runs non-interactively' '  --approval-mode      default | auto_edit | yolo' '  --skip-trust         Trust the current workspace' '  -h, --help           Show help'`;
+const CODEX_HELP = `printf '%s\\n' 'Usage: codex exec [options] [PROMPT]' '  --full-auto          Run without asking for approval in the workspace' '  -h, --help           Show help'`;
 const AGY_HELP = `printf '%s\\n' 'Usage: agy [options]' '  -p, --prompt <text>  Run one prompt headless and exit' '  -h, --help           Show help'`;
 
 test('profileFlags extracts dash flags from args', () => {
   assert.deepEqual(profileFlags({ args: ['--yolo', 'sub', '--', '--x={p}'] }), ['--yolo']);
-  assert.deepEqual(profileFlags(profiles.gemini).sort(), ['--approval-mode', '--skip-trust', '-p']);
+  assert.deepEqual(profileFlags(profiles.codex), ['--full-auto']);
   assert.deepEqual(profileFlags(profiles.antigravity), ['-p']);
   assert.equal(profiles.antigravity.binary, 'agy');
   assert.equal(profiles.antigravity.promptVia, 'arg');
   assert.deepEqual(profiles.antigravity.args, ['-p', '{prompt}']);
 });
 
-test('fake gemini listing -p and --approval-mode is compatible and auto picks it', () => {
-  useBin('gemini-ok', { gemini: GEMINI_HELP });
-  const probe = probeEngine(profiles.gemini, { force: true });
+test('fake codex listing --full-auto is compatible and auto picks it', () => {
+  useBin('codex-ok', { codex: CODEX_HELP });
+  const probe = probeEngine(profiles.codex, { force: true });
   assert.equal(probe.installed, true);
   assert.equal(probe.checked, true);
   assert.equal(probe.compatible, true);
   assert.deepEqual(probe.missing, []);
-  assert.equal(resolveProfile(config).name, 'gemini');
+  assert.equal(resolveProfile(config).name, 'codex');
 });
 
-test('an old gemini that only lists --yolo is incompatible and auto falls through to agy', () => {
-  useBin('gemini-old', { gemini: `printf '%s\\n' '  -y, --yolo   Auto-approve'`, agy: AGY_HELP });
-  const probe = probeEngine(profiles.gemini, { force: true });
+test('an old codex that only lists --yolo is incompatible and auto falls through to agy', () => {
+  useBin('codex-old', { codex: `printf '%s\\n' '  -y, --yolo   Auto-approve'`, agy: AGY_HELP });
+  const probe = probeEngine(profiles.codex, { force: true });
   assert.equal(probe.compatible, false);
-  assert.deepEqual([...probe.missing].sort(), ['--approval-mode', '--skip-trust', '-p']);
+  assert.deepEqual([...probe.missing], ['--full-auto']);
   assert.equal(resolveProfile(config).name, 'antigravity');
 });
 
@@ -96,20 +96,20 @@ test('fake agy listing -p is compatible', () => {
   assert.equal(resolveProfile(config, 'antigravity').name, 'antigravity');
 });
 
-test('agy whose help lacks -p is incompatible and falls back to gemini', () => {
-  useBin('agy-bad', { gemini: GEMINI_HELP, agy: `printf '%s\\n' 'Usage: agy [options] [paths...]' '  -n --new-window   Open a new window'` });
+test('agy whose help lacks -p is incompatible and falls back to codex', () => {
+  useBin('agy-bad', { codex: CODEX_HELP, agy: `printf '%s\\n' 'Usage: agy [options] [paths...]' '  -n --new-window   Open a new window'` });
   const probe = probeEngine(profiles.antigravity, { force: true });
   assert.equal(probe.compatible, false);
   assert.deepEqual(probe.missing, ['-p']);
   const r = resolveProfile(config, 'antigravity');
   assert.equal(r.fallbackFrom, 'antigravity');
-  assert.equal(r.name, 'gemini');
+  assert.equal(r.name, 'codex');
   assert.match(r.fallbackReason, /-p/);
 });
 
-test('no gemini or agy on PATH gives installed=false', () => {
+test('no codex or agy on PATH gives installed=false', () => {
   useBin('none', {});
-  for (const p of [profiles.gemini, profiles.antigravity]) {
+  for (const p of [profiles.codex, profiles.antigravity]) {
     const probe = probeEngine(p, { force: true });
     assert.equal(probe.installed, false);
     assert.equal(probe.binPath, null);
@@ -117,39 +117,39 @@ test('no gemini or agy on PATH gives installed=false', () => {
 });
 
 test('help printing nothing: an unverified profile is rejected and auto falls through to agy', () => {
-  useBin('silent', { gemini: 'exit 0', agy: AGY_HELP });
-  const probe = probeEngine(profiles.gemini, { force: true });
+  useBin('silent', { codex: 'exit 0', agy: AGY_HELP });
+  const probe = probeEngine(profiles.codex, { force: true });
   assert.equal(probe.installed, true);
   assert.equal(probe.checked, false);
   assert.equal(probe.compatible, false);
   assert.match(probe.error, /printed nothing/);
   assert.equal(resolveProfile(config).name, 'antigravity');
-  const r = resolveProfile(config, 'gemini');
-  assert.equal(r.fallbackFrom, 'gemini');
+  const r = resolveProfile(config, 'codex');
+  assert.equal(r.fallbackFrom, 'codex');
   assert.match(r.fallbackReason, /could not be checked/);
 });
 
 test('help printing nothing: a verified profile is still trusted', () => {
-  useBin('silent-verified', { gemini: 'exit 0' });
-  const verified = { ...profiles.gemini, verified: true };
+  useBin('silent-verified', { codex: 'exit 0' });
+  const verified = { ...profiles.codex, verified: true };
   const probe = probeEngine(verified, { force: true });
   assert.equal(probe.checked, false);
   assert.equal(probe.compatible, true);
-  assert.equal(resolveProfile({ ...config, profiles: { ...profiles, gemini: verified } }).name, 'gemini');
+  assert.equal(resolveProfile({ ...config, profiles: { ...profiles, codex: verified } }).name, 'codex');
 });
 
 test('an old-format cache entry claiming compatible is ignored, and a verified change re-probes', async () => {
   const { FILES } = await import('../.harness/lib/common.mjs');
-  const dir = useBin('stale-cache', { gemini: 'exit 0' });
-  const bin = path.join(dir, process.platform === 'win32' ? 'gemini.cmd' : 'gemini');
-  const oldKey = `${bin}|${fs.statSync(bin).mtimeMs}|${profileFlags(profiles.gemini).join(' ')}`;
+  const dir = useBin('stale-cache', { codex: 'exit 0' });
+  const bin = path.join(dir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
+  const oldKey = `${bin}|${fs.statSync(bin).mtimeMs}|${profileFlags(profiles.codex).join(' ')}`;
   fs.writeFileSync(FILES.probe, JSON.stringify({ [oldKey]: { installed: true, checked: false, compatible: true, missing: [], binPath: bin } }));
-  assert.equal(probeEngine(profiles.gemini).compatible, false, 'old cache entry must not be reused');
-  assert.equal(probeEngine({ ...profiles.gemini, verified: true }).compatible, true, 'flipping verified must re-probe');
-  assert.equal(probeEngine(profiles.gemini).compatible, false, 'unverified result is cached separately');
+  assert.equal(probeEngine(profiles.codex).compatible, false, 'old cache entry must not be reused');
+  assert.equal(probeEngine({ ...profiles.codex, verified: true }).compatible, true, 'flipping verified must re-probe');
+  assert.equal(probeEngine(profiles.codex).compatible, false, 'unverified result is cached separately');
 });
 
-test('a fresh install has Gemini auto-approve OFF; an existing config and the owner config are untouched', () => {
+test('a fresh install has no removed engine (gemini, orca); an existing config is kept as it is', () => {
   const fresh = fs.mkdtempSync(path.join(tmpRoot, 'inst-fresh-'));
   const own = fs.mkdtempSync(path.join(tmpRoot, 'inst-own-'));
   fs.mkdirSync(path.join(own, '.harness'), { recursive: true });
@@ -158,10 +158,10 @@ test('a fresh install has Gemini auto-approve OFF; an existing config and the ow
   const installer = path.join(here, '..', 'install.mjs');
   spawnSync(process.execPath, [installer, fresh], { encoding: 'utf8' });
   spawnSync(process.execPath, [installer, own], { encoding: 'utf8' });
-  const freshArgs = JSON.parse(fs.readFileSync(path.join(fresh, '.harness', 'config.json'), 'utf8')).profiles.gemini.args;
-  assert.deepEqual(freshArgs, ['--skip-trust', '-p', ''], 'fresh install must not auto-approve');
+  const freshCfg = JSON.parse(fs.readFileSync(path.join(fresh, '.harness', 'config.json'), 'utf8'));
+  assert.ok(!('gemini' in freshCfg.profiles) && !('orca' in freshCfg.profiles) && !freshCfg.autoOrder.includes('gemini'), 'fresh install must not have a removed engine');
+  assert.ok(['claude', 'antigravity', 'codex'].every((e) => e in freshCfg.profiles), 'fresh install has the supported engines');
   assert.equal(fs.readFileSync(path.join(own, '.harness', 'config.json'), 'utf8'), ownCfg, 'existing config must be kept');
-  assert.deepEqual(profiles.gemini.args, ['--skip-trust', '--approval-mode', 'yolo', '-p', ''], 'the owner repo keeps its own choice');
 });
 
 test('the installer\'s embedded .gitignore copy (used by npx installs) matches .gitignore', () => {
@@ -171,14 +171,14 @@ test('the installer\'s embedded .gitignore copy (used by npx installs) matches .
   assert.equal(JSON.parse(m[1]), fs.readFileSync(path.join(here, '..', '.gitignore'), 'utf8'), 'update GITIGNORE_BLOCK in install.mjs after editing .gitignore');
 });
 
-test('install.mjs --reset cleans a template copy: owner profile, rules, objectives, autonomy, Gemini, backlog', () => {
+test('install.mjs --reset cleans a template copy: owner profile, rules, objectives, autonomy, removed engines, backlog', () => {
   const copy = fs.mkdtempSync(path.join(tmpRoot, 'tpl-copy-'));
   const H = path.join(copy, '.harness');
   fs.mkdirSync(path.join(H, 'memory'), { recursive: true });
   fs.writeFileSync(path.join(H, 'memory', 'profile.md'), '# User profile\n- Name: Owner\n');
   fs.writeFileSync(path.join(H, 'memory', 'lessons.md'), '# Lessons\n- [L1] owner rule\n');
   fs.writeFileSync(path.join(H, 'charter.md'), '# Charter\n- autonomous: off\n\n## 1. Identity\n- Project objectives:\n  1. Owner goal.\n\n## 2. Next\n');
-  fs.writeFileSync(path.join(H, 'config.json'), JSON.stringify({ profiles: { gemini: { args: ['--approval-mode', 'yolo', '-p', ''] } } }));
+  fs.writeFileSync(path.join(H, 'config.json'), JSON.stringify({ activeProfile: 'gemini', autoOrder: ['gemini', 'claude'], profiles: { gemini: { args: ['-p', ''] }, claude: { args: ['-p'] } } }));
   fs.writeFileSync(path.join(H, 'backlog.json'), JSON.stringify({ version: '2.0.0', tasks: [{ id: 'X' }] }));
   fs.writeFileSync(path.join(H, 'team.json'), '{"keep":true}');
   const installer = path.join(here, '..', 'install.mjs');
@@ -191,7 +191,10 @@ test('install.mjs --reset cleans a template copy: owner profile, rules, objectiv
   assert.match(read('charter.md'), /describe your product goals here/);
   assert.doesNotMatch(read('charter.md'), /Owner goal/);
   assert.match(read('charter.md'), /## 2\. Next/);
-  assert.deepEqual(JSON.parse(read('config.json')).profiles.gemini.args, ['-p', '']);
+  const cfg = JSON.parse(read('config.json'));
+  assert.deepEqual(Object.keys(cfg.profiles), ['claude'], 'an old gemini profile is dropped');
+  assert.deepEqual(cfg.autoOrder, ['claude']);
+  assert.equal(cfg.activeProfile, 'auto');
   assert.equal(JSON.parse(read('backlog.json')).tasks.length, 0);
   assert.equal(read('team.json'), '{"keep":true}', 'other files are not touched');
   const again = spawnSync(process.execPath, [installer, '--reset', copy, '--autonomous', 'off'], { encoding: 'utf8' });

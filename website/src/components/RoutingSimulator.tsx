@@ -30,7 +30,7 @@ function reasonText(r: Reason, t: Dict): string {
 export function RoutingSimulator({ n }: { n: number }) {
   const { t } = useLang();
   const s = t.models;
-  const [installed, setInstalled] = useState<Record<Engine, boolean>>({ claude: true, antigravity: false, codex: false, gemini: false });
+  const [installed, setInstalled] = useState<Record<Engine, boolean>>({ claude: true, antigravity: false, codex: false });
   const [cycle, setCycle] = useState(1);
   const key = ENGINES.map((e) => e.id).filter((id) => installed[id]).join();
   const routing = useMemo(() => planEngineRouting(key ? (key.split(',') as Engine[]) : []), [key]);

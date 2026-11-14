@@ -7,7 +7,6 @@
   "autoGitCommit": false,
   "activeProfile": "auto",
   "autoOrder": [
-    "gemini",
     "antigravity",
     "claude",
     "codex"
@@ -105,8 +104,8 @@
       "modelsNote": "CLI aliases, never pinned versions: Claude Code resolves haiku / sonnet / opus to the newest release of each family. The controller picks the tier per job (see docs/MULTI-MODEL-SETUP.md)."
     },
     "antigravity": {
-      "verified": false,
-      "note": "UNVERIFIED. Checked with 'agy --help' (1.5.0): '-p' is an alias for '--print' and needs a prompt value; '-p \"\"' with the prompt on stdin FAILS ('error: empty prompt'), so the prompt is passed as an argument. A full run with the argument form has not been completed yet. Windows limit: a command line is at most 32,767 characters (8,191 through cmd.exe, which .cmd shims use), so a very long prompt passed as an argument can fail; multi-line prompts also depend on Windows argument quoting. agy.exe may be installed in ~/.gemini/bin without being on PATH: add that folder to PATH or doctor reports it as not installed. No auto-approve flag on purpose (agy has --dangerously-skip-permissions and --mode; the owner approved auto-approve for Gemini only).",
+      "verified": true,
+      "note": "VERIFIED on Windows 11 / Node 24 with agy 1.5.8 (2026-11-14): a full headless run passed ('agy -p <prompt>' created the scoped file, the real check passed, job COMMITTED), including a 3,049-character goal. '-p' is an alias for '--print' and needs a prompt value; '-p \"\"' with the prompt on stdin FAILS ('error: empty prompt'), so the prompt is passed as an argument. Windows limit: a command line is at most 32,767 characters (8,191 through cmd.exe, which .cmd shims use), so a much longer prompt passed as an argument can still fail. agy.exe is installed in ~/.gemini/bin, which the installer does not add to PATH: add that folder to PATH or doctor reports it as not installed. No auto-approve flag on purpose (agy has --dangerously-skip-permissions and --mode); scoped file edits worked without it.",
       "binary": "agy",
       "args": [
         "-p",
@@ -129,31 +128,6 @@
         "--model",
         "{model}"
       ]
-    },
-    "gemini": {
-      "verified": false,
-      "note": "UNVERIFIED. Checked with 'gemini --help' (0.68.0): '-p' is appended to stdin; '--approval-mode yolo' auto-approves every tool (the owner approved this for this project); '--skip-trust' is needed in a folder the CLI does not already trust, otherwise approval mode is overridden and it exits with code 55. A full headless run has not been completed yet: the CLI must be logged in with an account tier that it still supports.",
-      "binary": "gemini",
-      "args": [
-        "--skip-trust",
-        "--approval-mode",
-        "yolo",
-        "-p",
-        ""
-      ],
-      "promptVia": "stdin",
-      "instructionFile": "GEMINI.md",
-      "allowedTools": [],
-      "modelArgs": [
-        "--model",
-        "{model}"
-      ],
-      "models": {
-        "fast": null,
-        "medium": null,
-        "high": null
-      },
-      "modelsNote": "No alias set: no --model flag is passed, so the CLI uses its own newest default model on every tier. To save quota on the fast tier, set models.fast to an ALIAS that `gemini --help` documents (not a pinned version)."
     },
     "codex": {
       "verified": false,

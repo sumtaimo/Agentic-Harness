@@ -76,7 +76,7 @@ export function which(binary) {
 
 /**
  * Quote one argument for a Windows shell command line (spawn with shell: true).
- * An empty string becomes "" so it is not dropped (e.g. gemini -p "").
+ * An empty string becomes "" so it is not dropped (e.g. a "-p" "" pair).
  */
 export function winQuote(a) {
   const s = String(a);
@@ -142,8 +142,14 @@ export function engineUsable(config, k) {
   return { ok: true, probe };
 }
 
-/** The real AI CLIs the team can be routed to (profile names in config.json). Supported: Claude Code, Antigravity (agy), Gemini and Codex. */
-export const ROUTABLE_ENGINES = ['claude', 'antigravity', 'codex', 'gemini'];
+/** The real AI CLIs the team can be routed to (profile names in config.json). Supported: Claude Code, Antigravity (agy) and Codex. */
+export const ROUTABLE_ENGINES = ['claude', 'antigravity', 'codex'];
+
+/** Engines that were removed, with the reason shown when someone still asks for one. */
+export const REMOVED_ENGINES = {
+  orca: 'it could not be verified',
+  gemini: "Google no longer lets the Gemini CLI run on personal 'Gemini Code Assist for individuals' accounts and points to Antigravity instead; use 'antigravity'",
+};
 
 /**
  * Which routable engines are usable on this machine? Returns { usable: [names], skipped: [{ name, why }] }.
@@ -236,7 +242,7 @@ export function resolveProfile(config, requested, { allowFallback = true } = {})
     return null;
   };
 
-  if (want === 'orca') throw Object.assign(new Error("Engine 'orca' is no longer supported (it could not be verified). Use one of: auto, " + Object.keys(config.profiles).join(', ')), { fatal: true });
+  if (REMOVED_ENGINES[want]) throw Object.assign(new Error(`Engine '${want}' is no longer supported (${REMOVED_ENGINES[want]}). Use one of: auto, ${Object.keys(config.profiles).join(', ')}`), { fatal: true });
   if (want !== 'auto' && !config.profiles[want]) {
     throw Object.assign(new Error(`Unknown engine '${want}'. Known engines: auto, ${Object.keys(config.profiles).join(', ')}`), { fatal: true });
   }

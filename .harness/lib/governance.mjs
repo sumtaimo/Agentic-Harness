@@ -342,7 +342,7 @@ export const ROLE_JOB = { PO_ARCHITECT: 'plan', BA_ANALYST: 'plan', DEV_ENGINEER
 
 /**
  * Pick an engine for each job from the engines that are actually usable. Pure: no probing, no files.
- *   3+ engines: planning/research → agy (antigravity) or gemini, coding → claude, QA/review → codex (else claude)
+ *   3+ engines: planning/research → agy (antigravity), coding → claude, QA/review → codex (else claude)
  *   2 engines:  planning/research on one, coding AND QA on the other
  *   1 engine:   that engine everywhere
  *   0 engines:  null (nothing to assign; the harness falls back to "auto" at run time)
@@ -354,9 +354,9 @@ export function planEngineRouting(available) {
   if (have.length === 1) return { plan: have[0], code: have[0], qa: have[0] };
   const first = (prefs, pool = have) => prefs.find((k) => pool.includes(k)) || pool[0];
   // Planning prefers a research engine; without one, give planning to the non-claude engine so claude can code.
-  const plan = first(['antigravity', 'gemini', 'codex', 'claude']);
+  const plan = first(['antigravity', 'codex', 'claude']);
   const rest = have.filter((k) => k !== plan);
-  const code = first(['claude', 'codex', 'gemini', 'antigravity'], rest);
+  const code = first(['claude', 'codex', 'antigravity'], rest);
   if (have.length === 2) return { plan, code, qa: code };
   const qa = have.includes('codex') && code !== 'codex' ? 'codex' : have.includes('claude') ? 'claude' : code;
   return { plan, code, qa };
