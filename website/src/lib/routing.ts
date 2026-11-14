@@ -7,7 +7,7 @@
  * If you change those rules in the harness, change them here too.
  */
 
-export type Engine = 'claude' | 'antigravity' | 'codex' | 'gemini';
+export type Engine = 'claude' | 'antigravity' | 'codex';
 export type Tier = 'fast' | 'medium' | 'high';
 export type Job = 'plan' | 'code' | 'qa';
 
@@ -15,7 +15,6 @@ export const ENGINES: { id: Engine; label: string; cli: string }[] = [
   { id: 'claude', label: 'Claude Code', cli: 'claude' },
   { id: 'antigravity', label: 'Antigravity', cli: 'agy' },
   { id: 'codex', label: 'Codex', cli: 'codex' },
-  { id: 'gemini', label: 'Gemini', cli: 'gemini' },
 ];
 
 export const TIERS: Tier[] = ['fast', 'medium', 'high'];
@@ -25,7 +24,6 @@ export const MODEL_ALIASES: Record<Engine, Record<Tier, string | null>> = {
   claude: { fast: 'haiku', medium: 'sonnet', high: 'opus' },
   antigravity: { fast: null, medium: null, high: null },
   codex: { fast: null, medium: null, high: null },
-  gemini: { fast: null, medium: null, high: null },
 };
 
 export interface Routing { plan: Engine; code: Engine; qa: Engine }
@@ -36,9 +34,9 @@ export function planEngineRouting(available: Engine[]): Routing | null {
   if (!have.length) return null;
   if (have.length === 1) return { plan: have[0], code: have[0], qa: have[0] };
   const first = (prefs: Engine[], pool: Engine[] = have): Engine => prefs.find((k) => pool.includes(k)) || pool[0];
-  const plan = first(['antigravity', 'gemini', 'codex', 'claude']);
+  const plan = first(['antigravity', 'codex', 'claude']);
   const rest = have.filter((k) => k !== plan);
-  const code = first(['claude', 'codex', 'gemini', 'antigravity'], rest);
+  const code = first(['claude', 'codex', 'antigravity'], rest);
   if (have.length === 2) return { plan, code, qa: code };
   const qa: Engine = have.includes('codex') && code !== 'codex' ? 'codex' : have.includes('claude') ? 'claude' : code;
   return { plan, code, qa };

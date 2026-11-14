@@ -29,7 +29,7 @@ Set `- autonomous: off` to stop all of it.
 - Execution Engine: Square (4-Node Orthogonal) + Swarm Mesh for parallel subtasks.
 - Project objectives:
   1. Core goal: maintain a zero-dependency, reusable, project-agnostic Agentic Harness template (`1_PLANNER -> 2_EXECUTOR_SWARM -> 3_VERIFIER -> 4_COMMITTED`) that anyone can drop into a new repository.
-  2. Auth and cost discipline: default to local OAuth subscription CLIs (`claude`, `gemini`, `agy`, `codex`) with no extra token cost; allow optional `.env` API keys (git-ignored) only for budgeted team projects.
+  2. Auth and cost discipline: default to local OAuth subscription CLIs (`claude`, `agy`, `codex`) with no extra token cost; allow optional `.env` API keys (git-ignored) only for budgeted team projects.
   3. Adaptive governance: support solo multi-agent workflows and role-responsive team workflows. The PO/orchestrator audits read-only; `lead-ba` writes only `docs/**`, `lead-qa` only `tests/**` and `test/**`, `lead-dev` only its assigned code files. Runtime state stays git-ignored, and a human confirms every `git push` and production deploy.
   4. Deterministic quality: evidence-first investigation (`file:line`), beyond-UI checks (validation, lifecycle, reload, permissions, regression), and 100% passing `npm test` before any commit.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * .harness/daemon.mjs
- * Unified Background Agentic Controller (Claude Code / Antigravity / Gemini / Codex)
+ * Unified Background Agentic Controller (Claude Code / Antigravity / Codex)
  *
  *   Square loop:  1_PLANNER -> 2_EXECUTOR_SWARM -> 3_VERIFIER -> 4_COMMITTED
  *                 (verifier failure feeds its error back to the planner, max `maxCycles` times,

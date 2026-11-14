@@ -26,7 +26,7 @@ You need **Node.js 18+** and **git**. The harness has no packages to install.
    ```
 
    It resets only those owner files: a blank profile, no taught rules, placeholder objectives, `autonomous: on`
-   (add `--autonomous off` to keep it off), Gemini auto-approve off, and an empty backlog. Nothing else changes, and
+   (add `--autonomous off` to keep it off), no removed engine profiles (Gemini, Orca), and an empty backlog. Nothing else changes, and
    it prints the `git checkout` command to undo it (in a git repo). From any project that already has the harness, the same works
    with `npx github:sumtaimo/Agentic-Harness --reset`.
 
@@ -45,7 +45,7 @@ npx github:sumtaimo/Agentic-Harness . --autonomous off
 ```
 
 The installer never overwrites your files and is safe to re-run. A new project gets a blank profile, no taught
-rules, an empty backlog, placeholder charter objectives, and Gemini auto-approve **off**.
+rules, an empty backlog and placeholder charter objectives.
 
 **Check the install**
 
@@ -53,7 +53,7 @@ rules, an empty backlog, placeholder charter objectives, and Gemini auto-approve
 node .harness/doctor.mjs
 ```
 
-Then log in to the AI CLIs you use (`claude`, `gemini`, `agy`, `codex`) and run doctor again. See
+Then log in to the AI CLIs you use (`claude`, `agy`, `codex`) and run doctor again. See
 [`docs/ENGINES.md`](docs/ENGINES.md).
 
 ```
@@ -76,7 +76,7 @@ Then log in to the AI CLIs you use (`claude`, `gemini`, `agy`, `codex`) and run 
 │ VERIFY:  Check: npm test  (auto-detected from package.json scripts: test)    │
 │ QUEUE:   0 waiting  |  MEMORY: 4 taught rule(s), 1 auto lesson(s)            │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ ENGINES: CLAUDE✓ ANTIGRAVITY· GEMINI· CODEX·   (✓ installed)                 │
+│ ENGINES: CLAUDE✓ ANTIGRAVITY· CODEX·   (✓ installed)                         │
 │ LOGS: .harness/telemetry.log                       MEMORY: .harness/memory/  │
 └──────────────────────────────────────────────────────────────────────────────┘
   ➜ AI workers are working. Their files are locked so they cannot collide.
@@ -170,7 +170,7 @@ One developer and a team of people get the same harness: the full AI agent team 
 - `.harness/memory/profile.md`: who you are and how you like to work. It is committed by default (the template ships a
   starter one), so on a shared repo uncomment the `.harness/memory/profile.md` line in `.gitignore` and untrack it once
   with `git rm --cached .harness/memory/profile.md`
-- your own CLI logins and subscriptions (`claude`, `agy`, `codex`, `gemini`); tokens are spent on your own account
+- your own CLI logins and subscriptions (`claude`, `agy`, `codex`); tokens are spent on your own account
 
 **Team rules:**
 1. After cloning, run `node .harness/team.mjs auto-assign` on your own machine, so the routing matches the CLIs you
@@ -455,7 +455,7 @@ How it reaches each AI:
 |---|---|---|
 | Claude Code | `CLAUDE.md` (auto-imports AGENTS.md + memory) | tested |
 | Codex, Cursor, Windsurf, many others | `AGENTS.md` | standard file, not tested here |
-| Gemini CLI / Antigravity | `GEMINI.md` → AGENTS.md | not tested here |
+| Antigravity | `GEMINI.md` → AGENTS.md | not tested here |
 | Cursor | `.cursor/rules/harness.mdc` | not tested here |
 | Windsurf | `.windsurfrules` | not tested here |
 | GitHub Copilot | `.github/copilot-instructions.md` | not tested here |
@@ -469,7 +469,7 @@ How it reaches each AI:
 ## 6. AI engines
 
 Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; you can also force
-`"claude"`, `"antigravity"`, `"gemini"` or `"codex"`, per task or globally.
+`"claude"`, `"antigravity"` or `"codex"`, per task or globally.
 
 - **The prompt always goes to the engine on stdin** (`"promptVia": "stdin"`), so no
   command-line flag can accidentally swallow it. `"arg"` (with `{prompt}` in `args`) and
@@ -485,14 +485,14 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 | Engine | Status |
 |---|---|
 | `claude` (Claude Code) | ✅ verified end-to-end, including the AI planner and two parallel workers |
-| `antigravity` (`agy`) | ⚠️ not verified: stdin with `-p ""` was tested and rejected (`empty prompt`), so the prompt goes as an argument (`-p "<prompt>"`); a full run with that form is not done yet. Windows limit: a command line is at most 32,767 characters (8,191 through `cmd.exe`, which `.cmd` shims use), so a very long prompt passed as an argument can fail. No auto-approve. `agy` may not be on PATH |
-| `gemini` (Gemini CLI) | ⚠️ not verified: `--skip-trust -p ""`, prompt on stdin. This repo adds `--approval-mode yolo` (auto-approves every tool); new installs do not. A full headless run is not done yet |
+| `antigravity` (`agy`) | ✅ verified on Windows 11 with `agy` 1.5.8: a scoped file task ran and the real check passed, also with a 3,049-character goal. The prompt goes as an argument (`-p "<prompt>"`), because stdin with `-p ""` is rejected (`empty prompt`). Windows limit: a command line is at most 32,767 characters (8,191 through `cmd.exe`), so a much longer prompt can still fail. No auto-approve. `agy.exe` is in `~/.gemini/bin`: add it to PATH |
 | `codex` (OpenAI Codex CLI) | ⚠️ not verified (not installed on the machines tested) |
+| ~~`gemini`~~ (Gemini CLI) | ❌ removed: Google no longer lets it run on personal "Gemini Code Assist for individuals" accounts (`IneligibleTierError`) and points to Antigravity. `--engine gemini` stops with a clear message |
 
-Setup, subscription login and checks for Gemini and `agy`: [`docs/ENGINES.md`](docs/ENGINES.md).
+Setup, subscription login and checks for `agy`, and why Gemini and Orca were removed: [`docs/ENGINES.md`](docs/ENGINES.md).
 
 **Several engines? Route each role to the best one.** `node .harness/team.mjs auto-assign` detects which of
-`claude`, `agy`, `codex` and `gemini` work on your machine and writes an engine per team member (planning → agy/gemini,
+`claude`, `agy` and `codex` work on your machine and writes an engine per team member (planning → agy,
 coding → claude, QA → codex). With one engine it gets every role. New installs do this automatically. Step-by-step login,
 connectivity checks and custom routing: [`docs/MULTI-MODEL-SETUP.md`](docs/MULTI-MODEL-SETUP.md).
 
@@ -685,7 +685,7 @@ Skills inject targeted rules and allowed tools only when relevant to the task's 
 - **`spec-writer`**: Formulates concise Given/When/Then acceptance criteria and interface contracts without code leaks.
 
 ### 4. Model Independence & MCP Presets (`.harness/mcp.json`)
-The harness connects to any CLI-driven AI engine (Claude, Gemini, Codex, Antigravity, local Ollama models) without vendor lock-in. Optional MCP server presets are pre-configured for GitHub PR/issue inspection, Postgres databases, and web fetching.
+The harness connects to any CLI-driven AI engine (Claude, Codex, Antigravity, local Ollama models) without vendor lock-in. Optional MCP server presets are pre-configured for GitHub PR/issue inspection, Postgres databases, and web fetching.
 
 ## License
 

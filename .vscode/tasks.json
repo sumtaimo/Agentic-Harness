@@ -262,7 +262,6 @@
         "auto",
         "claude",
         "antigravity",
-        "gemini",
         "codex"
       ],
       "default": "auto"

@@ -1568,15 +1568,12 @@ const engineOf = (d, id) => teamOf(d).members.find((m) => m.id === id).engine;
 await test('engine routing (pure): 0 → null, 1 → everywhere, 2 → planning vs coding+QA, 3 → planning / coding / QA', () => {
   const r = gov.planEngineRouting;
   assert(r([]) === null && r(null) === null, '0 engines must give null');
-  for (const one of ['claude', 'antigravity', 'codex', 'gemini']) assert(JSON.stringify(r([one])) === JSON.stringify({ plan: one, code: one, qa: one }), `1 engine ${one}: ${JSON.stringify(r([one]))}`);
+  for (const one of ['claude', 'antigravity', 'codex']) assert(JSON.stringify(r([one])) === JSON.stringify({ plan: one, code: one, qa: one }), `1 engine ${one}: ${JSON.stringify(r([one]))}`);
   const eq = (got, want, label) => assert(JSON.stringify(got) === JSON.stringify(want), `${label}: ${JSON.stringify(got)}`);
   eq(r(['claude', 'antigravity']), { plan: 'antigravity', code: 'claude', qa: 'claude' }, 'agy + claude');
-  eq(r(['gemini', 'claude']), { plan: 'gemini', code: 'claude', qa: 'claude' }, 'gemini + claude');
   eq(r(['claude', 'codex']), { plan: 'codex', code: 'claude', qa: 'claude' }, 'claude + codex (no research engine)');
   eq(r(['claude', 'antigravity', 'codex']), { plan: 'antigravity', code: 'claude', qa: 'codex' }, 'agy + claude + codex');
-  eq(r(['gemini', 'claude', 'codex']), { plan: 'gemini', code: 'claude', qa: 'codex' }, 'gemini + claude + codex');
-  eq(r(['antigravity', 'claude', 'gemini']), { plan: 'antigravity', code: 'claude', qa: 'claude' }, 'agy + claude + gemini (no codex → QA on claude)');
-  eq(r(['claude', 'antigravity', 'codex', 'gemini']), { plan: 'antigravity', code: 'claude', qa: 'codex' }, 'all four');
+  eq(r(['codex', 'antigravity', 'claude']), { plan: 'antigravity', code: 'claude', qa: 'codex' }, 'all three, any order');
   const t = { members: [{ id: 'o', role: 'PO_ARCHITECT' }, { id: 'b', role: 'BA_ANALYST' }, { id: 'd', role: 'DEV_ENGINEER' }, { id: 'q', role: 'QA_AUDITOR' }, { id: 'x', role: 'CUSTOM' }] };
   const applied = gov.applyEngineRouting(t, { plan: 'P', code: 'C', qa: 'Q' });
   assert(applied.members.map((m) => m.engine).join() === 'P,P,C,Q,C' && t.members.every((m) => m.engine === undefined), `applyEngineRouting by role, input untouched: ${applied.members.map((m) => m.engine)}`);
@@ -1730,10 +1727,10 @@ await test('model tiers (pure): low → fast, standard → medium, architecture/
   assert(c.models.fast === 'haiku' && c.models.medium === 'sonnet' && c.models.high === 'opus' && c.modelArgs.join(' ') === '--model {model}', `claude aliases: ${JSON.stringify(c.models)}`);
   for (const [name, p] of Object.entries(cfg.profiles)) for (const m of Object.values(p.models || {})) assert(m === null || !/\d/.test(m), `${name}: model "${m}" looks like a pinned version; use an alias`);
   assert(common.resolveModel(c, { tier: 'fast' }).model === 'haiku' && common.resolveModel(c, { tier: 'high' }).model === 'opus', 'claude tier → alias');
-  for (const k of ['gemini', 'codex', 'antigravity']) assert(common.resolveModel(cfg.profiles[k], { tier: 'fast' }).model === null, `${k}: no alias → no --model (the CLI uses its newest default)`);
+  for (const k of ['codex', 'antigravity']) assert(common.resolveModel(cfg.profiles[k], { tier: 'fast' }).model === null, `${k}: no alias → no --model (the CLI uses its newest default)`);
   assert(JSON.stringify(common.resolveModel(c, { tier: 'fast', override: 'high' })) === JSON.stringify({ tier: 'high', model: 'opus', source: 'override-tier' }), 'a tier override picks that tier');
   assert(common.resolveModel(c, { tier: 'fast', override: 'fable' }).model === 'fable', 'an alias override is passed through');
-  assert(common.profileFlags(c).includes('--model') && !common.profileFlags(cfg.profiles.gemini).includes('--model'), 'the probe checks --model only where an alias is configured');
+  assert(common.profileFlags(c).includes('--model') && !common.profileFlags(cfg.profiles.codex).includes('--model'), 'the probe checks --model only where an alias is configured');
 });
 
 await test('model tiers end to end (1 engine): orchestrator/lead-ba high, lead-dev medium, QA + small edits fast, multi-file coding medium', () => {
@@ -1880,9 +1877,18 @@ await test('editor verify flags tests that changed after a failed check (fixed o
 await test('Orca is no longer supported: no profile in config.json, and asking for it stops with a clear message listing the supported engines', () => {
   const cfg = json(path.join(REPO, '.harness', 'config.json'));
   assert(!('orca' in cfg.profiles) && !(cfg.autoOrder || []).includes('orca'), 'orca must not be a profile or in autoOrder');
-  assert(['claude', 'antigravity', 'gemini', 'codex'].every((e) => e in cfg.profiles), 'the four supported engines must have a profile');
+  assert(['claude', 'antigravity', 'codex'].every((e) => e in cfg.profiles), 'the three supported engines must have a profile');
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', "import('./.harness/lib/common.mjs').then((m)=>{try{m.resolveProfile(m.loadConfig(),'orca')}catch(e){console.log(e.message);process.exit(0)}process.exit(3)})"], { cwd: REPO, encoding: 'utf8' });
-  assert(r.status === 0 && /no longer supported/.test(r.stdout) && /claude, antigravity, gemini, codex/.test(r.stdout), r.stdout + r.stderr);
+  assert(r.status === 0 && /no longer supported/.test(r.stdout) && /claude, antigravity, codex/.test(r.stdout), r.stdout + r.stderr);
+});
+
+await test('Gemini is no longer supported: no profile, not routable, and --engine gemini stops with a message pointing to antigravity', () => {
+  const cfg = json(path.join(REPO, '.harness', 'config.json'));
+  assert(!('gemini' in cfg.profiles) && !(cfg.autoOrder || []).includes('gemini'), 'gemini must not be a profile or in autoOrder');
+  assert(cfg.profiles.antigravity.verified === true, 'antigravity was verified end to end on a real machine');
+  assert(!common.ROUTABLE_ENGINES.includes('gemini'), 'gemini must not be routable');
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', "import('./.harness/lib/common.mjs').then((m)=>{try{m.resolveProfile(m.loadConfig(),'gemini')}catch(e){console.log(e.message);process.exit(0)}process.exit(3)})"], { cwd: REPO, encoding: 'utf8' });
+  assert(r.status === 0 && /no longer supported/.test(r.stdout) && /antigravity/.test(r.stdout), r.stdout + r.stderr);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

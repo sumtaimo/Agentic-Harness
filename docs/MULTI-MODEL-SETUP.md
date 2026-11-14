@@ -18,19 +18,18 @@ harness controller ──spawn──▶ claude -p --output-format json ...   (pr
 - Each tool's command line is a **profile** in `.harness/config.json` → `profiles` (binary, args, how the prompt is passed).
 - The tool uses **your own login** (your subscription), exactly as when you run it by hand. The harness never sees a password or a key.
 - Before using a tool, the harness runs `<tool> --help` once. It checks that every flag in the profile is listed. A tool that fails this check is skipped (*flag probe*).
-- Engine names in the harness: `claude` (Claude Code), `antigravity` (the `agy` command), `codex` (OpenAI Codex CLI), `gemini` (Gemini CLI).
+- Engine names in the harness: `claude` (Claude Code), `antigravity` (the `agy` command), `codex` (OpenAI Codex CLI). Gemini CLI was removed (see [`ENGINES.md`](ENGINES.md#removed-engines)).
 
 ## 2. Log in to each tool (once per machine, per person)
 
 Everyone who uses the harness logs in with **their own** account on **their own** machine. Do not share logins,
-and do not put API keys (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`) in this project.
+and do not put API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) in this project.
 
 | Engine | Install (see the tool's own docs) | Log in once |
 |---|---|---|
 | `claude` | Claude Code | run `claude` in a terminal and log in with your subscription |
-| `antigravity` | Antigravity; its terminal command is `agy` | log in through the tool itself with your account |
+| `antigravity` | Antigravity; its terminal command is `agy` (`agy.exe` in `~/.gemini/bin`; add it to PATH) | log in through the Antigravity app with your Google account |
 | `codex` | OpenAI Codex CLI | run `codex` (or `codex login`) and sign in |
-| `gemini` | Gemini CLI | run `gemini` and choose **Login with Google** |
 
 Install only the tools you have a subscription for. **One engine is enough**: the harness then gives that
 engine every role.
@@ -39,19 +38,16 @@ engine every role.
 
 Run these yourself in a terminal, one at a time. Each one is read-only.
 
-1. **Is it on your PATH?** Windows: `where claude`. macOS/Linux: `which claude`. Do the same for `agy`, `codex` and `gemini`.
+1. **Is it on your PATH?** Windows: `where claude`. macOS/Linux: `which claude`. Do the same for `agy` and `codex`.
 2. **Does it answer a prompt?** It should print a short reply and exit:
    ```bash
    echo "say hi" | claude -p
    ```
    ```bash
-   echo "say hi" | agy -p ""
+   agy -p "say hi"
    ```
    ```bash
    echo "say hi" | codex exec -
-   ```
-   ```bash
-   echo "say hi" | gemini -p ""
    ```
    If a tool asks you to log in instead, do step 2 for it first.
 3. **Does the harness accept it?**
@@ -63,8 +59,8 @@ Run these yourself in a terminal, one at a time. Each one is read-only.
      Compare with `<tool> --help` and fix `args` for that profile in `.harness/config.json`.
    - `· not installed` means the tool is not on your PATH.
 
-Today only the `claude` profile is verified end to end. The `antigravity`, `codex` and `gemini` profiles
-follow those tools' documented flags but are marked `"verified": false` until someone confirms them with a
+Today the `claude` and `antigravity` profiles are verified end to end. The `codex` profile
+follows that tool's documented flags but is marked `"verified": false` until someone confirms it with a
 real run (see [`ENGINES.md`](ENGINES.md)).
 
 ## 4. Smart routing: give each role the right engine
@@ -76,12 +72,12 @@ node .harness/team.mjs auto-assign --dry-run    # show the routing it would use,
 node .harness/team.mjs auto-assign              # write it into .harness/team.json
 ```
 
-It detects which of `claude`, `agy`, `codex` and `gemini` pass the doctor's check on this machine, then routes by role:
+It detects which of `claude`, `agy` and `codex` pass the doctor's check on this machine, then routes by role:
 
 | Engines usable on this machine | Planning / research<br>(`orchestrator` PO_ARCHITECT, `lead-ba` BA_ANALYST) | Coding<br>(`lead-dev` DEV_ENGINEER) | QA / review<br>(`lead-qa` QA_AUDITOR) |
 |---|---|---|---|
-| 3 or more (e.g. agy + claude + codex) | `agy` (else `gemini`) | `claude` | `codex` (else `claude`) |
-| 2 (e.g. agy + claude) | the research engine (`agy`/`gemini`) | the other one | same as coding |
+| 3 or more (e.g. agy + claude + codex) | `agy` | `claude` | `codex` (else `claude`) |
+| 2 (e.g. agy + claude) | the research engine (`agy`) | the other one | same as coding |
 | 1 (any) | that engine | that engine | that engine |
 | 0 | nothing changes: every member keeps `auto` | | |
 
@@ -111,7 +107,7 @@ With two engines and no research engine (e.g. claude + codex), planning goes to 
 Each member in `.harness/team.json` can carry an `"engine"`, which is any profile name from `config.json`:
 
 ```json
-{ "id": "lead-qa", "level": "lead", "role": "QA_AUDITOR", "engine": "gemini", "scope": ["tests/**", "test/**"], ... }
+{ "id": "lead-qa", "level": "lead", "role": "QA_AUDITOR", "engine": "codex", "scope": ["tests/**", "test/**"], ... }
 ```
 
 - Remove the `"engine"` field (or don't set it) to use `auto` for that member (`autoOrder` in `config.json`).
@@ -146,7 +142,7 @@ Claude Code resolves `haiku`, `sonnet` and `opus` to the newest release of each 
 (`claude --help`: "Provide an alias for the latest model"). A test fails if anyone puts a pinned version
 number in `models`.
 
-- **`gemini`, `codex`, `agy`:** every tier is `null`. No `--model` is passed, so each CLI uses **its own newest default
+- **`codex`, `agy`:** every tier is `null`. No `--model` is passed, so each CLI uses **its own newest default
   model** on every tier. To save quota on the fast tier, set `models.fast` to an alias that `<tool> --help` documents.
   Use an alias, not a dated version. `agy` has no `modelArgs` yet, because its model flag isn't known.
 - **Flag probe:** the doctor only requires `--model` in `<tool> --help` when at least one tier has an alias, so an unused model flag can never disable an engine.
