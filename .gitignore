@@ -5,6 +5,7 @@
 .harness/daemon.pid
 .harness/engine-probe.json
 .harness/auto-state.json
+.harness/approvals.json
 .harness/live.log
 .harness/inbox/*
 .harness/completed/*

@@ -31,6 +31,9 @@
  *                (your working folder and main are not touched)
  * --model fast|medium|high   force a model tier for every agent of this job (default: the controller picks
  *                (or an alias, e.g. --model opus)  the cheapest tier that fits each agent's job; see docs/MULTI-MODEL-SETUP.md)
+ * --yes    skip the approval question. The question appears only for runs that may use a lot of quota
+ *          (team or parallel mode, 3+ workers, --model high): answer y / n / a ("a" saves it in .harness/approvals.json
+ *          so that kind of run is not asked again). Without a terminal it stops with APPROVAL_NEEDED (exit 3).
  * --wait   block until the job finishes and print the result (exit 0 = committed).
  *          If no background daemon is running, this command processes the job itself.
  */
@@ -38,7 +41,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd } from './lib/common.mjs';
+import readline from 'node:readline/promises';
+import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons } from './lib/common.mjs';
 
 if (process.env.HARNESS_WORKER === '1') {
   console.error('Refusing to dispatch from inside a harness worker (prevents agents spawning agents in a loop).');
@@ -63,6 +67,7 @@ let autoPlan = !!config.planner?.defaultAutoPlan;
 let branch;
 let hierarchy = false;
 let maxCost;
+let yes = process.env.HARNESS_YES === '1';
 const subtasks = [];
 
 for (let i = 0; i < args.length; i++) {
@@ -74,6 +79,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--title' && v !== undefined) { title = args[++i].trim(); }
   else if (a === '--files' && v !== undefined) { files = args[++i].split(',').map((f) => f.trim()).filter(Boolean); }
   else if (a === '--wait') { wait = true; }
+  else if (a === '--yes' || a === '-y') { yes = true; }
   else if (a === '--branch' && v !== undefined) { branch = args[++i].trim() || undefined; }
   else if (a === '--hierarchy') { hierarchy = true; }
   else if (a === '--mode' && v !== undefined) {
@@ -121,6 +127,38 @@ else {
 
 for (const s of subtasks) if (engine) s.engine = engine;
 const usePlanner = autoPlan && subtasks.length === 0;
+
+// ── Approval gate: ask the person only when this run may use a lot of tokens / quota ──
+{
+  const costly = costlyRunReasons(config, { hierarchy: hierarchy && subtasks.length === 0, autoPlan: usePlanner, workers: subtasks.length, model });
+  const approvalsFile = path.join(ROOT, '.harness', 'approvals.json');
+  const saved = readJsonSafe(approvalsFile) || {};
+  const always = new Set(Array.isArray(saved.alwaysAllow) ? saved.alwaysAllow : []);
+  const pending = costly.filter((c) => !always.has(c.kind));
+  if (pending.length && !yes) {
+    const names = engine ? [engine] : (config.activeProfile && config.activeProfile !== 'auto' ? [config.activeProfile] : (config.autoOrder || Object.keys(config.profiles)));
+    const models = names.filter((n) => config.profiles[n]).map((n) => `${n}: ${config.profiles[n].models?.high || "the CLI's default"}`).join(' | ');
+    console.log('This run may use a lot of tokens or quota:');
+    for (const c of pending) console.log(`  - ${c.text}`);
+    console.log(`  High-tier model per engine: ${models}`);
+    if (maxCost === undefined) console.log('  No --max-cost set: only config budget limits apply.');
+    if (!process.stdin.isTTY) {
+      console.error('APPROVAL_NEEDED: no terminal to ask in, so nothing was started. Ask the person; if they agree, run the same command again with --yes.');
+      process.exit(3);
+    }
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ans = (await rl.question("Start it? [y] yes  [n] no  [a] yes, and don't ask again for this kind of run: ")).trim().toLowerCase();
+    rl.close();
+    if (ans === 'a' || ans === 'always') {
+      for (const c of pending) always.add(c.kind);
+      fs.writeFileSync(approvalsFile, JSON.stringify({ ...saved, alwaysAllow: [...always] }, null, 2) + '\n');
+      console.log(`Saved in .harness/approvals.json (delete a line there to be asked again).`);
+    } else if (ans !== 'y' && ans !== 'yes') {
+      console.log('Not started.');
+      process.exit(4);
+    }
+  }
+}
 const job = {
   id: `job-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 6)}`,
   ...(engine ? { engine } : {}),

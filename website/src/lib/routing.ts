@@ -22,7 +22,7 @@ export const TIERS: Tier[] = ['fast', 'medium', 'high'];
 /** config.json → profiles.<engine>.models. Aliases only (never pinned versions); null = no --model, the CLI's newest default. */
 export const MODEL_ALIASES: Record<Engine, Record<Tier, string | null>> = {
   claude: { fast: 'haiku', medium: 'sonnet', high: 'opus' },
-  antigravity: { fast: null, medium: null, high: null },
+  antigravity: { fast: 'gemini-3.8-flash-medium', medium: 'gemini-4-argon-medium', high: 'gemini-4-hydrogen-high' },
   codex: { fast: null, medium: null, high: null },
 };
 

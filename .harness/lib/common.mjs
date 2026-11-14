@@ -227,6 +227,25 @@ export function resolveModel(profile, { tier = 'medium', override = null } = {})
 }
 
 /**
+ * Why a run that a person starts may use a lot of tokens or quota. Pure: no files, no probing.
+ * Empty list = a normal run, nobody is asked. Each reason has a `kind` (what "don't ask again" saves) and plain `text`.
+ *   team         orchestrator + leads plan on the high tier, then several workers
+ *   parallel     an AI planner on the high tier, then several workers
+ *   many-workers 3 or more hand-written workers at the same time
+ *   high-model   every agent forced onto the high tier, or onto a profile's high-tier model by name
+ */
+export function costlyRunReasons(config, { hierarchy = false, autoPlan = false, workers = 1, model = null } = {}) {
+  const out = [];
+  if (hierarchy) out.push({ kind: 'team', text: 'team mode: an orchestrator and leads plan on the high tier, then several workers run' });
+  else if (autoPlan) out.push({ kind: 'parallel', text: 'parallel mode: an AI planner on the high tier, then several workers run at once' });
+  if (Number(workers) >= 3) out.push({ kind: 'many-workers', text: `${workers} workers run at the same time` });
+  const m = String(model || '').toLowerCase();
+  const highModels = Object.values(config?.profiles || {}).map((p) => p?.models?.high).filter(Boolean).map((s) => String(s).toLowerCase());
+  if (m && (m === 'high' || highModels.includes(m))) out.push({ kind: 'high-model', text: `every agent is forced onto the most expensive model (--model ${model})` });
+  return out;
+}
+
+/**
  * Resolve which engine profile to use.
  * Order: explicit name -> HARNESS_AGENT env -> config.activeProfile ("auto" by default).
  * "auto" = first engine in config.autoOrder that is installed and whose flags pass the probe.

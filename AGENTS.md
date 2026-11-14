@@ -180,6 +180,8 @@ node .harness/dispatch.mjs --goal "<clear goal incl. exact names/formats>" --hie
   `node .harness/team.mjs validate` must pass; Doctor checks it too.
 
 Rules for you when dispatching:
+- **Big runs need the person's OK.** If dispatch exits with `APPROVAL_NEEDED` (code 3), show the user the reasons it
+  printed (mode, number of workers, high-tier models) and ask in chat. Add `--yes` only after a clear yes for THAT run.
 - **Make sure there is a real check.** Without `--check`, the harness picks one from
   `package.json` (`check` > `typecheck`+`test` > `build` > `lint`). If dispatch prints
   "NO real check", the verifier passes anything: tell the user, and propose a test or `--check`.

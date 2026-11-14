@@ -59,12 +59,12 @@ after(() => {
 });
 
 const CODEX_HELP = `printf '%s\\n' 'Usage: codex exec [options] [PROMPT]' '  --full-auto          Run without asking for approval in the workspace' '  -h, --help           Show help'`;
-const AGY_HELP = `printf '%s\\n' 'Usage: agy [options]' '  -p, --prompt <text>  Run one prompt headless and exit' '  -h, --help           Show help'`;
+const AGY_HELP = `printf '%s\\n' 'Usage: agy [options]' '  -p, --prompt <text>  Run one prompt headless and exit' '  --model              Model for the current CLI session' '  -h, --help           Show help'`;
 
 test('profileFlags extracts dash flags from args', () => {
   assert.deepEqual(profileFlags({ args: ['--yolo', 'sub', '--', '--x={p}'] }), ['--yolo']);
   assert.deepEqual(profileFlags(profiles.codex), ['--full-auto']);
-  assert.deepEqual(profileFlags(profiles.antigravity), ['-p']);
+  assert.deepEqual(profileFlags(profiles.antigravity).sort(), ['--model', '-p'], 'agy has model tiers, so --model is probed too');
   assert.equal(profiles.antigravity.binary, 'agy');
   assert.equal(profiles.antigravity.promptVia, 'arg');
   assert.deepEqual(profiles.antigravity.args, ['-p', '{prompt}']);
@@ -100,7 +100,7 @@ test('agy whose help lacks -p is incompatible and falls back to codex', () => {
   useBin('agy-bad', { codex: CODEX_HELP, agy: `printf '%s\\n' 'Usage: agy [options] [paths...]' '  -n --new-window   Open a new window'` });
   const probe = probeEngine(profiles.antigravity, { force: true });
   assert.equal(probe.compatible, false);
-  assert.deepEqual(probe.missing, ['-p']);
+  assert.deepEqual([...probe.missing].sort(), ['--model', '-p']);
   const r = resolveProfile(config, 'antigravity');
   assert.equal(r.fallbackFrom, 'antigravity');
   assert.equal(r.name, 'codex');
