@@ -1038,9 +1038,9 @@ await test('doctor: a valid setup reports 0 failures and 0 warnings; profile pla
   g('add', '-A'); g('commit', '-q', '-m', 'package.json');
   fs.cpSync(path.join(REPO, '.claude'), path.join(d, '.claude'), { recursive: true }); // an installed project has the editor agents
   const dr = node(d, ['.harness/doctor.mjs']); const out = `${dr.stdout}
-[exit ${dr.status}] ${dr.stderr || ''}`; // HARNESS_ENGINES='' (suite env): no engine and no ~/.gemini/bin hint from this machine
+[exit ${dr.status}${dr.signal ? ` signal ${dr.signal}` : ''}${dr.error ? ` error ${dr.error.code}` : ''}] ${String(dr.stderr || '').slice(0, 300)}`; // HARNESS_ENGINES='' (suite env): no engine and no ~/.gemini/bin hint from this machine
   assert(/Failures: 0 · Warnings: 0 · Notes: \d+/.test(out), // notes vary: an AI tool installed on this machine but not allowed in the sandbox is a note
-     out.split('\n').filter((l) => /^  [!✖ℹ]|Failures/.test(l)).join('\n'));
+     out.split('\n').filter((l) => /^  [!✖ℹ]|Failures|^\[exit/.test(l)).join('\n'));
   assert(/ℹ memory\/profile\.md/.test(out) && /ℹ The background controller is not running/.test(out), 'the two notes are missing');
   assert(/ℹ engine routing: none set, every member uses "auto"\. .*team\.mjs auto-assign/.test(out), 'the engine-routing note is missing');
   fs.writeFileSync(path.join(d, '.harness', 'config.json'), '{ broken');
