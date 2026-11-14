@@ -23,7 +23,7 @@ export const TIERS: Tier[] = ['fast', 'medium', 'high'];
 export const MODEL_ALIASES: Record<Engine, Record<Tier, string | null>> = {
   claude: { fast: 'haiku', medium: 'sonnet', high: 'opus' },
   antigravity: { fast: 'gemini-3.8-flash-medium', medium: 'gemini-4-argon-medium', high: 'gemini-4-hydrogen-high' },
-  codex: { fast: null, medium: null, high: null },
+  codex: { fast: 'gpt-6-luna@low', medium: 'gpt-6-luna@medium', high: 'gpt-6-luna@high' },
 };
 
 export interface Routing { plan: Engine; code: Engine; qa: Engine }
