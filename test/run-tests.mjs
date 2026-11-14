@@ -2120,6 +2120,15 @@ await test('Claude Code session agents are counted: each started lead is a "clau
   assert(a2.status === 7 && /DAILY_LIMIT: Claude Code session agents used 3\/4/.test(a2.stderr), `exit ${a2.status}: ${a2.stdout}${a2.stderr}`);
 });
 
+await test('doctor does not call the project\'s own folder a stray git worktree, however its path is spelled (short names, symlinks)', () => {
+  const { d, g } = gitSandbox({ autonomous: false });
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: PASS } })); g('add', '-A'); g('commit', '-q', '-m', 'pkg');
+  const alias = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-alias-')); const link = path.join(alias, 'link');
+  try { fs.symlinkSync(d, link, 'junction'); } catch { return; } // no symlink right on this machine: nothing to check
+  const r = node(link, ['.harness/doctor.mjs'], { HARNESS_ROOT: link });
+  assert(!/extra git worktree/.test(r.stdout), `the folder reached through a link is still the same project:\n${r.stdout.split('\n').filter((l) => /worktree/.test(l)).join('\n')}`);
+});
+
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
   const d = sandbox();
   for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch']) { // daemon --help once started the controller
