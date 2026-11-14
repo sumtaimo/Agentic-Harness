@@ -180,6 +180,11 @@ node .harness/dispatch.mjs --goal "<clear goal incl. exact names/formats>" --hie
   `node .harness/team.mjs validate` must pass; Doctor checks it too.
 
 Rules for you when dispatching:
+- **AI tools need the person's OK once.** If dispatch exits with `ENGINE_APPROVAL_NEEDED`, tell the user which tools are
+  installed but not allowed and ask them to run `node .harness/engines.mjs` themselves (it spends their quota). Never
+  run `engines.mjs allow` for them without a clear yes for that tool.
+- **Autopilot holds big runs.** A backlog item BLOCKED with "Needs your OK" waits for the user; run
+  `node .harness/backlog.mjs approve <id>` only after they say yes for that item.
 - **Big runs need the person's OK.** If dispatch exits with `APPROVAL_NEEDED` (code 3), show the user the reasons it
   printed (mode, number of workers, high-tier models) and ask in chat. Add `--yes` only after a clear yes for THAT run.
 - **Make sure there is a real check.** Without `--check`, the harness picks one from

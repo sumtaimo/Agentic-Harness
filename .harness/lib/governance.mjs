@@ -535,6 +535,8 @@ export function itemToJob(item, { autonomous = false } = {}) {
   for (const k of ['engine', 'verifyCmd', 'acceptanceCriteria', 'interfaceContract', 'source']) if (item[k] !== undefined) job[k] = item[k];
   if (item.hierarchy) job.hierarchy = true;
   if (item.maxCostUsd !== undefined) job.maxCostUsd = item.maxCostUsd;
+  if (item.costApproved === true) job.costApproved = true; // the person approved this big run (backlog.mjs approve)
+  if (item.model) job.model = item.model;
   if (Array.isArray(item.subtasks) && item.subtasks.length) job.subtasks = item.subtasks;
   else if (item.hierarchy) Object.assign(job, { goal: item.goal || item.title, targetFiles: item.targetFiles || [] });
   else if (item.autoPlan) Object.assign(job, { autoPlan: true, goal: item.goal || item.title, targetFiles: item.targetFiles || [] });

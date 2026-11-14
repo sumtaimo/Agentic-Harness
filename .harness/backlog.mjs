@@ -6,6 +6,7 @@
  *   node .harness/backlog.mjs add "Title" [--goal "…"] [--ready] [--priority 1]
  *        [--files "src/a.js,docs/"] [--role DEV_ENGINEER] [--skills code-craft] [--check "npm test"] [--auto-plan]
  *   node .harness/backlog.mjs ready <id>                 BACKLOG/BLOCKED → READY
+ *   node .harness/backlog.mjs approve <id>               OK a big run that autopilot held ("needs your OK") → READY
  *   node .harness/backlog.mjs block <id> "reason"        → BLOCKED
  *   node .harness/backlog.mjs pop                        move the next READY item into the inbox now
  *   node .harness/backlog.mjs import <file|folder> [--reset-memory]
@@ -110,6 +111,14 @@ switch (cmd) {
     const item = updateBacklogItem(id, patch);
     if (!item) { console.error(`No backlog item "${id}".`); process.exit(1); }
     console.log(`${id} → ${status}`);
+    break;
+  }
+
+  case 'approve': { // a big run that autopilot held: the person OKs it (also allows the high model for this item)
+    const id = positional[0];
+    const item = updateBacklogItem(id, { status: 'READY', costApproved: true, needsApproval: undefined, blockedReason: undefined });
+    if (!item) { console.error(`No backlog item "${id}".`); process.exit(1); }
+    console.log(`${id} → READY, big run approved (autopilot may use the team / parallel mode and the high model for it)`);
     break;
   }
 

@@ -98,8 +98,8 @@ const en = {
   setup: {
     intro: 'Pick your situation. Each step is one command.',
     tabs: { demo: 'Try the demo', new: 'New project', existing: 'Existing project', tools: 'Connect AI tools', cloud: 'No editor', upgrade: 'Upgrade' },
-    tools: ['Claude Code: install, then log in once with your subscription', 'Antigravity: install the Antigravity app and sign in with Google. Then put `agy` on your PATH (Windows command shown; macOS/Linux: add `$HOME/.gemini/bin` to PATH in your shell profile), open a new terminal and check it answers', 'Codex (optional): install, then log in', 'Check which tools the harness can use, then give each agent the right tool'],
-    toolsNote: 'Each person logs in with their own account on their own machine. Big runs (team or parallel mode, 3+ workers, the high model) ask you first in the terminal: y, n, or a for "don’t ask again".',
+    tools: ['Claude Code: install, then log in once with your subscription', 'Antigravity: install the Antigravity app and sign in with Google. Then put `agy` on your PATH (Windows command shown; macOS/Linux: add `$HOME/.gemini/bin` to PATH in your shell profile), open a new terminal and check it answers', 'Codex (optional): install, then log in', 'Allow each tool once (the harness never uses a logged-in tool silently), check, then give each agent the right tool'],
+    toolsNote: 'Each person logs in with their own account on their own machine. Big runs (team or parallel mode, 3+ workers, the high model) ask you first in the terminal: y, n, or a for "don’t ask again". In autopilot they wait as "Needs your OK" while other tasks go on.',
     demo: ['Get the template', 'Make the demo project', 'Open `demo-project` in Claude Code, trust it, restart, then run the waiting task'],
     new: ['Start a git repo', 'Install the harness', 'Check it', 'Write your goals in `.harness/charter.md`, then give a task'],
     newNote: 'Made your repo with "Use this template"? Run `node install.mjs --reset` first, so you start without the owner’s files.',
@@ -257,8 +257,8 @@ const kh: Dict = {
   setup: {
     intro: 'ជ្រើសស្ថានភាពរបស់អ្នក។ ជំហាននីមួយៗគឺពាក្យបញ្ជាមួយ។',
     tabs: { demo: 'សាក demo', new: 'Project ថ្មី', existing: 'Project ដែលមានស្រាប់', tools: 'ភ្ជាប់ឧបករណ៍ AI', cloud: 'គ្មាន editor', upgrade: 'ធ្វើបច្ចុប្បន្នភាព' },
-    tools: ['Claude Code៖ ដំឡើង រួចចូលគណនីម្តងដោយ subscription របស់អ្នក', 'Antigravity៖ ដំឡើងកម្មវិធី Antigravity ហើយចូលដោយ Google។ បន្ទាប់មកដាក់ `agy` ក្នុង PATH (បង្ហាញពាក្យបញ្ជា Windows; macOS/Linux៖ បន្ថែម `$HOME/.gemini/bin` ទៅ PATH ក្នុង shell profile) បើក terminal ថ្មី ហើយពិនិត្យថាវាឆ្លើយតប', 'Codex (ជម្រើស)៖ ដំឡើង រួចចូលគណនី', 'ពិនិត្យថា harness អាចប្រើឧបករណ៍ណាខ្លះ រួចផ្តល់ឧបករណ៍ត្រឹមត្រូវឲ្យ agent នីមួយៗ'],
-    toolsNote: 'ម្នាក់ៗចូលដោយគណនីផ្ទាល់ខ្លួន លើម៉ាស៊ីនរបស់ខ្លួន។ ការងារធំ (របៀប team ឬ parallel, workers ៣+, ឬ model កម្រិតខ្ពស់) នឹងសួរអ្នកមុនក្នុង terminal៖ y, n ឬ a សម្រាប់ «កុំសួរម្តងទៀត»។',
+    tools: ['Claude Code៖ ដំឡើង រួចចូលគណនីម្តងដោយ subscription របស់អ្នក', 'Antigravity៖ ដំឡើងកម្មវិធី Antigravity ហើយចូលដោយ Google។ បន្ទាប់មកដាក់ `agy` ក្នុង PATH (បង្ហាញពាក្យបញ្ជា Windows; macOS/Linux៖ បន្ថែម `$HOME/.gemini/bin` ទៅ PATH ក្នុង shell profile) បើក terminal ថ្មី ហើយពិនិត្យថាវាឆ្លើយតប', 'Codex (ជម្រើស)៖ ដំឡើង រួចចូលគណនី', 'អនុញ្ញាតឧបករណ៍នីមួយៗម្តង (harness មិនប្រើឧបករណ៍ដែលបាន login ដោយស្ងាត់ៗទេ) ពិនិត្យ រួចផ្តល់ឧបករណ៍ត្រឹមត្រូវឲ្យ agent នីមួយៗ'],
+    toolsNote: 'ម្នាក់ៗចូលដោយគណនីផ្ទាល់ខ្លួន លើម៉ាស៊ីនរបស់ខ្លួន។ ការងារធំ (របៀប team ឬ parallel, workers ៣+, ឬ model កម្រិតខ្ពស់) នឹងសួរអ្នកមុនក្នុង terminal៖ y, n ឬ a សម្រាប់ «កុំសួរម្តងទៀត»។ ក្នុង autopilot វារង់ចាំជា «ត្រូវការការយល់ព្រមពីអ្នក» ខណៈការងារផ្សេងបន្ត។',
     demo: ['យក template', 'បង្កើត demo project', 'បើក `demo-project` ក្នុង Claude Code, trust, restart រួចរត់ការងារដែលកំពុងរង់ចាំ'],
     new: ['បង្កើត git repo', 'ដំឡើង harness', 'ពិនិត្យ', 'សរសេរគោលដៅក្នុង `.harness/charter.md` រួចប្រគល់ការងារ'],
     newNote: 'បង្កើត repo ដោយ "Use this template"? សូមរត់ `node install.mjs --reset` ជាមុនសិន ដើម្បីចាប់ផ្តើមដោយគ្មាន files របស់ម្ចាស់ដើម។',

@@ -254,7 +254,7 @@ if (!ARGS.includes('--no-auto-assign') && report.some((r) => r.replaceAll('\\', 
   const routed = r.status === 0 && /Wrote the "engine"/.test(r.stdout || '');
   report.push(routed
     ? `routed team roles to your engines (${found ? found[1] : '?'}); see them with  node .harness/team.mjs show`
-    : `! no usable AI engine found yet${found ? ` (${found[1]})` : ''}: team members use "auto". After you log in to one, run  node .harness/team.mjs auto-assign`);
+    : `! no AI engine allowed yet${found ? ` (${found[1]})` : ''}: team members use "auto". Log in to one, allow it with  node .harness/engines.mjs  then run  node .harness/team.mjs auto-assign`);
 }
 
 // Autonomous mode ships ON (it only acts on READY tasks you add, and plans new ones only once the charter objectives

@@ -32,8 +32,13 @@ import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd,
   listProjectFiles, safeTarget,
-  winQuote, chooseModelTier, resolveModel,
+  winQuote, chooseModelTier, resolveModel, pendingCostReasons, loadApprovals,
 } from './lib/common.mjs';
+
+// Autonomous work never moves up to the high (most expensive) tier without the person's OK:
+// set while an autonomous task or the PO_ARCHITECT runs, unless that task was approved or "high-model" is always allowed.
+let autoTierCap = false;
+const highAlwaysAllowed = () => (loadApprovals().alwaysAllow || []).includes('high-model');
 import {
   readCharter, loadRoles, loadSkills, matchSkills, computeAllowedTools, computeDisallowedTools,
   matchesAny, withinAll, skillRulesNotGranted, readBacklog, writeBacklog, updateBacklogItem, nextReady, backlogCounts, itemToJob,
@@ -241,7 +246,11 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallo
   return new Promise((resolve, reject) => {
     let profile;
     try { profile = resolveProfile(config, engine); } catch (e) { return reject(e); }
-    const t = tier || { tier: 'medium', reasons: ['no complexity info'] };
+    let t = tier || { tier: 'medium', reasons: ['no complexity info'] };
+    if (autoTierCap && t.tier === 'high' && !modelOverride) {
+      t = { tier: 'medium', reasons: [...(t.reasons || []), 'capped high → medium: autonomous run, the high model needs your OK (node .harness/backlog.mjs approve <id>)'] };
+      logTelemetry('AUTO_TIER_CAPPED', `${id}: high tier capped to medium (autonomous; high model not approved)`, { worker: id });
+    }
     const pick = resolveModel(profile, { tier: t.tier, override: modelOverride });
     logTelemetry('MODEL_TIER', `${id}: ${pick.tier} tier → ${pick.model || `${profile.name} default (no --model)`}${pick.source === 'auto' ? '' : ` (${pick.source})`}`, { worker: id, engine: profile.name, tier: pick.tier, model: pick.model, source: pick.source, reasons: t.reasons });
     if (profile.fallbackFrom) {
@@ -1113,6 +1122,7 @@ async function executeSquareCycle(taskFile) {
   resetCost();
   writeState({ planSummary: '-', workerSummary: '-', currentTaskFile: taskFile, costUsd: 0 });
   lastFinished = { autonomous: !!task.autonomous, backlogId: task.backlogId, title, ok: false };
+  autoTierCap = !!task.autonomous && task.costApproved !== true && !highAlwaysAllowed();
   if (task.backlogId) {
     const item = updateBacklogItem(task.backlogId, { status: 'IN_PROGRESS', startedAt: new Date().toISOString(), lastJobId: task.id });
     if (!item) logTelemetry('BACKLOG_ITEM_MISSING', `Job references backlog item ${task.backlogId}, which is not in backlog.json`);
@@ -1373,7 +1383,19 @@ async function autonomousTick(reason = 'interval') {
     const remaining = gov.charter.maxAutoTasksPerRun - auto.used;
     if (remaining <= 0) { refreshAutoStatus('run budget used — restart to continue'); logTelemetry('AUTO_BUDGET_USED', `maxAutoTasksPerRun (${gov.charter.maxAutoTasksPerRun}) reached`); return 'budget'; }
 
-    let item = nextReady();
+    // A READY item that may use a lot of quota is held (BLOCKED, "needs your OK"), and autopilot moves on to the next one.
+    const pickReady = () => {
+      for (let it = nextReady(); it; it = nextReady()) {
+        const pending = pendingCostReasons(config, it);
+        if (!pending.length) return it;
+        const why = `Needs your OK (may use a lot of quota): ${pending.map((p) => p.text).join('; ')}. Approve: node .harness/backlog.mjs approve ${it.id}`;
+        updateBacklogItem(it.id, { status: 'BLOCKED', blockedReason: why, needsApproval: true });
+        logTelemetry('AUTO_HELD', `Held ${it.id}: ${why}`, { backlogId: it.id, kinds: pending.map((p) => p.kind) });
+        writeState({ history: pushHistory(`⏸ HELD  ${it.id} needs your OK (big run)`) });
+      }
+      return null;
+    };
+    let item = pickReady();
     if (!item) {
       // "autonomous: on" never means planning from nothing: with the placeholder objectives there is no AI call and no spend.
       if (/\(describe your product goals here/.test(gov.charter.text)) {
@@ -1390,12 +1412,13 @@ async function autonomousTick(reason = 'interval') {
       const saved = readJsonSafe(AUTO_STATE_FILE, {});
       if (saved.poIdleFp === fp && !process.argv.includes('--force')) { refreshAutoStatus('idle: PO found nothing to do and nothing changed since (no AI call; --tick --force asks again)'); return 'idle'; }
       let added = [];
+      autoTierCap = !highAlwaysAllowed();
       try { added = await poGenerate(gov, remaining); } catch (e) {
         auto.paused = `PO_ARCHITECT failed: ${e.message.slice(0, 120)}`; logTelemetry('AUTO_PAUSED', auto.paused); refreshAutoStatus(); return 'paused';
-      }
+      } finally { autoTierCap = false; }
       if (!added.length) { atomicWriteJson(AUTO_STATE_FILE, { poIdleFp: fp, at: new Date().toISOString() }); refreshAutoStatus('PO_ARCHITECT: nothing left to do for the charter'); return 'empty'; }
       if (fs.existsSync(AUTO_STATE_FILE)) fs.rmSync(AUTO_STATE_FILE, { force: true });
-      item = nextReady();
+      item = pickReady();
     }
     if (!item) { refreshAutoStatus('no READY items'); return 'empty'; }
 

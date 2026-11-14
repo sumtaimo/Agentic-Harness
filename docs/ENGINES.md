@@ -25,6 +25,21 @@ architecture planning gets `high`, and a failed check escalates one tier. The ti
 - `null` means no `--model` flag, so the CLI uses its own newest default. This is the setting for `codex` today.
 - `agy` has no aliases, so Antigravity uses exact IDs from `agy models`: `fast` = `gemini-3.8-flash-medium`, `medium` (coding) = `gemini-4-argon-medium`, `high` (planning) = `gemini-4-hydrogen-high`. Real runs on all three tiers passed on 2026-11-14 (Flash: create a file; Argon: write add(a, b); Hydrogen: write mul(a, b); each checked by a real command and COMMITTED).
 
+## Each AI tool is allowed once
+
+A tool that is already installed and logged in on your machine (`claude`, `agy`, `codex`) is **never used silently**.
+The first time the harness would use it, it asks in the terminal: *Let the harness use it? It spends your own
+subscription / quota. [y/n]*. After a yes it is used automatically; after a no it is skipped. Answers are saved per
+person in `.harness/approvals.json` (git-ignored), so every teammate decides for their own machine.
+
+```bash
+node .harness/engines.mjs              # list the tools and answer the ones not decided yet
+node .harness/engines.mjs allow agy    # or: deny agy
+```
+
+Without a terminal (an AI or a script calling dispatch) nothing is asked: if no tool is allowed, dispatch starts nothing
+and exits with `ENGINE_APPROVAL_NEEDED` (code 3). `doctor` shows each tool as ALLOWED, not allowed, or waiting for your OK.
+
 ## Big runs ask first
 
 `dispatch.mjs` asks in the terminal before a run that may use a lot of tokens or quota: team or parallel mode, 3 or more
@@ -32,6 +47,12 @@ workers, or `--model high` (or a high-tier model by name). A normal one-worker r
 `n` (stop) or `a` (start, and do not ask again for that kind of run; saved per person in `.harness/approvals.json`,
 which is git-ignored). `--yes` skips the question. With no terminal (an AI or a script calling it) it starts nothing and
 exits with `APPROVAL_NEEDED` (code 3): the AI must ask you in chat and re-run with `--yes` only if you agree.
+
+**Autopilot (`npm run auto`)** runs normal tasks without asking. A READY task that would be a big run is **held**:
+it becomes BLOCKED with *Needs your OK*, its files are untouched, and autopilot moves on to the next task. Approve it with
+`node .harness/backlog.mjs approve <id>`. Autopilot also never moves up to the high (most expensive) model on its own:
+a retry that would reach it stays on medium (`AUTO_TIER_CAPPED` in the log) unless that task was approved, or you
+answered `a` for `--model high` once.
 - Override with `dispatch --model <tier|alias>` or `"model"` on a `team.json` member.
 
 Details and the full rules: [`MULTI-MODEL-SETUP.md`](MULTI-MODEL-SETUP.md#6-model-tiers-the-right-sized-model-for-each-job-saves-tokens).

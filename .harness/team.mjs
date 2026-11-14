@@ -19,6 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ensureDirs, loadConfig, detectEngines, HARNESS_DIR } from './lib/common.mjs';
+import { askEngineConsent } from './lib/consent.mjs';
 import { readCharter, loadRoles, loadTeam, validateTeam, describeMember, syncAgents, planEngineRouting, applyEngineRouting } from './lib/governance.mjs';
 
 ensureDirs();
@@ -41,6 +42,7 @@ if (cmd === 'validate') {
   process.exit(errors.length ? 1 : 0);
 } else if (cmd === 'auto-assign') {
   const dry = process.argv.includes('--dry-run');
+  if (process.env.HARNESS_ENGINES === undefined) await askEngineConsent(config, Object.keys(config.profiles)); // a logged-in tool is never routed to silently
   const { usable, skipped } = detectEngines(config);
   console.log(`Usable AI engines on this machine: ${usable.length ? usable.map(label).join(', ') : 'none'}`);
   skipped.forEach((s) => console.log(`  · ${label(s.name)}: ${s.why}`));
