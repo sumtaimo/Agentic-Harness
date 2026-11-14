@@ -38,7 +38,7 @@ const manifest = (() => { try { return JSON.parse(fs.readFileSync(path.join(proj
 check('MANIFEST.json records the core fingerprints', !!manifest && Object.keys(manifest.files || {}).length > 5, 'missing or empty');
 check('personal approvals.json is never copied into a project', !fs.existsSync(path.join(proj, '.harness', 'approvals.json')));
 const deny = (() => { try { return JSON.parse(fs.readFileSync(path.join(proj, '.claude', 'settings.json'), 'utf8')).permissions.deny || []; } catch { return []; } })();
-check('the core is read-only for Claude Code in a project', ['Edit(.harness/*.mjs)', 'Edit(.harness/lib/**)'].every((r) => deny.includes(r)), deny.join(', '));
+check('the core is read-only for Claude Code in a project (valid Edit(...) rules only)', ['Edit(.harness/*.mjs)', 'Edit(.harness/lib/**)'].every((r) => deny.includes(r)) && !deny.some((r) => r.startsWith("Write(")), deny.join(', '));
 const tplDeny = JSON.parse(read('.claude/settings.json')).permissions.deny || [];
 check('the template itself stays editable for maintainers', !tplDeny.includes('Edit(.harness/*.mjs)'));
 

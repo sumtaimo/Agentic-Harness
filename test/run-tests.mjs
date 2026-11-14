@@ -2069,7 +2069,10 @@ await test('harness core protection: install fingerprints the core, never copies
   const m = json(path.join(proj, '.harness', 'MANIFEST.json'));
   assert(m.version && m.files['.harness/dispatch.mjs'] && m.files['.harness/lib/common.mjs'], JSON.stringify(Object.keys(m.files)));
   const deny = json(path.join(proj, '.claude', 'settings.json')).permissions.deny;
-  assert(deny.includes('Edit(.harness/*.mjs)') && deny.includes('Write(.harness/lib/**)'), deny.join());
+  assert(deny.includes('Edit(.harness/*.mjs)') && deny.includes('Edit(.harness/lib/**)') && !deny.some((r) => r.startsWith("Write(")), `only valid Edit(...) rules (a Write(path) rule is reported as invalid by Claude Code): ${deny.join()}`);
+  // a project installed by an earlier release has the invalid rules: re-installing removes them
+  const sp = path.join(proj, '.claude', 'settings.json'); const sj = json(sp); sj.permissions.deny.push('Write(.harness/*.mjs)', 'Write(.harness/MANIFEST.json)'); fs.writeFileSync(sp, JSON.stringify(sj, null, 2));
+  assert(node(REPO, ['install.mjs', proj]).status === 0 && !json(sp).permissions.deny.some((r) => r.startsWith("Write(")), 're-install must remove the invalid Write(...) rules');
   assert(!json(path.join(REPO, '.claude', 'settings.json')).permissions.deny.includes('Edit(.harness/*.mjs)'), 'the template itself stays editable');
   let doc = node(proj, ['.harness/doctor.mjs']);
   assert(/unchanged since install/.test(doc.stdout), doc.stdout);
