@@ -2027,6 +2027,24 @@ await test('autopilot in Claude Code (brief --next) holds a big task like the he
   assert(/wait for the user's OK/.test(hook.stdout) && /BIG/.test(hook.stdout), `the session hook must tell the AI about held tasks:\n${hook.stdout}`);
 });
 
+await test('quota fallback chain: A → B when A is out; if B is out too it stops (never switches back, no loop); the shipped config covers all three tools', () => {
+  const d = sandbox();
+  const lim = path.join(d, 'lim.mjs');
+  fs.writeFileSync(lim, "process.stdin.resume();process.stdin.on('end',()=>{process.stderr.write(\"ERROR: You've hit your usage limit.\\n\");process.exit(1);});");
+  const out = { verified: true, binary: process.execPath, args: [lim], promptVia: 'stdin', allowedTools: [] };
+  withProfiles(d, { a: { ...out }, b: { ...out } });
+  const f = path.join(d, '.harness', 'config.json'); const c = json(f);
+  c.quotaFallback = { a: { engine: 'b', models: {} }, b: { engine: 'a', models: {} } };
+  fs.writeFileSync(f, JSON.stringify(c, null, 2));
+  drop(d, { id: 'loop', title: 'loop', engine: 'a', verifyCmd: PASS, subtasks: [{ id: 'w', engine: 'a', targetFiles: ['x.txt'], prompt: 'WRITE x.txt hi' }] });
+  runOnce(d);
+  const used = log(d).filter((e) => e.phase === 'AGENT_USAGE').map((e) => e.engine);
+  assert(used.join() === 'a,b', `exactly one switch, no way back: ${used.join()}`);
+  assert(/usage limit/.test(stateOf(d).lastGateStatus), stateOf(d).lastGateStatus);
+  const shipped = json(path.join(REPO, '.harness', 'config.json')).quotaFallback;
+  assert(shipped.claude?.engine === 'antigravity' && shipped.codex?.engine === 'antigravity' && shipped.antigravity?.engine === 'claude', JSON.stringify(shipped));
+});
+
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
   const d = sandbox();
   for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch']) { // daemon --help once started the controller

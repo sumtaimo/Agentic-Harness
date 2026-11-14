@@ -52,10 +52,11 @@ Each tier maps to one model per engine in `.harness/config.json`; `node .harness
 
 ## Saving quota: reroute, daily caps, usage report
 
-- **Claude limit → agy.** When Claude Code stops on its usage limit, the same agent retries once through `agy`, on
-  Antigravity's Claude models, on the same tier (set in `config.json` → `quotaFallback.claude.models`). Only if you
-  allowed antigravity. The live feed shows `⇄ claude usage limit → continuing
-  on antigravity`; the log has `QUOTA_FALLBACK`. Set in `config.json` → `quotaFallback`; delete that block to turn it off.
+- **Out of quota → another tool.** When a tool stops on its usage limit (or its daily cap), the same agent retries once
+  on another tool you allowed, on the same tier: claude → agy (Antigravity's Claude models), codex → agy, agy → claude.
+  It switches at most once, so two empty tools never loop. The live feed shows `⇄ codex usage limit → continuing on
+  antigravity`; the log has `QUOTA_FALLBACK`. Tested on 2026-11-14 with a real Codex usage limit: agy finished the task.
+  Set in `config.json` → `quotaFallback`; remove an entry to turn it off.
 - **Daily caps.** `config.json` → `dailyLimits`, per engine: `calls`, `tokens` (engines that report them, e.g. Claude)
   and `usd`. The template ships with **antigravity: 80 calls/day** and **claude: $5 or 60 calls/day** (whichever comes
   first); change or remove them there. When a cap is reached the agent is not started (`DAILY_LIMIT`);

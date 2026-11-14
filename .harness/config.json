@@ -163,7 +163,23 @@
         "medium": "claude-sonnet-5-5-medium",
         "high": "claude-opus-5-5-high"
       },
-      "note": "When Claude Code stops on its usage limit, the same agent retries once through agy (Antigravity's Claude models, on your Google quota), on the model of the same tier. Only if you allowed antigravity (node .harness/engines.mjs). Remove this block to turn it off."
+      "note": "When this engine stops on its usage limit (or its daily cap), the same agent retries ONCE on the named engine, on the model of the same tier. Only if you allowed that engine (node .harness/engines.mjs). A retry never switches again, so there are no loops. Remove an entry to turn it off."
+    },
+    "codex": {
+      "engine": "antigravity",
+      "models": {
+        "fast": "gemini-3.8-flash-medium",
+        "medium": "gemini-4-argon-medium",
+        "high": "gemini-4-hydrogen-high"
+      }
+    },
+    "antigravity": {
+      "engine": "claude",
+      "models": {
+        "fast": "haiku",
+        "medium": "sonnet",
+        "high": "opus"
+      }
     }
   },
   "dailyLimits": {
