@@ -52,6 +52,31 @@ try {
   if (held.length) lines.push(`- ${held.length} task(s) wait for the user's OK because they may use a lot of quota: ${held.slice(0, 3).map((t) => `${t.id} ("${t.title || t.goal}")`).join(', ')}. Tell the user; run  node .harness/backlog.mjs approve <id>  only after a clear yes for that task.`);
   const { loadApprovals } = await import('./lib/common.mjs');
   if (!Object.values(loadApprovals().engines || {}).some((v) => v === true)) lines.push('- No AI tool is allowed yet for headless runs (dispatch / daemon). The user allows each one once in a terminal: node .harness/engines.mjs. Never run "engines.mjs allow" for them.');
+  // Fresh start: a new session's worktree is cut from the main folder's branch, which can be behind the remote.
+  // A brand-new session worktree (clean, no commits of its own) is fast-forwarded; the main folder is only reported.
+  try {
+    const { execFileSync } = await import('node:child_process');
+    const g = (...a) => execFileSync('git', a, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 8000 }).trim();
+    const trees = g('worktree', 'list', '--porcelain').split('\n\n').map((b) => ({ path: (b.match(/^worktree (.+)$/m) || [])[1], branch: ((b.match(/^branch refs\/heads\/(.+)$/m) || [])[1]) }));
+    const primary = trees[0];
+    const upstreamOf = (br) => { try { return g('rev-parse', '--abbrev-ref', `${br}@{upstream}`); } catch { return ''; } };
+    const base = primary?.branch && upstreamOf(primary.branch);
+    if (base) {
+      try { g('fetch', '--quiet', base.split('/')[0]); } catch { /* offline: compare with what we have */ }
+      const behindMain = Number(g('rev-list', '--count', `${primary.branch}..${base}`));
+      const here = g('rev-parse', '--show-toplevel').replace(/\\/g, '/');
+      const isPrimary = here.toLowerCase() === String(primary.path).replace(/\\/g, '/').toLowerCase();
+      if (!isPrimary) {
+        const behind = Number(g('rev-list', '--count', `HEAD..${base}`));
+        const ahead = Number(g('rev-list', '--count', `${base}..HEAD`));
+        const clean = g('status', '--porcelain') === '';
+        if (behind && !ahead && clean) { g('merge', '--ff-only', '--quiet', base); lines.push(`- This session's worktree was ${behind} commit(s) behind ${base}; fast-forwarded to it (it had no changes of its own).`); }
+        else if (behind) lines.push(`- WARNING: this session is ${behind} commit(s) behind ${base} and has its own changes. Tell the user before working; update with: git merge --ff-only ${base} (or merge/rebase).`);
+      }
+      if (behindMain) lines.push(`- The main folder's branch "${primary.branch}" is ${behindMain} commit(s) behind ${base}, so new sessions start from old code. Tell the user; update it (in ${primary.path}): git pull --ff-only`);
+    }
+  } catch { /* not a git repo, or git missing: nothing to check */ }
+
   const { checkCore, usageTodayLine } = await import('./lib/common.mjs');
   const today = usageTodayLine(cfg);
   if (today) lines.push(`- AI quota used by the harness today: ${today}. Mention it to the user in one short line when you run harness work.`);

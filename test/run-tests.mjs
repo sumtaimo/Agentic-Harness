@@ -2090,6 +2090,20 @@ await test('AI use is never silent: dispatch says which tool before, and what th
   assert(/AI quota used by the harness today: mock 1 call\(s\)/.test(hook.stdout), hook.stdout);
 });
 
+await test('fresh sessions: a new, unchanged session worktree that is behind the remote is fast-forwarded; a stale main folder is reported, never changed', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-fresh-'));
+  const G = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const remote = path.join(base, 'remote.git'); fs.mkdirSync(remote); G(remote, 'init', '-q', '--bare', '-b', 'lab');
+  const main = path.join(base, 'main'); fs.cpSync(sandbox(), main, { recursive: true });
+  G(main, 'init', '-q', '-b', 'lab'); G(main, 'add', '-A'); G(main, 'commit', '-q', '-m', 'one'); G(main, 'remote', 'add', 'origin', remote); G(main, 'push', '-q', '-u', 'origin', 'lab');
+  const other = path.join(base, 'other'); G(base, 'clone', '-q', '-b', 'lab', remote, other); fs.writeFileSync(path.join(other, 'new.txt'), 'x'); G(other, 'add', '-A'); G(other, 'commit', '-q', '-m', 'two'); G(other, 'push', '-q');
+  const wt = path.join(base, 'wt'); G(main, 'worktree', 'add', '-q', '-b', 'claude/s1', wt, 'lab');
+  const r = node(wt, ['.harness/hook-session.mjs'], { HARNESS_ROOT: wt });
+  assert(/fast-forwarded/.test(r.stdout) && fs.existsSync(path.join(wt, 'new.txt')), `the new session must start from the latest lab:\n${r.stdout}`);
+  assert(/main folder's branch "lab" is 1 commit\(s\) behind origin\/lab/.test(r.stdout), r.stdout);
+  assert(!fs.existsSync(path.join(main, 'new.txt')), 'the main folder is never changed by the hook');
+});
+
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
   const d = sandbox();
   for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch']) { // daemon --help once started the controller
