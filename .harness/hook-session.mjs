@@ -64,8 +64,9 @@ try {
     if (base) {
       try { g('fetch', '--quiet', base.split('/')[0]); } catch { /* offline: compare with what we have */ }
       const behindMain = Number(g('rev-list', '--count', `${primary.branch}..${base}`));
-      const here = g('rev-parse', '--show-toplevel').replace(/\\/g, '/');
-      const isPrimary = here.toLowerCase() === String(primary.path).replace(/\\/g, '/').toLowerCase();
+      const { realpathSync } = await import('node:fs');
+      const real = (p) => { try { return realpathSync.native(p).replace(/\\/g, '/').toLowerCase(); } catch { return String(p).replace(/\\/g, '/').toLowerCase(); } };
+      const isPrimary = real(g('rev-parse', '--show-toplevel')) === real(primary.path); // real paths: short names and symlinks are the same folder
       if (!isPrimary) {
         const behind = Number(g('rev-list', '--count', `HEAD..${base}`));
         const ahead = Number(g('rev-list', '--count', `${base}..HEAD`));

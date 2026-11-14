@@ -206,7 +206,10 @@ console.log('\nGit integration branch (where autonomous work lands)');
       const left = (sh(['branch', '--list', 'harness/*']) || '').split('\n').map((b) => b.replace(/^[*+\s]+/, '').trim()).filter(Boolean);
       if (left.length) warn(`${left.length} worker branch(es) kept from failed tasks for review: ${left.slice(0, 5).join(', ')}${left.length > 5 ? ' …' : ''} (delete with: git branch -D <name>)`);
       const wts = (sh(['worktree', 'list', '--porcelain']) || '').split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice(9));
-      const stray = wts.filter((w) => path.resolve(w) !== path.resolve(ROOT));
+      // Same folder, different spelling (Windows short names like RUNNER~1, symlinks, drive-letter case): compare real paths.
+      const real = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+      const norm = (p) => (process.platform === 'win32' ? real(p).toLowerCase() : real(p));
+      const stray = wts.filter((w) => norm(w) !== norm(ROOT));
       stray.length ? warn(`${stray.length} extra git worktree(s) still registered (a task may be running, or one was interrupted): ${stray.join(', ')}. Clean with: git worktree prune`) : ok('git worktrees clean: only your own folder');
       const dirty = sh(['status', '--porcelain', '--untracked-files=no', '--', '.', ':(exclude).harness']);
       dirty ? warn('Your folder has uncommitted changes (the harness never touches them; it only refuses to fast-forward a checked-out uat over them).') : ok('your folder has no uncommitted changes');
