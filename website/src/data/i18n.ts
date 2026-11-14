@@ -160,7 +160,7 @@ const en = {
       'Claude Code is tested the most. Run `node .harness/doctor.mjs` to probe the other tools.',
     ],
   },
-  footer: { tagline: 'No dependencies. Plain-text rules in your own repo. MIT licensed.' },
+  footer: { tagline: 'No dependencies. Plain-text rules in your own repo. MIT licensed, © 2026 TAIMO.' },
 };
 
 export type Dict = typeof en;
@@ -319,7 +319,7 @@ const kh: Dict = {
       'Claude Code ត្រូវបានតេស្តច្រើនជាងគេ។ រត់ `node .harness/doctor.mjs` ដើម្បីពិនិត្យឧបករណ៍ផ្សេងទៀត។',
     ],
   },
-  footer: { tagline: 'គ្មាន dependencies។ ច្បាប់ជាអក្សរធម្មតាក្នុង repo របស់អ្នក។ អាជ្ញាប័ណ្ណ MIT។' },
+  footer: { tagline: 'គ្មាន dependencies។ ច្បាប់ជាអក្សរធម្មតាក្នុង repo របស់អ្នក។ អាជ្ញាប័ណ្ណ MIT, © 2026 TAIMO។' },
 };
 
 export const DICTS: Record<Lang, Dict> = { en, kh };

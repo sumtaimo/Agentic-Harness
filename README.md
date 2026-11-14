@@ -237,6 +237,8 @@ Team and parallel runs, 3+ workers, or `--model high` first **ask you in the ter
 a normal one-worker run never asks. An AI tool already logged in on your machine is used only after you allow it once
 (`node .harness/engines.mjs`). Autopilot holds big runs as "Needs your OK" (`backlog.mjs approve <id>`) and keeps going.
 See [`docs/ENGINES.md`](docs/ENGINES.md#each-ai-tool-is-allowed-once).
+To save quota: when Claude hits its usage limit, the agent continues on `agy` (Antigravity's Claude models); set daily
+caps per engine in `config.json` → `dailyLimits`; see where tokens went with `node .harness/usage.mjs`.
 
 What the controller enforces deterministically, so no agent can talk its way around it:
 - **Every level is validated before the next one starts.** The orchestrator may only give a lead files inside that lead's scope,
@@ -693,4 +695,4 @@ The harness connects to any CLI-driven AI engine (Claude, Codex, Antigravity, lo
 
 ## License
 
-[MIT](LICENSE) © 2026 sumtaimo
+[MIT](LICENSE) © 2026 TAIMO

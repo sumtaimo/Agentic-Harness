@@ -15,7 +15,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DIRS, FILES, readJsonSafe } from './lib/common.mjs';
+import { DIRS, FILES, readJsonSafe, helpIfAsked } from './lib/common.mjs';
+helpIfAsked(import.meta.url);
 
 const args = process.argv.slice(2);
 const val = (f) => { const i = args.indexOf(f); return i > -1 ? args[i + 1] : undefined; };

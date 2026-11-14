@@ -6,9 +6,11 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, detectVerifyCmd, listProjectFiles } from './lib/common.mjs';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, detectVerifyCmd, listProjectFiles, helpIfAsked } from './lib/common.mjs';
+helpIfAsked(import.meta.url);
 import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
 
 ensureDirs();
@@ -39,7 +41,16 @@ for (const [name, p] of Object.entries(config.profiles)) {
   const flags = profileFlags(p);
   const preferred = name === config.activeProfile || (config.activeProfile === 'auto' && (config.autoOrder || [])[0] === name);
   if (!probe.installed) {
-    if (preferred) warn(`${name.padEnd(12)} not installed, but it is your first-choice engine (${config.activeProfile === 'auto' ? 'first in "autoOrder"' : '"activeProfile"'}) → another engine will be used. Install '${p.binary}' or change config.json.`);
+    // agy is often installed but not on PATH (the Antigravity app puts it in ~/.gemini/bin): say exactly how to fix it.
+    const hidden = name === 'antigravity' && ['agy.exe', 'agy'].map((b) => path.join(os.homedir(), '.gemini', 'bin', b)).find((f) => fs.existsSync(f));
+    const pathFix = process.platform === 'win32'
+      ? `[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ";$HOME\\.gemini\\bin", 'User')   (PowerShell, then open a new terminal)`
+      : `echo 'export PATH="$HOME/.gemini/bin:$PATH"' >> ~/.zshrc   (or ~/.bashrc, then open a new terminal)`;
+    if (hidden) { warn(`${name.padEnd(12)} agy is installed at ${hidden} but that folder is not on your PATH, so the harness cannot use it. Fix:  ${pathFix}`); continue; }
+    // Missing first choice is only a warning when nothing else can stand in; otherwise "auto" simply uses the next engine.
+    const others = Object.keys(config.profiles).filter((k) => k !== name && probeEngine(config.profiles[k]).installed);
+    if (preferred && !others.length) warn(`${name.padEnd(12)} not installed, and it is your first-choice engine (${config.activeProfile === 'auto' ? 'first in "autoOrder"' : '"activeProfile"'}). Install '${p.binary}' or another engine.`);
+    else if (preferred) note(`${name.padEnd(12)} not installed (first in your order); the next one is used: ${others.join(', ')}`);
     else console.log(`  · ${name.padEnd(12)} not installed`);
     continue;
   }
@@ -58,6 +69,27 @@ try {
   const waiting = Object.keys(config.profiles).filter((k) => { const pr = probeEngine(config.profiles[k]); return pr.installed && pr.compatible && engineConsent(k) === undefined; });
   if (waiting.length) note(`No AI tool is allowed yet. Installed and waiting for your OK: ${waiting.join(', ')}. Allow one (it spends your own quota):  node .harness/engines.mjs`);
   else { bad(`${e.message} Install one engine, e.g. Claude Code: npm install -g @anthropic-ai/claude-code  then run  claude  once to log in, then  node .harness/engines.mjs  to allow it.`); problems++; }
+}
+
+// Model-name drift: Antigravity uses exact model IDs (no aliases). If Google renames one, every run on that tier fails;
+// catch it here by comparing config.json with what 'agy models' lists now (only when agy is installed and allowed).
+{
+  const ag = config.profiles?.antigravity;
+  const agProbe = ag ? probeEngine(ag) : null;
+  if (ag && agProbe?.installed && engineConsent('antigravity') === true) {
+    const wanted = new Set([...Object.values(ag.models || {}), ...Object.values(config.quotaFallback || {}).filter((f) => f?.engine === 'antigravity').flatMap((f) => Object.values(f.models || {}))].filter(Boolean));
+    const r = process.platform === 'win32'
+      ? spawnSync(winCommandLine(agProbe.binPath, ['models']), { encoding: 'utf8', timeout: 30000, shell: true })
+      : spawnSync(agProbe.binPath, ['models'], { encoding: 'utf8', timeout: 30000 });
+    const listed = new Set(String(r.stdout || '').split('\n').map((l) => l.trim().split(/\s+/)[0]).filter((x) => /^[a-z0-9][\w.-]+$/i.test(x || '')));
+    console.log('\nAntigravity model names (config.json vs. "agy models")');
+    if (r.status !== 0 || !listed.size) warn(`could not list agy models (${(r.stderr || r.error?.message || 'no output').toString().trim().slice(0, 120)}); model names not checked`);
+    else {
+      const gone = [...wanted].filter((m) => !listed.has(m));
+      if (gone.length) warn(`model ID(s) no longer offered by agy: ${gone.join(', ')}. Runs on that tier would fail. Run  agy models  and update profiles.antigravity.models (and quotaFallback) in config.json.`);
+      else ok(`all ${wanted.size} configured model IDs exist in agy (${[...wanted].join(', ')})`);
+    }
+  }
 }
 
 console.log('\nAutomatic check (used when a task has no --check)');

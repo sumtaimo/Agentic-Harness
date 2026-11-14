@@ -18,7 +18,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { ensureDirs, loadConfig, detectEngines, HARNESS_DIR, memberModels } from './lib/common.mjs';
+import { ensureDirs, loadConfig, detectEngines, HARNESS_DIR, memberModels, helpIfAsked } from './lib/common.mjs';
+helpIfAsked(import.meta.url);
 import { askEngineConsent } from './lib/consent.mjs';
 import { readCharter, loadRoles, loadTeam, validateTeam, describeMember, syncAgents, planEngineRouting, applyEngineRouting } from './lib/governance.mjs';
 

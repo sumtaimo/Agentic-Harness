@@ -32,7 +32,7 @@ import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd,
   listProjectFiles, safeTarget,
-  winQuote, chooseModelTier, resolveModel, pendingCostReasons, loadApprovals,
+  winQuote, winCommandLine, chooseModelTier, resolveModel, pendingCostReasons, loadApprovals, engineUsable,
 } from './lib/common.mjs';
 
 // Autonomous work never moves up to the high (most expensive) tier without the person's OK:
@@ -241,8 +241,55 @@ function renderStreamEvent(id, ev, cwd) {
   }
 }
 
+/**
+ * config.dailyLimits = { <engine>: { calls?, tokens?, usd? } }: today's (UTC) AGENT_USAGE for that engine is summed from the
+ * log; returns a short reason when a cap is reached (the agent is then not started), else null. No entry = no cap.
+ */
+function dailyLimitReached(engine) {
+  const cap = (config.dailyLimits || {})[engine];
+  if (!cap || typeof cap !== 'object') return null;
+  const day = new Date().toISOString().slice(0, 10);
+  let calls = 0; let tokens = 0; let usd = 0;
+  try {
+    for (const line of fs.readFileSync(FILES.log, 'utf8').split('\n')) {
+      if (!line.includes('"AGENT_USAGE"') || !line.startsWith(`{"ts":"${day}`)) continue;
+      const e = JSON.parse(line); if (e.engine !== engine) continue;
+      calls++; tokens += Number(e.tokens) || 0; usd += Number(e.usd) || 0;
+    }
+  } catch { return null; }
+  if (typeof cap.calls === 'number' && calls >= cap.calls) return `${calls}/${cap.calls} calls today`;
+  if (typeof cap.tokens === 'number' && tokens >= cap.tokens) return `${tokens}/${cap.tokens} tokens today`;
+  if (typeof cap.usd === 'number' && usd >= cap.usd) return `${usd.toFixed(2)}/${cap.usd} today`;
+  return null;
+}
+
+/** Usage / quota limits only (not login problems): the account is fine, it is just out of quota for now. */
+const QUOTA_LIMIT_RE = /hit your .{0,40}limit|session limit|usage limit|quota (exceeded|exhausted)|rate.?limit|resource.?exhausted|credit balance/i;
+
+/**
+ * Spawn an AI engine; if it stops on a usage/quota limit and config.quotaFallback names another engine for it
+ * (e.g. claude → antigravity, using agy's Claude models), the same agent retries ONCE there, on the model for the
+ * same tier. Only an engine the person already allowed is used. Shown live and logged as QUOTA_FALLBACK.
+ */
+function spawnEngine(opts) {
+  return spawnEngineOnce(opts).catch((e) => {
+    const fb = e.quotaLimit && !opts.noQuotaFallback ? (config.quotaFallback || {})[e.engineName] : null;
+    if (!fb || !fb.engine || fb.engine === e.engineName) throw e;
+    const u = engineUsable(config, fb.engine);
+    if (!u.ok) {
+      logTelemetry('QUOTA_FALLBACK_UNAVAILABLE', `${opts.id}: ${e.engineName} hit its usage limit, and ${fb.engine} cannot take over: ${u.why}`, { worker: opts.id });
+      throw e;
+    }
+    const model = fb.models?.[e.tierUsed] || null;
+    logTelemetry('QUOTA_FALLBACK', `${opts.id}: ${e.engineName} hit its usage limit → retrying on ${fb.engine}${model ? ` (${model})` : ''}`, { worker: opts.id, from: e.engineName, to: fb.engine, tier: e.tierUsed, model });
+    if (liveOn()) livePrint(opts.id, `⇄ ${e.engineName} usage limit → continuing on ${fb.engine}${model ? ` (${model})` : ''}`);
+    writeState({ history: pushHistory(`⇄ ${e.engineName} limit → ${fb.engine} for ${opts.id}`) });
+    return spawnEngineOnce({ ...opts, engine: fb.engine, model: model || opts.model || null, noQuotaFallback: true });
+  });
+}
+
 /** Spawn an AI engine with a prompt. Resolves { engine, output, denials }. Streams activity live when enabled. */
-function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallowedTools, tier = null, model: modelOverride = null }) {
+function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallowedTools, tier = null, model: modelOverride = null }) {
   return new Promise((resolve, reject) => {
     let profile;
     try { profile = resolveProfile(config, engine); } catch (e) { return reject(e); }
@@ -252,6 +299,12 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallo
       logTelemetry('AUTO_TIER_CAPPED', `${id}: high tier capped to medium (autonomous; high model not approved)`, { worker: id });
     }
     const pick = resolveModel(profile, { tier: t.tier, override: modelOverride });
+    const over = dailyLimitReached(profile.name);
+    if (over) {
+      logTelemetry('DAILY_LIMIT', `${id}: ${profile.name} reached its daily cap (${over}); not started`, { worker: id, engine: profile.name });
+      return reject(Object.assign(new Error(`${id} (${profile.name}): daily cap reached (${over}). It resets tomorrow (UTC); raise "dailyLimits" in config.json only if you accept the use.`), { fatal: true, engineName: profile.name, tierUsed: pick.tier, quotaLimit: true }));
+    }
+    const startedAt = Date.now();
     logTelemetry('MODEL_TIER', `${id}: ${pick.tier} tier → ${pick.model || `${profile.name} default (no --model)`}${pick.source === 'auto' ? '' : ` (${pick.source})`}`, { worker: id, engine: profile.name, tier: pick.tier, model: pick.model, source: pick.source, reasons: t.reasons });
     if (profile.fallbackFrom) {
       logTelemetry('ENGINE_FALLBACK', `Engine '${profile.fallbackFrom}' unavailable (${profile.fallbackReason}); using '${profile.name}'`, { worker: id });
@@ -263,7 +316,9 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallo
     const { args, viaStdin } = buildArgs(profile, prompt, allowedTools, disallowedTools, stream, pick.model);
     const isWin = process.platform === 'win32';
     const env = { ...process.env, HARNESS_WORKER: '1', HARNESS_WORKER_ID: id };
-    const child = spawn(isWin ? winQuote(binPath) : binPath, isWin ? args.map(winQuote) : args, { cwd, env, shell: isWin, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = isWin
+      ? spawn(winCommandLine(binPath, args), { cwd, env, shell: true, stdio: ['pipe', 'pipe', 'pipe'] })
+      : spawn(binPath, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     logTelemetry('ENGINE_SPAWN', `Spawned ${profile.name} for ${id}`, { engine: profile.name, binary: binPath, args: args.map((a) => (a === prompt ? '<prompt>' : a)), promptVia: viaStdin ? 'stdin' : 'args', live: live ? (stream ? 'stream-json' : 'raw') : 'off', cwd });
     if (live && !stream) livePrint(id, `▶ ${profile.name} started on ${pick.model || "the CLI's default model (no model names set)"} [${pick.tier}] (raw output follows)`);
 
@@ -293,16 +348,18 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallo
 
     child.on('error', (err) => done(reject, Object.assign(new Error(`Failed to start '${profile.binary}': ${err.message}`), { fatal: err.code === 'ENOENT' })));
     child.on('close', (code) => {
+      let usage = null; try { usage = summarizeOutput(stdout); } catch { /* error output: no usage */ }
+      logTelemetry('AGENT_USAGE', `${id}: ${profile.name} ${pick.model || 'default'} [${pick.tier}] ${code === 0 ? 'ok' : `exit ${code}`}`, { worker: id, engine: profile.name, model: pick.model, tier: pick.tier, ok: code === 0, tokens: usage?.tokens ?? null, usd: usage?.cost || 0, ms: Date.now() - startedAt });
       if (live && pending.trim() && !stream) livePrint(id, oneLine(pending, 200));
       if (code !== 0) {
         // The engine's own error (e.g. Claude's JSON {"is_error":true,"result":"You've hit your limit"}) is on stdout;
         // stderr may only hold unrelated warnings, so prefer the engine's message when there is one.
         try { summarizeOutput(stdout); } catch (e) {
-          if (e.engineError) return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${e.message}`), { fatal: e.fatal }));
+          if (e.engineError) return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${e.message}`), { fatal: e.fatal, engineName: profile.name, tierUsed: pick.tier, quotaLimit: QUOTA_LIMIT_RE.test(e.message) }));
         }
         const raw = `${stderr}\n${stdout}`.trim();
         const fatal = engineErrorIsFatal(raw);
-        return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${(stderr || stdout).trim().slice(0, 4000)}${fatal ? ' (account/login problem: retrying cannot fix it)' : ''}`), { fatal }));
+        return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${(stderr || stdout).trim().slice(0, 4000)}${fatal ? ' (account/login problem: retrying cannot fix it)' : ''}`), { fatal, engineName: profile.name, tierUsed: pick.tier, quotaLimit: QUOTA_LIMIT_RE.test(raw) }));
       }
       try {
         const r = summarizeOutput(stdout);
@@ -342,9 +399,11 @@ function summarizeOutput(stdout) {
       throw Object.assign(new Error(`Engine reported an error: ${msg}`), { fatal: engineErrorIsFatal(msg, j.api_error_status), engineError: true });
     }
     const denials = (j.permission_denials || []).map((d) => ({ tool: d.tool_name, target: d.tool_input?.file_path || d.tool_input?.command || '' }));
-    return { text: String(j.result), denials, cost: Number(j.total_cost_usd) || 0 };
+    const u = j.usage || {};
+    const tokens = ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'].reduce((n, k) => n + (Number(u[k]) || 0), 0) || null;
+    return { text: String(j.result), denials, cost: Number(j.total_cost_usd) || 0, tokens };
   }
-  return { text, denials: [], cost: 0 };
+  return { text, denials: [], cost: 0, tokens: null };
 }
 
 // ── cost accounting + budget guardrails (deterministic: the controller counts, the agent cannot) ──

@@ -15,7 +15,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DIRS, FILES, ensureDirs, loadConfig, remember, forget, listLessons, memoryContext } from './lib/common.mjs';
+import { DIRS, FILES, ensureDirs, loadConfig, remember, forget, listLessons, memoryContext, helpIfAsked } from './lib/common.mjs';
+helpIfAsked(import.meta.url);
 
 ensureDirs();
 const [cmd, ...rest] = process.argv.slice(2);

@@ -45,6 +45,19 @@ The controller never leaves the model to chance. Per agent it picks a tier from 
 - See every agent's model: `node .harness/team.mjs show`. The live feed prints the model each agent starts on.
 - Override for one member: `"model"` in `team.json` (an alias or a tier name); for one task: `dispatch --model`.
 
+## Saving quota: reroute, daily caps, usage report
+
+- **Claude limit → agy.** When Claude Code stops on its usage limit, the same agent retries once through `agy`, on
+  Antigravity's Claude models (your Google quota): fast = `claude-sonnet-5-5-low`, medium = `claude-sonnet-5-5-medium`,
+  high = `claude-opus-5-5-high`. Only if you allowed antigravity. The live feed shows `⇄ claude usage limit → continuing
+  on antigravity`; the log has `QUOTA_FALLBACK`. Set in `config.json` → `quotaFallback`; delete that block to turn it off.
+- **Daily caps.** `config.json` → `dailyLimits`, per engine: `calls`, `tokens` (engines that report them, e.g. Claude)
+  and `usd`, for example `"antigravity": { "calls": 80 }`. When a cap is reached the agent is not started (`DAILY_LIMIT`);
+  Claude work can still continue on agy. Counted by the controller from its own log, per UTC day.
+- **Where did it go?** `node .harness/usage.mjs` (or `npm run usage`) lists calls, tokens, cost and minutes per day,
+  engine and model. Antigravity does not report tokens, so it is counted in calls.
+- **Renamed models.** `doctor` runs `agy models` and warns when a configured model ID no longer exists.
+
 ## Each AI tool is allowed once
 
 A tool that is already installed and logged in on your machine (`claude`, `agy`, `codex`) is **never used silently**.
