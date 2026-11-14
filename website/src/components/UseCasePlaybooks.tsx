@@ -29,7 +29,7 @@ const COMMANDS: Record<Tab, C[][]> = {
     [{ cmd: 'npm install -g @anthropic-ai/claude-code' }, { cmd: 'claude' }],
     [{ cmd: "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + \";$HOME\\.gemini\\bin\", 'User')", prompt: 'PS>' }, { cmd: 'agy models' }, { cmd: 'agy -p "say hi"' }],
     [{ cmd: 'npm install -g @openai/codex' }, { cmd: 'codex login' }],
-    [{ cmd: 'node .harness/doctor.mjs' }, { cmd: 'node .harness/team.mjs auto-assign' }],
+    [{ cmd: 'node .harness/engines.mjs' }, { cmd: 'node .harness/doctor.mjs' }, { cmd: 'node .harness/team.mjs auto-assign' }],
   ],
   cloud: [
     [{ cmd: 'npm install -g @anthropic-ai/claude-code' }],

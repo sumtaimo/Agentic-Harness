@@ -32,6 +32,7 @@ export const FILES = {
   log: path.join(HARNESS_DIR, 'telemetry.log'),
   pid: path.join(HARNESS_DIR, 'daemon.pid'),
   probe: path.join(HARNESS_DIR, 'engine-probe.json'),
+  approvals: path.join(HARNESS_DIR, 'approvals.json'), // per person, git-ignored: which AI tools may be used, "don't ask again" answers
   live: path.join(HARNESS_DIR, 'live.log'),
   profile: path.join(HARNESS_DIR, 'memory', 'profile.md'),
   lessons: path.join(HARNESS_DIR, 'memory', 'lessons.md'),
@@ -131,7 +132,30 @@ export function probeEngine(profile, { force = false } = {}) {
   return result;
 }
 
-/** Can this engine profile be used right now? { ok, why?, probe? } (installed + its configured flags pass the probe). */
+// ───────────────────────────── approvals (per person) ─────────────────────────────
+// .harness/approvals.json (git-ignored): { engines: { claude: true, antigravity: false }, alwaysAllow: ['team', ...] }
+
+export function loadApprovals() {
+  const a = readJsonSafe(FILES.approvals, {});
+  return a && typeof a === 'object' && !Array.isArray(a) ? a : {};
+}
+export function saveApprovals(a) { atomicWriteJson(FILES.approvals, a); }
+
+/** Did this person allow the harness to use this AI tool? true | false | undefined (not asked yet). */
+export function engineConsent(k) {
+  const e = loadApprovals().engines || {};
+  return Object.prototype.hasOwnProperty.call(e, k) ? e[k] === true : undefined;
+}
+export function setEngineConsent(k, allowed) {
+  const a = loadApprovals();
+  a.engines = { ...(a.engines || {}), [k]: !!allowed };
+  saveApprovals(a);
+}
+
+/**
+ * Can this engine profile be used right now? { ok, why?, probe?, needsConsent? }
+ * Installed + its configured flags pass the probe + the person allowed it once (a logged-in CLI is never used silently).
+ */
 export function engineUsable(config, k) {
   const p = config.profiles?.[k];
   if (!p) return { ok: false, why: 'unknown engine' };
@@ -139,6 +163,9 @@ export function engineUsable(config, k) {
   if (!probe.installed) return { ok: false, why: `'${p.binary}' is not installed` };
   if (!probe.compatible && !probe.checked) return { ok: false, why: `its flags could not be checked (${probe.error}) and the profile is not verified` };
   if (!probe.compatible) return { ok: false, why: `'${p.binary} --help' does not list ${probe.missing.join(', ')}` };
+  const consent = engineConsent(k);
+  if (consent === false) return { ok: false, probe, why: `you chose not to let the harness use '${k}' (change it: node .harness/engines.mjs allow ${k})` };
+  if (consent !== true) return { ok: false, probe, needsConsent: true, why: `'${p.binary}' is installed but you have not allowed the harness to use it yet (it spends your own quota). Run: node .harness/engines.mjs` };
   return { ok: true, probe };
 }
 
@@ -243,6 +270,15 @@ export function costlyRunReasons(config, { hierarchy = false, autoPlan = false, 
   const highModels = Object.values(config?.profiles || {}).map((p) => p?.models?.high).filter(Boolean).map((s) => String(s).toLowerCase());
   if (m && (m === 'high' || highModels.includes(m))) out.push({ kind: 'high-model', text: `every agent is forced onto the most expensive model (--model ${model})` });
   return out;
+}
+
+/** costlyRunReasons for a backlog item (what autopilot would run), minus the kinds the person said "don't ask again" for. */
+export function pendingCostReasons(config, item, approvals = loadApprovals()) {
+  if (!item || item.costApproved === true) return [];
+  const subs = Array.isArray(item.subtasks) ? item.subtasks.length : 0;
+  const reasons = costlyRunReasons(config, { hierarchy: !!item.hierarchy && !subs, autoPlan: !!item.autoPlan && !subs && !item.hierarchy, workers: subs, model: item.model || null });
+  const always = new Set(Array.isArray(approvals.alwaysAllow) ? approvals.alwaysAllow : []);
+  return reasons.filter((r) => !always.has(r.kind));
 }
 
 /**

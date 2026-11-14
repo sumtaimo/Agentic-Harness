@@ -15,6 +15,8 @@ const realConfig = JSON.parse(fs.readFileSync(path.join(here, '..', '.harness', 
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engine-probe-'));
 fs.mkdirSync(path.join(tmpRoot, '.harness'), { recursive: true });
+// The probe is what these tests check: the person has already allowed both tools once.
+fs.writeFileSync(path.join(tmpRoot, '.harness', 'approvals.json'), JSON.stringify({ engines: { codex: true, antigravity: true } }));
 process.env.HARNESS_ROOT = tmpRoot;
 delete process.env.HARNESS_AGENT;
 const nodeDir = path.dirname(process.execPath);

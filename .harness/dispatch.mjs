@@ -31,7 +31,9 @@
  *                (your working folder and main are not touched)
  * --model fast|medium|high   force a model tier for every agent of this job (default: the controller picks
  *                (or an alias, e.g. --model opus)  the cheapest tier that fits each agent's job; see docs/MULTI-MODEL-SETUP.md)
- * --yes    skip the approval question. The question appears only for runs that may use a lot of quota
+ * AI tools: a tool that is installed and logged in is used only after you allowed it once (asked here in a
+ *          terminal, or: node .harness/engines.mjs). Without any allowed tool it stops with ENGINE_APPROVAL_NEEDED (exit 3).
+ * --yes    skip the big-run question (never the one-time tool question). The question appears only for runs that may use a lot of quota
  *          (team or parallel mode, 3+ workers, --model high): answer y / n / a ("a" saves it in .harness/approvals.json
  *          so that kind of run is not asked again). Without a terminal it stops with APPROVAL_NEEDED (exit 3).
  * --wait   block until the job finishes and print the result (exit 0 = committed).
@@ -42,7 +44,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline/promises';
-import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons } from './lib/common.mjs';
+import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable } from './lib/common.mjs';
+import { askEngineConsent } from './lib/consent.mjs';
 
 if (process.env.HARNESS_WORKER === '1') {
   console.error('Refusing to dispatch from inside a harness worker (prevents agents spawning agents in a loop).');
@@ -127,6 +130,21 @@ else {
 
 for (const s of subtasks) if (engine) s.engine = engine;
 const usePlanner = autoPlan && subtasks.length === 0;
+
+// ── AI tools: a tool that is installed and logged in is never used silently; the person allows it once ──
+{
+  const team = hierarchy ? (readJsonSafe(path.join(ROOT, '.harness', 'team.json'), {}).members || []).map((m) => m.engine).filter((e) => e && e !== 'auto') : [];
+  const named = [engine, ...subtasks.map((s) => s.engine), ...team].filter(Boolean);
+  const candidates = named.length ? named : (config.activeProfile && config.activeProfile !== 'auto' ? [config.activeProfile] : (config.autoOrder || Object.keys(config.profiles)));
+  const fallback = config.autoOrder || Object.keys(config.profiles); // a named tool that is not allowed falls back to auto
+  await askEngineConsent(config, [...candidates, ...fallback]);
+  const usable = [...new Set([...candidates, ...fallback])].filter((k) => config.profiles[k] && engineUsable(config, k).ok);
+  if (!usable.length) {
+    const why = [...new Set([...candidates, ...fallback])].filter((k) => config.profiles[k]).map((k) => `  - ${k}: ${engineUsable(config, k).why}`).join('\n');
+    console.error(`ENGINE_APPROVAL_NEEDED: no AI tool is allowed and ready on this machine, so nothing was started.\n${why}\nAllow one in a terminal with:  node .harness/engines.mjs`);
+    process.exit(3);
+  }
+}
 
 // ── Approval gate: ask the person only when this run may use a lot of tokens / quota ──
 {

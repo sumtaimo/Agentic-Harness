@@ -234,7 +234,9 @@ L1  orchestrator [PO_ARCHITECT]       plans only; read-only. Splits the goal bet
 Each member can run on its own AI engine (`"engine"` in `team.json`); `node .harness/team.mjs auto-assign` sets that from the engines you have installed ([`docs/MULTI-MODEL-SETUP.md`](docs/MULTI-MODEL-SETUP.md)).
 Run it with `node .harness/dispatch.mjs --goal "…" --hierarchy --max-cost 2` or `/harness:run` (say "use the team").
 Team and parallel runs, 3+ workers, or `--model high` first **ask you in the terminal** (y / n / a = don't ask again);
-a normal one-worker run never asks. See [`docs/ENGINES.md`](docs/ENGINES.md#big-runs-ask-first).
+a normal one-worker run never asks. An AI tool already logged in on your machine is used only after you allow it once
+(`node .harness/engines.mjs`). Autopilot holds big runs as "Needs your OK" (`backlog.mjs approve <id>`) and keeps going.
+See [`docs/ENGINES.md`](docs/ENGINES.md#each-ai-tool-is-allowed-once).
 
 What the controller enforces deterministically, so no agent can talk its way around it:
 - **Every level is validated before the next one starts.** The orchestrator may only give a lead files inside that lead's scope,

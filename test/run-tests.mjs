@@ -19,7 +19,7 @@ function sandbox({ worktrees = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-test-'));
   fs.cpSync(path.join(REPO, '.harness'), path.join(dir, '.harness'), {
     recursive: true,
-    filter: (src) => !/(state\.json|telemetry\.log|daemon\.pid)$/.test(src) && !/[\\/](inbox|completed|failed|sessions)[\\/][^.]/.test(src)
+    filter: (src) => !/(state\.json|telemetry\.log|daemon\.pid|approvals\.json)$/.test(src) && !/[\\/](inbox|completed|failed|sessions)[\\/][^.]/.test(src)
   });
   // Isolate from any live harness run in the repo: clean backlog, no active visible-run state.
   fs.rmSync(path.join(dir, '.harness', 'visible'), { recursive: true, force: true });
@@ -36,6 +36,8 @@ function sandbox({ worktrees = false } = {}) {
   cfg.workerTimeoutMs = 20000;
   cfg.git = { ...(cfg.git || {}), integrationMode: 'off' }; // v1/v2 in-place tests; uat tests switch it on
   fs.writeFileSync(path.join(dir, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
+  // The fake engines are allowed once, as a person would (a real logged-in CLI is never used without that; own test below).
+  fs.writeFileSync(path.join(dir, '.harness', 'approvals.json'), JSON.stringify({ engines: { mock: true, mockplan: true, mockcode: true, mockqa: true, fake: true, ghost: true } }));
   return dir;
 }
 
@@ -1027,7 +1029,8 @@ await test('doctor: a valid setup reports 0 failures and 0 warnings; profile pla
   g('add', '-A'); g('commit', '-q', '-m', 'package.json');
   fs.cpSync(path.join(REPO, '.claude'), path.join(d, '.claude'), { recursive: true }); // an installed project has the editor agents
   const out = node(d, ['.harness/doctor.mjs']).stdout;
-  assert(/Failures: 0 · Warnings: 0 · Notes: 4/.test(out), out.split('\n').filter((l) => /^  [!✖ℹ]|Failures/.test(l)).join('\n'));
+  assert(/Failures: 0 · Warnings: 0 · Notes: \d+/.test(out), // notes vary: an AI tool installed on this machine but not allowed in the sandbox is a note
+     out.split('\n').filter((l) => /^  [!✖ℹ]|Failures/.test(l)).join('\n'));
   assert(/ℹ memory\/profile\.md/.test(out) && /ℹ The background controller is not running/.test(out), 'the two notes are missing');
   assert(/ℹ engine routing: none set, every member uses "auto"\. .*team\.mjs auto-assign/.test(out), 'the engine-routing note is missing');
   fs.writeFileSync(path.join(d, '.harness', 'config.json'), '{ broken');
@@ -1243,14 +1246,14 @@ await test('budget: a non-hierarchy task with maxCostUsd never starts another cy
 
 await test('hierarchy via backlog: an autonomous item with "hierarchy": true runs the whole team inside the charter and ends DONE', () => {
   const d = sandbox(); setCharter(d, { autonomous: 'on' });
-  setBacklog(d, [{ id: 'H1', title: 'team feature', priority: 1, status: 'READY', hierarchy: true, maxCostUsd: 1, goal: hierGoal(happyPlan()), verifyCmd: ALL4 }]);
+  setBacklog(d, [{ id: 'H1', title: 'team feature', priority: 1, status: 'READY', hierarchy: true, costApproved: true, maxCostUsd: 1, goal: hierGoal(happyPlan()), verifyCmd: ALL4 }]);
   tick(d);
   assert(byId(d, 'H1').status === 'DONE', `${byId(d, 'H1').status} ${byId(d, 'H1').blockedReason || ''}`);
   const arch = json(path.join(d, '.harness', 'completed', ls(d, 'completed')[0]));
   assert(arch.autonomous === true && arch.hierarchy === true && arch.team.assignments.length === 3, 'job lost the hierarchy/autonomous flags');
   // charter still binds the team: a team whose lead scope exceeds the charter's allowedPaths is rejected for autonomous work
   const d2 = sandbox(); setCharter(d2, { autonomous: 'on', allowedPaths: 'src/**' });
-  setBacklog(d2, [{ id: 'H2', title: 'team feature', priority: 1, status: 'READY', hierarchy: true, goal: hierGoal(happyPlan()), verifyCmd: ALL4 }]);
+  setBacklog(d2, [{ id: 'H2', title: 'team feature', priority: 1, status: 'READY', hierarchy: true, costApproved: true, goal: hierGoal(happyPlan()), verifyCmd: ALL4 }]);
   tick(d2);
   assert(byId(d2, 'H2').status === 'BLOCKED' && /outside charter allowedPaths/.test(byId(d2, 'H2').blockedReason || ''), `${byId(d2, 'H2').status} ${byId(d2, 'H2').blockedReason}`);
 });
@@ -1654,7 +1657,7 @@ await test('install: a fresh team.json is auto-routed to the detected engines; a
   assert(teamOf(skip).members.every((m) => m.engine === undefined), '--no-auto-assign must not route');
   const none = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-route-none-'));
   const rn = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), none], { encoding: 'utf8', env: { ...process.env, HARNESS_ENGINES: '' } });
-  assert(/no usable AI engine found yet/.test(rn.stdout) && teamOf(none).members.every((m) => m.engine === undefined), rn.stdout);
+  assert(/no AI engine allowed yet/.test(rn.stdout) && teamOf(none).members.every((m) => m.engine === undefined), rn.stdout);
   const own = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-route-own-'));
   fs.mkdirSync(path.join(own, '.harness'), { recursive: true });
   const mine = JSON.stringify({ ...json(path.join(REPO, '.harness', 'team.json')), description: 'my own team' }, null, 2);
@@ -1697,7 +1700,11 @@ await test('install: .gitattributes pins LF for the harness files only; a core.a
 const common = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);
 const TIERED = { fast: 'm-fast', medium: 'm-medium', high: 'm-high' };
 const tieredProfile = (models = TIERED) => ({ verified: true, binary: process.execPath, args: [MOCK, 'ALLOWED={allowedTools}', 'DENIED={disallowedTools}'], promptVia: 'stdin', allowedTools: [], modelArgs: ['MODEL={model}'], models });
-const withProfiles = (d, profiles) => { const f = path.join(d, '.harness', 'config.json'); const c = json(f); Object.assign(c.profiles, profiles); fs.writeFileSync(f, JSON.stringify(c, null, 2)); };
+const withProfiles = (d, profiles) => {
+  const f = path.join(d, '.harness', 'config.json'); const c = json(f); Object.assign(c.profiles, profiles); fs.writeFileSync(f, JSON.stringify(c, null, 2));
+  const a = path.join(d, '.harness', 'approvals.json'); const ap = fs.existsSync(a) ? json(a) : {}; // test engines are allowed, as a person would
+  ap.engines = { ...(ap.engines || {}), ...Object.fromEntries(Object.keys(profiles).map((k) => [k, true])) }; fs.writeFileSync(a, JSON.stringify(ap));
+};
 const modelArg = (d, id) => (argsOf(d, id).find((a) => a.startsWith('MODEL=')) || '').slice(6) || null;
 const tierLog = (d) => log(d).filter((e) => e.phase === 'MODEL_TIER');
 
@@ -1907,9 +1914,50 @@ await test('approval gate: only costly runs ask; with no terminal they stop (exi
   assert(team.status === 3 && /APPROVAL_NEEDED/.test(team.stderr) && /team mode/.test(team.stdout) && inbox() === 0, team.stdout + team.stderr);
   assert(node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--files', 'a.txt'], noYes).status === 0 && inbox() === 1, 'a normal run starts without a question');
   assert(node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--hierarchy', '--yes'], noYes).status === 0 && inbox() === 2, '--yes skips the question');
-  fs.writeFileSync(path.join(d, '.harness', 'approvals.json'), JSON.stringify({ alwaysAllow: ['parallel'] }));
+  fs.writeFileSync(path.join(d, '.harness', 'approvals.json'), JSON.stringify({ engines: { mock: true }, alwaysAllow: ['parallel'] }));
   assert(node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--auto-plan'], noYes).status === 0 && inbox() === 3, 'a saved "always" answer is not asked again');
   assert(node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--model', 'high'], noYes).status === 3, 'a different kind is still asked');
+});
+
+await test('engine consent: an installed tool is not used until the person allows it once; engines.mjs allow / deny; no terminal → ENGINE_APPROVAL_NEEDED', () => {
+  const d = sandbox();
+  const approvals = path.join(d, '.harness', 'approvals.json');
+  fs.writeFileSync(approvals, JSON.stringify({}));
+  const inbox = () => fs.readdirSync(path.join(d, '.harness', 'inbox')).filter((f) => f.endsWith('.json')).length;
+  const r = node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--files', 'a.txt']);
+  assert(r.status === 3 && /ENGINE_APPROVAL_NEEDED/.test(r.stderr) && /not allowed the harness to use it yet/.test(r.stderr) && inbox() === 0, r.stdout + r.stderr);
+  const list = node(d, ['.harness/engines.mjs', 'list']);
+  assert(list.status === 0 && /AI tools on this machine/.test(list.stdout), list.stdout + list.stderr);
+  assert(node(d, ['.harness/engines.mjs', 'allow', 'mock']).status === 0 && json(approvals).engines.mock === true, 'allow must save the answer');
+  assert(node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--files', 'a.txt']).status === 0 && inbox() === 1, 'an allowed tool is used without asking again');
+  assert(node(d, ['.harness/engines.mjs', 'deny', 'mock']).status === 0 && json(approvals).engines.mock === false, 'deny must save the answer');
+  const again = node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--files', 'a.txt']);
+  assert(again.status === 3 && /chose not to let the harness use 'mock'/.test(again.stderr), again.stderr);
+  assert(node(d, ['.harness/engines.mjs', 'allow', 'nope']).status === 1, 'unknown tool refused');
+  assert(node(d, ['.harness/engines.mjs', 'allow', 'agy']).status === 0 && json(approvals).engines.antigravity === true, 'agy is an alias of antigravity');
+});
+
+await test('autopilot holds a big run ("needs your OK") and keeps going; backlog approve releases it; high tier is capped to medium in autonomous runs', () => {
+  const d = sandbox(); setCharter(d, { autonomous: 'on' });
+  setBacklog(d, [
+    { id: 'BIG', title: 'team job', priority: 1, status: 'READY', hierarchy: true, goal: 'build it all', verifyCmd: PASS },
+    { id: 'SMALL', title: 'small', priority: 2, status: 'READY', verifyCmd: existsCheck('src/s.js'), subtasks: [{ id: 'ws', role: 'DEV_ENGINEER', targetFiles: ['src/s.js'], prompt: 'WRITE src/s.js S' }] }]);
+  const r = tick(d);
+  assert(/dispatched/.test(r.stdout), r.stdout + r.stderr);
+  const big = byId(d, 'BIG');
+  assert(big.status === 'BLOCKED' && big.needsApproval === true && /Needs your OK/.test(big.blockedReason) && /backlog\.mjs approve BIG/.test(big.blockedReason), JSON.stringify(big));
+  assert(byId(d, 'SMALL').status === 'DONE', 'autopilot must keep going with the next task');
+  assert(log(d).some((e) => e.phase === 'AUTO_HELD' && e.backlogId === 'BIG'), 'no AUTO_HELD event');
+  const ok = node(d, ['.harness/backlog.mjs', 'approve', 'BIG']);
+  assert(ok.status === 0 && byId(d, 'BIG').status === 'READY' && byId(d, 'BIG').costApproved === true, ok.stdout + ok.stderr);
+  assert(common.pendingCostReasons({ profiles: {} }, byId(d, 'BIG')).length === 0, 'an approved item is not held again');
+  assert(common.pendingCostReasons({ profiles: {} }, { hierarchy: true }, { alwaysAllow: ['team'] }).length === 0, '"don\'t ask again" covers autopilot too');
+  // Retry escalation would reach the high tier on cycle 3; in an unapproved autonomous run it stays on medium.
+  const d2 = sandbox(); setCharter(d2, { autonomous: 'on' });
+  setBacklog(d2, [{ id: 'R', title: 'retry', status: 'READY', verifyCmd: 'node -e "process.exit(1)"', subtasks: [{ id: 'wr', role: 'DEV_ENGINEER', targetFiles: ['src/r.js'], prompt: 'WRITE src/r.js R' }] }]);
+  tick(d2);
+  const tiers = log(d2).filter((e) => e.phase === 'MODEL_TIER').map((e) => e.tier);
+  assert(tiers.length >= 3 && !tiers.includes('high') && log(d2).some((e) => e.phase === 'AUTO_TIER_CAPPED'), `tiers: ${tiers.join(',')}`);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
