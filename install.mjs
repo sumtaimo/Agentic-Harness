@@ -239,13 +239,17 @@ else {
 // a fix belongs in the template). The template repository itself has no such rule, so maintainers can work on it.
 {
   const setPath = path.join(target, '.claude', 'settings.json');
-  const CORE_DENY = ['Edit(.harness/*.mjs)', 'Write(.harness/*.mjs)', 'Edit(.harness/lib/**)', 'Write(.harness/lib/**)', 'Edit(.harness/MANIFEST.json)', 'Write(.harness/MANIFEST.json)'];
+  // Only Edit(path) rules exist for files: Claude Code applies them to every file-editing tool (Edit, Write, ...). A Write(path) rule is reported as invalid.
+  const CORE_DENY = ['Edit(.harness/*.mjs)', 'Edit(.harness/lib/**)', 'Edit(.harness/MANIFEST.json)'];
   try {
     const s = JSON.parse(fs.readFileSync(setPath, 'utf8'));
     s.permissions = s.permissions || {};
-    const deny = new Set(s.permissions.deny || []);
+    // Releases 1.0.1-1.0.3 also wrote invalid Write(.harness/...) rules (Claude Code reports them): remove those when re-installing.
+    const OLD_INVALID = ['Write(.harness/*.mjs)', 'Write(.harness/lib/**)', 'Write(.harness/MANIFEST.json)'];
+    const deny = new Set((s.permissions.deny || []).filter((r) => !OLD_INVALID.includes(r)));
+    const removed = (s.permissions.deny || []).length - deny.size;
     const before = deny.size; CORE_DENY.forEach((r) => deny.add(r));
-    if (deny.size !== before) { s.permissions.deny = [...deny]; fs.writeFileSync(setPath, JSON.stringify(s, null, 2) + '\n'); report.push('added  .claude/settings.json deny rules: the harness core is read-only in this project'); }
+    if (deny.size !== before || removed) { s.permissions.deny = [...deny]; fs.writeFileSync(setPath, JSON.stringify(s, null, 2) + '\n'); report.push('added  .claude/settings.json deny rules: the harness core is read-only in this project'); }
   } catch { /* no or invalid settings.json: reported above */ }
 }
 

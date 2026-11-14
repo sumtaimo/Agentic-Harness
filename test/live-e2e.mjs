@@ -26,16 +26,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const { winCommandLine } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);
 const only = process.argv[2];
 const t0 = Date.now();
 let pass = 0; let fail = 0;
 
 const sh = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', ...opts });
-const claude = sh('claude', ['--version']);
-if (claude.status !== 0) { console.log('SKIPPED: the `claude` CLI is not installed (or not on PATH). Install it and run `claude` once to log in.'); process.exit(0); }
+// `claude` is claude.CMD on Windows and only starts through a shell, with every argument quoted.
+const runClaude = (args, opts = {}) => (process.platform === 'win32' ? spawnSync(winCommandLine('claude', args), { encoding: 'utf8', shell: true, ...opts }) : spawnSync('claude', args, { encoding: 'utf8', ...opts }));
+// On Windows `claude` is claude.CMD: it only starts through a shell (without one this test skipped itself, wrongly).
+const claude = runClaude(['--version']);
+// A skipped live test is NOT a pass: exit 2, so a script or a person cannot mistake "nothing ran" for "all good".
+if (claude.status !== 0) { console.log('SKIPPED (nothing was tested): the `claude` CLI is not installed or not on PATH. Install it and run `claude` once to log in.'); process.exit(2); }
 console.log(`Real-agent end-to-end test — ${claude.stdout.trim()}\n`);
 
 function check(name, ok, detail = '') {
@@ -63,6 +68,9 @@ const startController = async (d) => {
   return child;
 };
 const stopController = (child) => new Promise((resolve) => { child.on('close', resolve); child.kill('SIGTERM'); setTimeout(resolve, 5000); });
+// "No controller left running" means the process is gone. On Windows a stopped controller cannot run its cleanup, so a stale
+// daemon.pid file may remain; the harness itself treats it as stale when no such process is alive.
+const controllerGone = (d) => { try { const pid = Number(fs.readFileSync(path.join(d, '.harness', 'daemon.pid'), 'utf8')); process.kill(pid, 0); return false; } catch { return true; } };
 const worktreesLeft = (d) => git(d, 'worktree', 'list').split('\n').length - 1;
 const header = (f) => `node -e "const t=require('fs').readFileSync('${f}','utf8').trimStart();if(!t.startsWith('/**')||!t.slice(0,t.indexOf('*/')).includes('@governed-by PO_ARCHITECT')){console.error('${f} lacks the governance header');process.exit(1)}"`;
 
@@ -81,10 +89,10 @@ async function manual() {
     console.log(w.stdout.split('\n').filter((l) => /^\d\d:\d\d:\d\d +\[/.test(l) && !/\[harness\]/.test(l)).map((l) => `      ${l.slice(0, 150)}`).join('\n'));
     check('watch streamed the agent\'s actions live (tool calls) and ended COMMITTED (exit 0)', w.status === 0 && /🔧/.test(w.stdout) && /RESULT: COMMITTED/.test(w.stdout), `exit ${w.status}\n${w.stdout.slice(-600)}`);
     const t = nodeIn(d, ['--test']);
-    check('the agent really produced working code (node --test passes in the project)', t.status === 0 && /# pass [1-9]/.test(t.stdout), t.stdout.slice(-400));
+    check('the agent really produced working code (node --test passes in the project)', t.status === 0 && /(?:# |ℹ )pass [1-9]/.test(t.stdout), t.stdout.slice(-400));
     check('the check passed and the job was archived', fs.readdirSync(path.join(d, '.harness', 'completed')).some((f) => f.startsWith(id)), '');
   } finally { await stopController(ctl); }
-  check('no controller left running', !fs.existsSync(path.join(d, '.harness', 'daemon.pid')));
+  check('no controller left running', controllerGone(d));
 }
 
 // ───────────────────────── autonomous: backlog → tick → uat ─────────────────────────
@@ -122,7 +130,7 @@ async function autonomous() {
   fs.rmSync(wt, { recursive: true }); git(d, 'worktree', 'add', '-q', '--detach', wt, 'uat');
   const t = sh(process.execPath, ['--test'], { cwd: wt, encoding: 'utf8' });
   git(d, 'worktree', 'remove', '--force', wt);
-  check('the tests pass on the uat code', t.status === 0 && /# pass [1-9]/.test(t.stdout) && /# fail 0/.test(t.stdout), t.stdout.slice(-400));
+  check('the tests pass on the uat code', t.status === 0 && /(?:# |ℹ )pass [1-9]/.test(t.stdout) && /(?:# |ℹ )fail 0/.test(t.stdout), t.stdout.slice(-400));
   check('PROTECTED_BRANCHES_UNCHANGED was logged', log.some((e) => e.phase === 'PROTECTED_BRANCHES_UNCHANGED'), '');
   check('no leftover worktrees or harness/* branches', worktreesLeft(d) === 0 && git(d, 'branch', '--list', 'harness/*') === '', `${worktreesLeft(d)} worktrees; ${git(d, 'branch', '--list', 'harness/*')}`);
   void mainBefore;
@@ -162,7 +170,7 @@ async function hierarchy() {
   const workerSpawns = spawns.filter((e) => /^Spawned \w+ for lead-[a-z]+\./.test(e.message));
   check('workers started in parallel (all within 3s of each other)', workerSpawns.length >= 2 && Math.max(...workerSpawns.map((e) => +new Date(e.ts))) - Math.min(...workerSpawns.map((e) => +new Date(e.ts))) < 3000, JSON.stringify(workerSpawns.map((e) => e.ts)));
   const tp = nodeIn(d, ['--test']);
-  check('the team produced working code: its own tests pass (node --test)', tp.status === 0 && /# pass [1-9]/.test(tp.stdout) && /# fail 0/.test(tp.stdout), tp.stdout.slice(-400));
+  check('the team produced working code: its own tests pass (node --test)', tp.status === 0 && /(?:# |ℹ )pass [1-9]/.test(tp.stdout) && /(?:# |ℹ )fail 0/.test(tp.stdout), tp.stdout.slice(-400));
   const changed = git(d, 'status', '--porcelain', '-uall').split('\n').filter(Boolean).map((l) => l.slice(3)).filter((f) => !/^(\.harness|\.claude)\//.test(f) && !/^(CLAUDE|GEMINI|AGENTS)\.md$|^\.(vscode|github|cursor)\/|^\.windsurfrules$|^package\.json$|^\.gitignore$/.test(f));
   check('only files in docs/, src/ and tests/ were created or changed', changed.length > 0 && changed.every((f) => /^(docs|src|tests)\//.test(f)), changed.join(', '));
   const arch = fs.readdirSync(path.join(d, '.harness', 'completed')).filter((f) => f.startsWith(id) && f.endsWith('.json')).map((f) => json(path.join(d, '.harness', 'completed', f)))[0];
@@ -170,7 +178,7 @@ async function hierarchy() {
   console.log(`      real cost of this team run: $${arch ? arch.costUsd.toFixed(3) : '?'} for ${arch ? Object.keys(arch.costByAgent).length : 0} agents`);
   const sessions = fs.readdirSync(path.join(d, '.harness', 'memory', 'sessions')).map((f) => fs.readFileSync(path.join(d, '.harness', 'memory', 'sessions', f), 'utf8')).join('\n');
   check('the session note records the team and the cost', /- Team: orchestrator →/.test(sessions) && /- Cost: \$/.test(sessions), sessions.slice(0, 500));
-  check('no controller left running', !fs.existsSync(path.join(d, '.harness', 'daemon.pid')));
+  check('no controller left running', controllerGone(d));
 }
 
 // ───────────────────────── editor workflow: a REAL orchestrator session + REAL named agents ─────────────────────────
@@ -181,7 +189,7 @@ function orchestrate(d, commandFile, instruction) {
   const prompt = `Read the file .claude/commands/harness/${commandFile} and follow it exactly, as if the user had typed that command. ${instruction}`;
   const t = Date.now();
   // the prompt goes on stdin: --allowedTools would swallow it as one more tool name
-  const r = spawnSync('claude', ['-p', '--output-format', 'stream-json', '--verbose', '--allowedTools', ORCH_TOOLS], { cwd: d, input: prompt, encoding: 'utf8', timeout: 900000, maxBuffer: 64 * 1024 * 1024 });
+  const r = runClaude(['-p', '--output-format', 'stream-json', '--verbose', '--allowedTools', ORCH_TOOLS], { cwd: d, input: prompt, timeout: 900000, maxBuffer: 64 * 1024 * 1024 });
   const events = (r.stdout || '').split('\n').filter((l) => l.startsWith('{')).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   const calls = [];
   for (const e of events) if (e.type === 'assistant') for (const c of e.message?.content || []) if (c.type === 'tool_use') calls.push({ name: c.name, input: c.input || {}, parent: e.parent_tool_use_id || null, msg: e.message?.id });
@@ -217,7 +225,7 @@ async function visibleRun() {
   const changed = git(d, 'status', '--porcelain', '-uall').split('\n').filter(Boolean).map((l) => l.slice(3)).filter((f) => !/^(\.harness|\.claude)\//.test(f) && !/^(CLAUDE|GEMINI|AGENTS)\.md$|^\.(vscode|github|cursor)\/|^\.windsurfrules$|^package\.json$|^\.gitignore$/.test(f));
   check('only docs/clamp.md, src/clamp.js and tests/clamp.test.js were created', changed.sort().join() === 'docs/clamp.md,src/clamp.js,tests/clamp.test.js', changed.join(', '));
   const tp = nodeIn(d, ['--test']);
-  check('the team produced working code: its tests pass (node --test)', tp.status === 0 && /# pass [1-9]/.test(tp.stdout) && /# fail 0/.test(tp.stdout), tp.stdout.slice(-300));
+  check('the team produced working code: its tests pass (node --test)', tp.status === 0 && /(?:# |ℹ )pass [1-9]/.test(tp.stdout) && /(?:# |ℹ )fail 0/.test(tp.stdout), tp.stdout.slice(-300));
   check('the report and a session note with the team were written', fs.existsSync(path.join(d, '.harness', 'visible', runs[0]?.id || 'none', 'report.md')) && fs.readdirSync(path.join(d, '.harness', 'memory', 'sessions')).some((f) => /Team: orchestrator/.test(fs.readFileSync(path.join(d, '.harness', 'memory', 'sessions', f), 'utf8'))), '');
 }
 
@@ -237,7 +245,7 @@ async function autoRun() {
   const runs = runRecords(d);
   check('the controller marked the backlog item DONE (VERIFIED) and linked the run', b.status === 'DONE' && b.result === 'VERIFIED' && runs.length === 1 && runs[0].status === 'PASSED' && runs[0].autonomous === true && !!runs[0].autoSession, JSON.stringify([b.status, runs.map((r) => [r.status, r.autonomous, r.autoSession])]));
   const tp = nodeIn(d, ['--test']);
-  check('the autonomous work is real: its tests pass (node --test)', tp.status === 0 && /# pass [1-9]/.test(tp.stdout) && fs.existsSync(path.join(d, 'src', 'slug.js')), tp.stdout.slice(-300));
+  check('the autonomous work is real: its tests pass (node --test)', tp.status === 0 && /(?:# |ℹ )pass [1-9]/.test(tp.stdout) && fs.existsSync(path.join(d, 'src', 'slug.js')), tp.stdout.slice(-300));
 }
 
 // ───────────────────────── editor: Claude Code accepts our settings + hook reaches the AI ─────────────────────────
@@ -245,10 +253,10 @@ function editor() {
   console.log('\nScenario 6/6 — Claude Code editor integration (.claude/settings.json + SessionStart hook)');
   const d = project('editor');
   check('install copied .claude/settings.json and the slash commands', fs.existsSync(path.join(d, '.claude', 'settings.json')) && ['status', 'tick', 'doctor', 'run', 'teach', 'team'].every((c) => fs.existsSync(path.join(d, '.claude', 'commands', 'harness', `${c}.md`))), '');
-  const ping = sh('claude', ['-p', 'Reply with the single word OK.'], { cwd: d, stdio: ['ignore', 'pipe', 'pipe'], timeout: 180000 });
+  const ping = runClaude(['-p', 'Reply with the single word OK.'], { cwd: d, stdio: ['ignore', 'pipe', 'pipe'], timeout: 180000 });
   const bad = (ping.stderr || '').split('\n').filter((l) => /not matched|invalid|unrecognized|unknown|schema|failed to parse|error/i.test(l) && !/trusted/i.test(l));
   check('Claude Code reports no problem with any permission rule or hook in .claude/settings.json', bad.length === 0, bad.join('\n') || ping.stderr);
-  const hook = sh('claude', ['-p', '--output-format', 'json', "Without running any command: quote word for word the line that starts with '- Controller:' from the context you were given at session start. If there is none, reply NONE."], { cwd: d, stdio: ['ignore', 'pipe', 'pipe'], timeout: 240000 });
+  const hook = runClaude(['-p', '--output-format', 'json', "Without running any command: quote word for word the line that starts with '- Controller:' from the context you were given at session start. If there is none, reply NONE."], { cwd: d, stdio: ['ignore', 'pipe', 'pipe'], timeout: 240000 });
   let result = '';
   try { result = JSON.parse(hook.stdout.slice(hook.stdout.indexOf('{'))).result; } catch { result = hook.stdout; }
   check('the SessionStart hook reached the AI (it can quote the harness status line)', /Controller:/.test(result) && !/^NONE/.test(result.trim()), result);
