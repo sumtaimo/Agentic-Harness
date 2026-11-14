@@ -42,7 +42,7 @@ function sandbox({ worktrees = false } = {}) {
 // Engine auto-routing must not depend on the AI CLIs installed on the test machine: every install / auto-assign
 // in this suite sees "no usable engine" unless a test passes HARNESS_ENGINES itself.
 process.env.HARNESS_ENGINES = '';
-const env = { ...process.env, HARNESS_SILENT: '1', HARNESS_AGENT: '', HARNESS_LIVE: '0' };
+const env = { ...process.env, HARNESS_SILENT: '1', HARNESS_AGENT: '', HARNESS_LIVE: '0', HARNESS_YES: '1' }; // the approval gate has its own test
 delete env.HARNESS_WORKER;
 const node = (dir, args, extraEnv = {}) => spawnSync(process.execPath, args, { cwd: dir, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 60000 });
 const json = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
@@ -1725,9 +1725,12 @@ await test('model tiers (pure): low → fast, standard → medium, architecture/
   const cfg = json(path.join(REPO, '.harness', 'config.json'));
   const c = cfg.profiles.claude;
   assert(c.models.fast === 'haiku' && c.models.medium === 'sonnet' && c.models.high === 'opus' && c.modelArgs.join(' ') === '--model {model}', `claude aliases: ${JSON.stringify(c.models)}`);
-  for (const [name, p] of Object.entries(cfg.profiles)) for (const m of Object.values(p.models || {})) assert(m === null || !/\d/.test(m), `${name}: model "${m}" looks like a pinned version; use an alias`);
+  // Aliases only, except antigravity: agy has no aliases, so it uses the exact IDs from 'agy models' (owner decision).
+  for (const [name, p] of Object.entries(cfg.profiles)) if (name !== 'antigravity') for (const m of Object.values(p.models || {})) assert(m === null || !/\d/.test(m), `${name}: model "${m}" looks like a pinned version; use an alias`);
+  const ag = cfg.profiles.antigravity;
+  assert(ag.models.fast === 'gemini-3.8-flash-medium' && ag.models.medium === 'gemini-4-argon-medium' && ag.models.high === 'gemini-4-hydrogen-high' && ag.modelArgs.join(' ') === '--model {model}', `antigravity tiers: ${JSON.stringify(ag.models)}`);
   assert(common.resolveModel(c, { tier: 'fast' }).model === 'haiku' && common.resolveModel(c, { tier: 'high' }).model === 'opus', 'claude tier → alias');
-  for (const k of ['codex', 'antigravity']) assert(common.resolveModel(cfg.profiles[k], { tier: 'fast' }).model === null, `${k}: no alias → no --model (the CLI uses its newest default)`);
+  for (const k of ['codex']) assert(common.resolveModel(cfg.profiles[k], { tier: 'fast' }).model === null, `${k}: no alias → no --model (the CLI uses its newest default)`);
   assert(JSON.stringify(common.resolveModel(c, { tier: 'fast', override: 'high' })) === JSON.stringify({ tier: 'high', model: 'opus', source: 'override-tier' }), 'a tier override picks that tier');
   assert(common.resolveModel(c, { tier: 'fast', override: 'fable' }).model === 'fable', 'an alias override is passed through');
   assert(common.profileFlags(c).includes('--model') && !common.profileFlags(cfg.profiles.codex).includes('--model'), 'the probe checks --model only where an alias is configured');
@@ -1889,6 +1892,24 @@ await test('Gemini is no longer supported: no profile, not routable, and --engin
   assert(!common.ROUTABLE_ENGINES.includes('gemini'), 'gemini must not be routable');
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', "import('./.harness/lib/common.mjs').then((m)=>{try{m.resolveProfile(m.loadConfig(),'gemini')}catch(e){console.log(e.message);process.exit(0)}process.exit(3)})"], { cwd: REPO, encoding: 'utf8' });
   assert(r.status === 0 && /no longer supported/.test(r.stdout) && /antigravity/.test(r.stdout), r.stdout + r.stderr);
+});
+
+await test('approval gate: only costly runs ask; with no terminal they stop (exit 3, no job) unless --yes or a saved "always" answer', () => {
+  const cfg = json(path.join(REPO, '.harness', 'config.json'));
+  const kinds = (o) => common.costlyRunReasons(cfg, o).map((c) => c.kind).join();
+  assert(kinds({}) === '' && kinds({ workers: 2 }) === '' && kinds({ model: 'fast' }) === '', 'a normal run is never asked');
+  assert(kinds({ hierarchy: true }) === 'team' && kinds({ autoPlan: true }) === 'parallel' && kinds({ workers: 3 }) === 'many-workers', 'team / parallel / 3+ workers');
+  assert(kinds({ model: 'high' }) === 'high-model' && kinds({ model: 'opus' }) === 'high-model' && kinds({ model: 'gemini-4-hydrogen-high' }) === 'high-model', 'forcing a high-tier model');
+  const d = sandbox();
+  const noYes = { HARNESS_YES: '' };
+  const inbox = () => fs.readdirSync(path.join(d, '.harness', 'inbox')).filter((f) => f.endsWith('.json')).length;
+  const team = node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--hierarchy'], noYes);
+  assert(team.status === 3 && /APPROVAL_NEEDED/.test(team.stderr) && /team mode/.test(team.stdout) && inbox() === 0, team.stdout + team.stderr);
+  assert(node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--files', 'a.txt'], noYes).status === 0 && inbox() === 1, 'a normal run starts without a question');
+  assert(node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--hierarchy', '--yes'], noYes).status === 0 && inbox() === 2, '--yes skips the question');
+  fs.writeFileSync(path.join(d, '.harness', 'approvals.json'), JSON.stringify({ alwaysAllow: ['parallel'] }));
+  assert(node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--auto-plan'], noYes).status === 0 && inbox() === 3, 'a saved "always" answer is not asked again');
+  assert(node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--model', 'high'], noYes).status === 3, 'a different kind is still asked');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

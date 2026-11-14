@@ -25,6 +25,12 @@ const COMMANDS: Record<Tab, C[][]> = {
     [{ cmd: INSTALL_CMD }],
     [{ cmd: 'git diff --stat' }, { cmd: 'node .harness/doctor.mjs' }],
   ],
+  tools: [
+    [{ cmd: 'npm install -g @anthropic-ai/claude-code' }, { cmd: 'claude' }],
+    [{ cmd: "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + \";$HOME\\.gemini\\bin\", 'User')", prompt: 'PS>' }, { cmd: 'agy models' }, { cmd: 'agy -p "say hi"' }],
+    [{ cmd: 'npm install -g @openai/codex' }, { cmd: 'codex login' }],
+    [{ cmd: 'node .harness/doctor.mjs' }, { cmd: 'node .harness/team.mjs auto-assign' }],
+  ],
   cloud: [
     [{ cmd: 'npm install -g @anthropic-ai/claude-code' }],
     [{ cmd: 'claude' }],
@@ -37,7 +43,7 @@ const COMMANDS: Record<Tab, C[][]> = {
   ],
 };
 
-const NOTES: Partial<Record<Tab, keyof Dict['setup']>> = { new: 'newNote', existing: 'existingNote', cloud: 'cloudNote', upgrade: 'upgradeNote' };
+const NOTES: Partial<Record<Tab, keyof Dict['setup']>> = { new: 'newNote', existing: 'existingNote', tools: 'toolsNote', cloud: 'cloudNote', upgrade: 'upgradeNote' };
 
 export function UseCasePlaybooks({ n }: { n: number }) {
   const { t } = useLang();

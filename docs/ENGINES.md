@@ -22,7 +22,16 @@ The controller picks a tier per agent from the job's complexity. Small edits, do
 architecture planning gets `high`, and a failed check escalates one tier. The tier's alias is then passed to the CLI.
 
 - Aliases only, never pinned versions. `claude` uses `haiku`, `sonnet` and `opus`, which Claude Code resolves to the newest release.
-- `null` means no `--model` flag, so the CLI uses its own newest default. This is the setting for `codex` and `agy` today.
+- `null` means no `--model` flag, so the CLI uses its own newest default. This is the setting for `codex` today.
+- `agy` has no aliases, so Antigravity uses exact IDs from `agy models`: `fast` = `gemini-3.8-flash-medium`, `medium` (coding) = `gemini-4-argon-medium`, `high` (planning) = `gemini-4-hydrogen-high`. A real run with the fast tier passed on 2026-11-14.
+
+## Big runs ask first
+
+`dispatch.mjs` asks in the terminal before a run that may use a lot of tokens or quota: team or parallel mode, 3 or more
+workers, or `--model high` (or a high-tier model by name). A normal one-worker run is never asked. Answer `y` (start),
+`n` (stop) or `a` (start, and do not ask again for that kind of run; saved per person in `.harness/approvals.json`,
+which is git-ignored). `--yes` skips the question. With no terminal (an AI or a script calling it) it starts nothing and
+exits with `APPROVAL_NEEDED` (code 3): the AI must ask you in chat and re-run with `--yes` only if you agree.
 - Override with `dispatch --model <tier|alias>` or `"model"` on a `team.json` member.
 
 Details and the full rules: [`MULTI-MODEL-SETUP.md`](MULTI-MODEL-SETUP.md#6-model-tiers-the-right-sized-model-for-each-job-saves-tokens).

@@ -134,7 +134,7 @@ async function hierarchy() {
   let from; let id;
   try {
     const goal = 'Build a small statistics feature as a team. (1) A short spec in docs/stats.md describing mean(numbers) and median(numbers): inputs, outputs and every error case. (2) src/stats.js, CommonJS, exporting exactly { mean, median }; both take an array of finite numbers and return a number; both throw a TypeError if the argument is not a non-empty array of finite numbers; median of an even-length array is the average of the two middle values. (3) tests/stats.test.js using node:test and node:assert that require("../src/stats.js") and cover normal cases, even and odd lengths, and every error case. Then run npm test.';
-    const disp = nodeIn(d, ['.harness/dispatch.mjs', '--engine', 'claude', '--hierarchy', '--max-cost', '2', '--goal', goal,
+    const disp = nodeIn(d, ['.harness/dispatch.mjs', '--engine', 'claude', '--hierarchy', '--yes', '--max-cost', '2', '--goal', goal,
       '--check', `node -e "const f=require('fs');for(const p of ['docs/stats.md','src/stats.js','tests/stats.test.js'])if(!f.existsSync(p)){console.error('missing '+p);process.exit(1)}" && npm test`]);
     id = (disp.stdout.match(/^JOB_ID=(\S+)/m) || [])[1]; from = (disp.stdout.match(/^LIVE_FROM=(\d+)/m) || [])[1];
     check('dispatch accepted a team (hierarchy) job with a $2 cost cap', !!id && /orchestrator → leads → workers/.test(disp.stdout), disp.stdout + disp.stderr);

@@ -11,7 +11,7 @@ and the harness starts it as a local subprocess, the same way you would from a t
 
 ```
 harness controller ──spawn──▶ claude -p --output-format json ...   (prompt piped on stdin)
-                   ──spawn──▶ agy -p ""                              (prompt piped on stdin)
+                   ──spawn──▶ agy -p "<prompt>" --model <tier model>  (prompt as an argument)
                    ──spawn──▶ codex exec --full-auto -               (prompt piped on stdin)
 ```
 
@@ -39,6 +39,16 @@ engine every role.
 Run these yourself in a terminal, one at a time. Each one is read-only.
 
 1. **Is it on your PATH?** Windows: `where claude`. macOS/Linux: `which claude`. Do the same for `agy` and `codex`.
+   **Put `agy` on your PATH (once).** `agy.exe` is installed in `~/.gemini/bin`, which is not on PATH by default.
+   Windows (PowerShell, adds it for your user only), then open a NEW terminal:
+   ```powershell
+   [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ";$HOME\.gemini\bin", 'User')
+   ```
+   macOS/Linux (zsh; use `~/.bashrc` for bash):
+   ```bash
+   echo 'export PATH="$HOME/.gemini/bin:$PATH"' >> ~/.zshrc
+   ```
+   Then `agy models` must list the models (it also confirms you are signed in).
 2. **Does it answer a prompt?** It should print a short reply and exit:
    ```bash
    echo "say hi" | claude -p
@@ -142,9 +152,18 @@ Claude Code resolves `haiku`, `sonnet` and `opus` to the newest release of each 
 (`claude --help`: "Provide an alias for the latest model"). A test fails if anyone puts a pinned version
 number in `models`.
 
-- **`codex`, `agy`:** every tier is `null`. No `--model` is passed, so each CLI uses **its own newest default
+- **`agy` (Antigravity):** exact model IDs from `agy models`, because agy has no "latest" aliases (the one exception to the alias rule):
+
+  | Tier | Used for | Model |
+  |---|---|---|
+  | `fast` | docs, QA, small 1-file edits | `gemini-3.8-flash-medium` (Gemini 3.8 Flash) |
+  | `medium` | normal coding | `gemini-4-argon-medium` (Gemini 4 Argon) |
+  | `high` | planning, architecture, retry after a failed check | `gemini-4-hydrogen-high` (Gemini 4 Hydrogen) |
+
+  When Google renames a model, run `agy models` and update `profiles.antigravity.models` in `.harness/config.json`.
+- **`codex`:** every tier is `null`. No `--model` is passed, so the CLI uses **its own newest default
   model** on every tier. To save quota on the fast tier, set `models.fast` to an alias that `<tool> --help` documents.
-  Use an alias, not a dated version. `agy` has no `modelArgs` yet, because its model flag isn't known.
+  Use an alias, not a dated version.
 - **Flag probe:** the doctor only requires `--model` in `<tool> --help` when at least one tier has an alias, so an unused model flag can never disable an engine.
 
 ### Override the tier

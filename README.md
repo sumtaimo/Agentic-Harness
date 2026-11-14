@@ -233,6 +233,8 @@ L1  orchestrator [PO_ARCHITECT]       plans only; read-only. Splits the goal bet
 `node .harness/team.mjs show` prints it with every member's set-up (role, engine, scope, tools, budget). Each member has its own set-up in that file.
 Each member can run on its own AI engine (`"engine"` in `team.json`); `node .harness/team.mjs auto-assign` sets that from the engines you have installed ([`docs/MULTI-MODEL-SETUP.md`](docs/MULTI-MODEL-SETUP.md)).
 Run it with `node .harness/dispatch.mjs --goal "…" --hierarchy --max-cost 2` or `/harness:run` (say "use the team").
+Team and parallel runs, 3+ workers, or `--model high` first **ask you in the terminal** (y / n / a = don't ask again);
+a normal one-worker run never asks. See [`docs/ENGINES.md`](docs/ENGINES.md#big-runs-ask-first).
 
 What the controller enforces deterministically, so no agent can talk its way around it:
 - **Every level is validated before the next one starts.** The orchestrator may only give a lead files inside that lead's scope,
@@ -485,7 +487,7 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 | Engine | Status |
 |---|---|
 | `claude` (Claude Code) | ✅ verified end-to-end, including the AI planner and two parallel workers |
-| `antigravity` (`agy`) | ✅ verified on Windows 11 with `agy` 1.5.8: a scoped file task ran and the real check passed, also with a 3,049-character goal. The prompt goes as an argument (`-p "<prompt>"`), because stdin with `-p ""` is rejected (`empty prompt`). Windows limit: a command line is at most 32,767 characters (8,191 through `cmd.exe`), so a much longer prompt can still fail. No auto-approve. `agy.exe` is in `~/.gemini/bin`: add it to PATH |
+| `antigravity` (`agy`) | ✅ verified on Windows 11 with `agy` 1.5.8: a scoped file task ran and the real check passed, also with a 3,049-character goal. The prompt goes as an argument (`-p "<prompt>"`), because stdin with `-p ""` is rejected (`empty prompt`). Windows limit: a command line is at most 32,767 characters (8,191 through `cmd.exe`), so a much longer prompt can still fail. No auto-approve. `agy.exe` is in `~/.gemini/bin`: add it to PATH. Models: fast = Gemini 3.8 Flash, medium (coding) = Gemini 4 Argon, high (planning) = Gemini 4 Hydrogen |
 | `codex` (OpenAI Codex CLI) | ⚠️ not verified (not installed on the machines tested) |
 | ~~`gemini`~~ (Gemini CLI) | ❌ removed: Google no longer lets it run on personal "Gemini Code Assist for individuals" accounts (`IneligibleTierError`) and points to Antigravity. `--engine gemini` stops with a clear message |
 
