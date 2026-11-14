@@ -6,7 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, HARNESS_DIR, DIRS, FILES, atomicWriteJson, readJsonSafe, ensureDirs, LESSONS_HEADER, AUTO_LESSONS_HEADER, safeTarget } from './common.mjs';
+import { ROOT, HARNESS_DIR, DIRS, FILES, atomicWriteJson, readJsonSafe, ensureDirs, LESSONS_HEADER, AUTO_LESSONS_HEADER, safeTarget, loadConfig, memberModels } from './common.mjs';
 
 export const GOV = {
   charter: path.join(HARNESS_DIR, 'charter.md'),
@@ -416,9 +416,19 @@ export function agentToolsFor(role) {
   return tools;
 }
 
-export function renderAgentFile(lead, role, team) {
+/**
+ * The Claude Code model for a named lead: picked by job from the claude profile's tiers (BA and QA → fast, coding → medium),
+ * so a lead never silently inherits the session's (often most expensive) model. A member "model" alias overrides it.
+ */
+export function editorModelFor(lead, config) {
+  if (!config?.profiles?.claude) return null;
+  return memberModels(config, { ...lead, engine: 'claude', level: 'worker' }).work.model;
+}
+
+export function renderAgentFile(lead, role, team, config = (() => { try { return loadConfig(); } catch { return null; } })()) {
   const orch = (team.members || []).find((m) => m.level === 'orchestrator');
   const tools = agentToolsFor(role);
+  const model = editorModelFor(lead, config);
   const mission = role.mission || role.description || lead.role;
   const desc = `${lead.id} (${role.name}), a lead on the agent team. The orchestrator delegates ${lead.scope.join(', ')} work to it; it changes only the files it is assigned.`.replace(/\s+/g, ' ');
   return [
@@ -426,6 +436,7 @@ export function renderAgentFile(lead, role, team) {
     `name: ${lead.id}`,
     `description: ${desc}`,
     `tools: ${tools.join(', ')}`,
+    ...(model ? [`model: ${model}`] : []),
     '---',
     `<!-- Generated from .harness/team.json and .harness/roles by "node .harness/team.mjs sync-agents". Edit those, not this file. -->`,
     `You are **${lead.id}**, a team lead (level 2) in an agent team${orch ? ` reporting to the orchestrator \`${orch.id}\`` : ''}. Your role: ${role.name}.`,

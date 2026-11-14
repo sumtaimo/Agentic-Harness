@@ -219,7 +219,8 @@ export function chooseModelTier({ kind = 'work', level = null, role = null, targ
   const size = String(prompt || '').length;
   let tier; let why;
   if (kind === 'plan') {
-    if (level === 'orchestrator' || PLANNING_ROLES.has(r)) { tier = 'high'; why = `${level === 'orchestrator' ? 'orchestrator' : r} plans across modules`; }
+    // Only planning ACROSS modules needs the high tier; a lead splits its own slice (BA lead: its docs) on medium.
+    if (level === 'orchestrator' || (PLANNING_ROLES.has(r) && level !== 'lead')) { tier = 'high'; why = `${level === 'orchestrator' ? 'orchestrator' : r} plans across modules`; }
     else if (r === 'QA_AUDITOR') { tier = 'fast'; why = 'QA lead only splits test work'; }
     else { tier = 'medium'; why = `${r || 'lead'} plans its own slice`; }
   } else if (r === 'PO_ARCHITECT') { tier = 'high'; why = 'architecture work'; }
@@ -247,10 +248,46 @@ export function chooseModelTier({ kind = 'work', level = null, role = null, targ
 export function resolveModel(profile, { tier = 'medium', override = null } = {}) {
   if (override && MODEL_TIERS.includes(String(override).toLowerCase())) {
     const t = String(override).toLowerCase();
-    return { tier: t, model: profile?.models?.[t] || null, source: 'override-tier' };
+    return nearestModel(profile, t, 'override-tier');
   }
   if (override) return { tier, model: String(override), source: 'override' };
-  return { tier, model: profile?.models?.[tier] || null, source: 'auto' };
+  return nearestModel(profile, tier, 'auto');
+}
+
+/**
+ * Never fall back to the CLI's default when the engine has a model for ANOTHER tier: an empty tier uses the nearest
+ * configured one (cheaper first for fast/medium, then the next one up; high steps down). Only an engine with no
+ * models at all (e.g. codex today) gets model null = the CLI's own default (doctor warns about it).
+ */
+const NEAREST = { fast: ['fast', 'medium', 'high'], medium: ['medium', 'fast', 'high'], high: ['high', 'medium', 'fast'] };
+function nearestModel(profile, tier, source) {
+  for (const t of NEAREST[tier] || [tier]) {
+    const m = profile?.models?.[t];
+    if (m) return { tier, model: m, source: t === tier ? source : `${source}, nearest tier ${t}` };
+  }
+  return { tier, model: null, source };
+}
+
+/** True when the engine has no model name for any tier, so every call runs on the CLI's own default. */
+export const usesCliDefault = (profile) => !MODEL_TIERS.some((t) => profile?.models?.[t]);
+
+/** A typical job for each role, so the team view can say which model an agent gets (same rules as the controller). */
+const TYPICAL_FILES = { BA_ANALYST: ['docs/spec.md'], QA_AUDITOR: ['test/feature.test.js'], DEV_ENGINEER: ['src/a.js', 'src/b.js'], PO_ARCHITECT: ['docs/plan.md'] };
+/**
+ * Which model a team member gets: for its own planning call (orchestrator / lead) and for its workers' typical job.
+ * engineName null/auto → the first engine of autoOrder. A member "model" (alias, or a tier name) overrides both.
+ * Returns { engine, plan: { tier, model }, work: { tier, model } }.
+ */
+export function memberModels(config, member) {
+  const engine = member.engine && member.engine !== 'auto' ? member.engine : (config.autoOrder || Object.keys(config.profiles || {}))[0];
+  const profile = config.profiles?.[engine];
+  const role = String(member.role || '').toUpperCase();
+  const pick = (t) => (member.model ? resolveModel(profile, { tier: t.tier, override: member.model }) : resolveModel(profile, { tier: t.tier }));
+  return {
+    engine,
+    plan: pick(chooseModelTier({ kind: 'plan', level: member.level, role })),
+    work: pick(chooseModelTier({ kind: 'work', role, targetFiles: TYPICAL_FILES[role] || ['src/a.js', 'src/b.js'] })),
+  };
 }
 
 /**
