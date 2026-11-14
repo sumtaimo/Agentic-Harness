@@ -6,7 +6,7 @@ Khmer version: [`MAINTAINING.km.md`](MAINTAINING.km.md).
 
 | | What it is | Who changes it |
 |---|---|---|
-| **Lab**: branch `main` of this repository | where the harness is built and tried for real, every day | the owner (and an AI with them) |
+| **Lab**: branch `lab` of this repository | where the harness is built and tried for real, every day | the owner (and an AI with them) |
 | **Template**: branch `release` of this repository | the tested version: what `npx github:sumtaimo/Agentic-Harness#release` installs and what the landing page shows | nobody directly: the lab is copied into it after it passed, with the owner's yes |
 | **Projects** | any repository that installed the harness (yours or other people's) | their own settings only; the harness core is read-only there |
 
@@ -47,7 +47,7 @@ backlog and memory are kept; the core and its fingerprints are replaced.
 
 ## Release checklist (maintainers)
 
-Run these in the template repository, in order. Nothing goes to `main` until all pass **and the owner says yes**.
+Run these in the template repository, in order. Nothing goes to `lab` until all pass **and the owner says yes**.
 
 1. `npm test`: the free test suite (fake engines only; it hides the real AI CLIs on your machine).
 2. `npm run audit -- --site`: installs into an empty project as a new user would and checks every command, the docs'
@@ -55,16 +55,16 @@ Run these in the template repository, in order. Nothing goes to `main` until all
 3. A real run, only when an engine's command line or models changed, and only with the owner's OK (it spends quota):
    one tiny task in a scratch project (`npm run demo`, then the `hello.txt` task in `docs/ENGINES.md`).
 4. Bump `"version"` in `package.json` when the core changed (every install records it).
-5. Commit on `main` (the lab), then ask the owner before pushing. A normal push only.
+5. Commit on `lab`, then ask the owner before pushing. A normal push only.
 6. **Release**: when the lab version has been used for real and the owner says "release", copy it to the template:
-   `git push origin main:release` (a normal push; never force). Users installing from `#release` and the landing page
+   `git push origin lab:release` (a normal push; never force). Users installing from `#release` and the landing page
    (deployed from `release`) get it from then on. Nothing reaches users before this step.
 
 ## The owner's rules
 
 - Ask before every push, before changing `.harness/config.json` or `.harness/charter.md`, before installing global
   software or adding dependencies, and before anything that spends money or AI quota.
-- Never force-push or rewrite `main`'s history without an explicit yes for that exact action.
+- Never force-push or rewrite the history of `lab` or `release` without an explicit yes for that exact action.
 - Never start autonomous runs (`npm run auto`, `/harness:auto`) unless told to.
 - No model names in commits, code comments or docs: they live only in `.harness/config.json`
   (`npm run audit` checks it, using the names in the config).

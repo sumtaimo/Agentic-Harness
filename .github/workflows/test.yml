@@ -4,7 +4,7 @@ name: test
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [lab, release]
 
 permissions:
   contents: read

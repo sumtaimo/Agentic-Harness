@@ -2080,6 +2080,16 @@ await test('harness core protection: install fingerprints the core, never copies
   assert(/this is the template repository itself/.test(tpl.stdout), 'the template is where the core is maintained');
 });
 
+await test('AI use is never silent: dispatch says which tool before, and what the job used after, in one short line each; the live feed and the session hook too', () => {
+  const d = sandbox();
+  const r = node(d, ['.harness/dispatch.mjs', '--goal', 'WRITE a.txt hi', '--files', 'a.txt', '--check', PASS, '--wait']);
+  assert(r.status === 0 && /^AI: auto, model picked per job/m.test(r.stdout), r.stdout);
+  assert(/^AI used by this job: mock 1 call\(s\) · today: mock 1 call\(s\)$/m.test(r.stdout), r.stdout);
+  assert(/\[harness\]\s+AI used by this task: mock 1 call\(s\)/.test(fs.readFileSync(path.join(d, '.harness', 'live.log'), 'utf8')), 'live feed line');
+  const hook = node(d, ['.harness/hook-session.mjs']);
+  assert(/AI quota used by the harness today: mock 1 call\(s\)/.test(hook.stdout), hook.stdout);
+});
+
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
   const d = sandbox();
   for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch']) { // daemon --help once started the controller

@@ -20,9 +20,9 @@ only point here.
   `skills/`, `backlog.json`, `memory/`. If you find a bug or gap in the harness itself, do NOT patch it here: tell the user,
   and describe it for the template (see `docs/MAINTAINING.md`, "Reporting a gap"). The fix arrives by re-installing.
 - **In the template repository itself** (it has `install.mjs` and `docs/MAINTAINING.md`): you MAINTAIN the harness. Its
-  `main` branch is the LAB (built and tried for real here); the `release` branch is the TEMPLATE users install and the
+  `lab` branch is the LAB (built and tried for real here); the `release` branch is the TEMPLATE users install and the
   landing page shows. Follow `docs/MAINTAINING.md`: every change passes `npm test` and `npm run audit`; the owner decides
-  each push, and only the owner's "release" copies `main` to `release`.
+  each push, and only the owner's "release" copies `lab` to `release`.
 
 ---
 
