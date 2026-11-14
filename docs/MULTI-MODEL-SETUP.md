@@ -129,11 +129,11 @@ Each member in `.harness/team.json` can carry an `"engine"`, which is any profil
 The harness doesn't send every call to the heaviest model. Before it starts the orchestrator, a lead or a
 worker, the controller judges how complex that job is and picks the cheapest **tier** that fits:
 
-| Tier | Used for | Claude Code alias |
-|---|---|---|
-| `fast` | QA / test runs, single-file small edits (1 file, short prompt), simple docs (≤ 2 doc files), the QA lead's planning | `haiku` |
-| `medium` | standard feature work and multi-file coding, `lead-dev`'s planning | `sonnet` |
-| `high` | multi-module architecture planning: the orchestrator, `PO_ARCHITECT`, `lead-ba`'s research planning, the AI planner | `opus` |
+| Tier | Used for |
+|---|---|
+| `fast` | QA / test runs, single-file small edits (1 file, short prompt), simple docs (≤ 2 doc files), the QA lead's planning |
+| `medium` | standard feature work and multi-file coding, the planning of `lead-dev` and `lead-ba` |
+| `high` | multi-module architecture planning: the orchestrator, `PO_ARCHITECT`, the AI planner |
 
 - **Inputs:** the number of `targetFiles`, the size of the job's own prompt (not the harness instructions around it), the role, and whether this is a retry.
 - **Retries escalate.** If the check fails, the next cycle moves up one tier: fast → medium → high. A job that failed on a cheaper model gets a stronger one, instead of the strongest model running every time.
@@ -145,24 +145,18 @@ Each profile maps the tiers to the CLI's own **aliases** in `config.json`, so a 
 automatically, with nothing to edit:
 
 ```json
-"claude": { "modelArgs": ["--model", "{model}"], "models": { "fast": "haiku", "medium": "sonnet", "high": "opus" } }
+"claude": { "modelArgs": ["--model", "{model}"], "models": { "fast": "<alias>", "medium": "<alias>", "high": "<alias>" } }
 ```
 
-Claude Code resolves `haiku`, `sonnet` and `opus` to the newest release of each family itself
+Claude Code resolves its aliases to the newest release of each family itself
 (`claude --help`: "Provide an alias for the latest model"). A test fails if anyone puts a pinned version
 number in `models`.
 
 - **`agy` (Antigravity):** exact model IDs from `agy models`, because agy has no "latest" aliases (the one exception to the alias rule):
 
-  | Tier | Used for | Model |
-  |---|---|---|
-  | `fast` | docs, QA, small 1-file edits | `gemini-3.8-flash-medium` (Gemini 3.8 Flash) |
-  | `medium` | normal coding | `gemini-4-argon-medium` (Gemini 4 Argon) |
-  | `high` | planning, architecture, retry after a failed check | `gemini-4-hydrogen-high` (Gemini 4 Hydrogen) |
-
-  When Google renames a model, run `agy models` and update `profiles.antigravity.models` in `.harness/config.json`.
-- **`codex`:** one model, `gpt-6-luna` (the newest listed by `codex debug models`), with the reasoning effort per tier:
-  `gpt-6-luna@low` / `@medium` / `@high` becomes `--model gpt-6-luna -c model_reasoning_effort=<effort>`. This also
+  one ID per tier in `profiles.antigravity.models`. When Google renames a model, run `agy models` and update `profiles.antigravity.models` in `.harness/config.json`.
+- **`codex`:** one model (the newest listed by `codex debug models`) with the reasoning effort per tier, written
+  `<name>@low` / `@medium` / `@high`; it becomes `--model <name> -c model_reasoning_effort=<effort>`. This also
   overrides a high default effort in your `~/.codex/config.toml`. When OpenAI renames it, update `profiles.codex.models`.
 - **Flag probe:** the doctor only requires `--model` in `<tool> --help` when at least one tier has an alias, so an unused model flag can never disable an engine.
 

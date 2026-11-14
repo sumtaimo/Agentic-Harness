@@ -194,7 +194,7 @@ function buildArgs(profile, prompt, allowedTools, disallowedTools = [], stream =
     args.push(v);
   }
   // Model tier: only when the tier maps to an alias; otherwise no flag, so the CLI uses its own newest default.
-  // "name@effort" (e.g. codex "gpt-6-luna@low") also fills {effort}; without an effort, an {effort} arg and its flag are dropped.
+  // "name@effort" (e.g. a codex model with "@low") also fills {effort}; without an effort, an {effort} arg and its flag are dropped.
   if (model && Array.isArray(profile.modelArgs)) {
     const [name, effort] = String(model).split('@');
     for (const a of profile.modelArgs) {

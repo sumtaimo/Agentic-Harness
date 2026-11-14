@@ -19,11 +19,12 @@ export const ENGINES: { id: Engine; label: string; cli: string }[] = [
 
 export const TIERS: Tier[] = ['fast', 'medium', 'high'];
 
-/** config.json → profiles.<engine>.models. Aliases only (never pinned versions); null = no --model, the CLI's newest default. */
+/** What the simulator shows per tier. The real model names live only in .harness/config.json → profiles.<engine>.models. */
+const tierLabels = (): Record<Tier, string> => ({ fast: 'fast model', medium: 'medium model', high: 'high model' });
 export const MODEL_ALIASES: Record<Engine, Record<Tier, string | null>> = {
-  claude: { fast: 'haiku', medium: 'sonnet', high: 'opus' },
-  antigravity: { fast: 'gemini-3.8-flash-medium', medium: 'gemini-4-argon-medium', high: 'gemini-4-hydrogen-high' },
-  codex: { fast: 'gpt-6-luna@low', medium: 'gpt-6-luna@medium', high: 'gpt-6-luna@high' },
+  claude: tierLabels(),
+  antigravity: tierLabels(),
+  codex: tierLabels(),
 };
 
 export interface Routing { plan: Engine; code: Engine; qa: Engine }

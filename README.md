@@ -491,8 +491,8 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 | Engine | Status |
 |---|---|
 | `claude` (Claude Code) | ✅ verified end-to-end, including the AI planner and two parallel workers |
-| `antigravity` (`agy`) | ✅ verified on Windows 11 with `agy` 1.5.8: a scoped file task ran and the real check passed, also with a 3,049-character goal. The prompt goes as an argument (`-p "<prompt>"`), because stdin with `-p ""` is rejected (`empty prompt`). Windows limit: a command line is at most 32,767 characters (8,191 through `cmd.exe`), so a much longer prompt can still fail. No auto-approve. `agy.exe` is in `~/.gemini/bin`: add it to PATH. Models: fast = Gemini 3.8 Flash, medium (coding) = Gemini 4 Argon, high (planning) = Gemini 4 Hydrogen; all three passed real runs |
-| `codex` (OpenAI Codex CLI) | ⚠️ partly verified (codex-cli 0.169.0): `exec --sandbox workspace-write`, model `gpt-6-luna` with reasoning effort low / medium / high per tier, all accepted; a full task is still to be run (the test account hit its usage limit) |
+| `antigravity` (`agy`) | ✅ verified on Windows 11 with `agy` 1.5.8: a scoped file task ran and the real check passed, also with a 3,049-character goal. The prompt goes as an argument (`-p "<prompt>"`), because stdin with `-p ""` is rejected (`empty prompt`). Windows limit: a command line is at most 32,767 characters (8,191 through `cmd.exe`), so a much longer prompt can still fail. No auto-approve. `agy.exe` is in `~/.gemini/bin`: add it to PATH. All three model tiers (fast, medium, high) passed real runs |
+| `codex` (OpenAI Codex CLI) | ⚠️ partly verified (codex-cli 0.169.0): `exec --sandbox workspace-write`, a model plus a reasoning effort per tier; flags and model accepted, a full task is still to be run |
 | ~~`gemini`~~ (Gemini CLI) | ❌ removed: Google no longer lets it run on personal "Gemini Code Assist for individuals" accounts (`IneligibleTierError`) and points to Antigravity. `--engine gemini` stops with a clear message |
 
 Setup, subscription login and checks for `agy`, and why Gemini and Orca were removed: [`docs/ENGINES.md`](docs/ENGINES.md).

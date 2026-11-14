@@ -30,7 +30,7 @@
  * --branch uat   build on its own git branches, verify, then merge into 'uat' only if the check passes
  *                (your working folder and main are not touched)
  * --model fast|medium|high   force a model tier for every agent of this job (default: the controller picks
- *                (or an alias, e.g. --model opus)  the cheapest tier that fits each agent's job; see docs/MULTI-MODEL-SETUP.md)
+ *                (or a model alias from config.json)  the cheapest tier that fits each agent's job; see docs/MULTI-MODEL-SETUP.md)
  * AI tools: a tool that is installed and logged in is used only after you allowed it once (asked here in a
  *          terminal, or: node .harness/engines.mjs). Without any allowed tool it stops with ENGINE_APPROVAL_NEEDED (exit 3).
  * --yes    skip the big-run question (never the one-time tool question). The question appears only for runs that may use a lot of quota
@@ -76,7 +76,7 @@ const subtasks = [];
 for (let i = 0; i < args.length; i++) {
   const a = args[i]; const v = args[i + 1];
   if (a === '--engine' && v !== undefined) { engine = args[++i].trim().toLowerCase(); }
-  else if (a === '--model' && v !== undefined) { model = args[++i].trim(); if (!/^[\w.:@/-]+$/.test(model)) { console.error('--model takes a tier (fast | medium | high) or a model alias such as opus'); process.exit(1); } }
+  else if (a === '--model' && v !== undefined) { model = args[++i].trim(); if (!/^[\w.:@/-]+$/.test(model)) { console.error('--model takes a tier (fast | medium | high) or a model alias'); process.exit(1); } }
   else if ((a === '--verify' || a === '--check') && v !== undefined) { verifyCmd = args[++i].trim(); }
   else if (a === '--goal' && v !== undefined) { goal = args[++i].trim(); }
   else if (a === '--title' && v !== undefined) { title = args[++i].trim(); }
