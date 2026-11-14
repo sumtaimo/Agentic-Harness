@@ -29,6 +29,11 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// The throw-away projects are removed when the run ends; HARNESS_KEEP_TEST_DIRS=1 keeps them to look at.
+const madeTmp = [];
+const mkdtempOrig = fs.mkdtempSync.bind(fs);
+fs.mkdtempSync = (prefix, ...rest) => { const d = mkdtempOrig(prefix, ...rest); madeTmp.push(d); return d; };
+process.on('exit', () => { if (process.env.HARNESS_KEEP_TEST_DIRS !== '1') for (const d of madeTmp.reverse()) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 2 }); } catch { /* still in use */ } } });
 const { winCommandLine } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);
 const only = process.argv[2];
 const t0 = Date.now();

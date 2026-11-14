@@ -28,6 +28,14 @@ const target = (positional[0] || (RESET ? '.' : '')) && path.resolve(positional[
 if (!target) { console.error('Usage: node install.mjs /path/to/your/project [--autonomous off]\n       node install.mjs --reset [/path/to/your/project] [--autonomous off]'); process.exit(1); }
 if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) { console.error(`Not a folder: ${target}`); process.exit(1); }
 if (!RESET && path.resolve(target) === path.resolve(SRC)) { console.error('Target is this template itself. (To clear its owner settings, use --reset.)'); process.exit(1); }
+// Any copy of the template (a clone, a worktree, the lab) is never a target either, whichever installer copy runs
+// (e.g. the one npx downloads): installing there would add a project's MANIFEST, deny rules and pointer sections to
+// the template's own files.
+{
+  const isTemplateCopy = fs.existsSync(path.join(target, 'install.mjs')) && fs.existsSync(path.join(target, 'docs', 'MAINTAINING.md'))
+    && /"name":\s*"agentic-harness"/.test((() => { try { return fs.readFileSync(path.join(target, 'package.json'), 'utf8'); } catch { return ''; } })());
+  if (!RESET && isTemplateCopy) { console.error(`Target is a copy of the harness template (${target}), not a project. Nothing was installed. (To clear owner settings in a template copy, use --reset.)`); process.exit(1); }
+}
 
 const report = [];
 // Runtime + personal history never travels to another project.

@@ -15,6 +15,16 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MOCK = path.join(REPO, 'test', 'mock-agent.mjs');
 let passed = 0; let failed = 0;
 
+// Every throw-away folder a test makes in the temp folder is removed when the run ends (before: thousands piled up).
+// HARNESS_KEEP_TEST_DIRS=1 keeps them for debugging.
+const madeTmp = [];
+const mkdtempOrig = fs.mkdtempSync.bind(fs);
+fs.mkdtempSync = (prefix, ...rest) => { const d = mkdtempOrig(prefix, ...rest); if (path.resolve(d).startsWith(path.resolve(os.tmpdir()))) madeTmp.push(d); return d; };
+process.on('exit', () => {
+  if (process.env.HARNESS_KEEP_TEST_DIRS === '1') return;
+  for (const d of madeTmp.reverse()) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 2 }); } catch { /* a file still in use: left for the OS */ } }
+});
+
 function sandbox({ worktrees = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-test-'));
   fs.cpSync(path.join(REPO, '.harness'), path.join(dir, '.harness'), {
@@ -2130,6 +2140,16 @@ await test('doctor does not call the project\'s own folder a stray git worktree,
   try { fs.symlinkSync(d, link, 'junction'); } catch { return; } // no symlink right on this machine: nothing to check
   const r = node(link, ['.harness/doctor.mjs'], { HARNESS_ROOT: link });
   assert(!/extra git worktree/.test(r.stdout), `the folder reached through a link is still the same project:\n${r.stdout.split('\n').filter((l) => /worktree/.test(l)).join('\n')}`);
+});
+
+await test('the installer never installs into a copy of the template (clone, worktree, lab), whichever installer copy runs', () => {
+  const copy = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-tplcopy-'));
+  for (const f of ['install.mjs', 'package.json', 'AGENTS.md']) fs.copyFileSync(path.join(REPO, f), path.join(copy, f));
+  fs.mkdirSync(path.join(copy, 'docs')); fs.copyFileSync(path.join(REPO, 'docs', 'MAINTAINING.md'), path.join(copy, 'docs', 'MAINTAINING.md'));
+  const before = fs.readFileSync(path.join(copy, 'AGENTS.md'), 'utf8');
+  const r = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), copy], { encoding: 'utf8' });
+  assert(r.status === 1 && /copy of the harness template/.test(r.stderr), `exit ${r.status}: ${r.stdout}${r.stderr}`);
+  assert(!fs.existsSync(path.join(copy, '.harness')) && fs.readFileSync(path.join(copy, 'AGENTS.md'), 'utf8') === before, 'nothing may be written into a template copy');
 });
 
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
