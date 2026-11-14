@@ -151,5 +151,19 @@
       },
       "modelsNote": "No alias set: no --model flag is passed, so the CLI uses its own newest default model on every tier. To save quota on the fast tier, set models.fast to an ALIAS that `codex --help` documents (not a pinned version)."
     }
+  },
+  "quotaFallback": {
+    "claude": {
+      "engine": "antigravity",
+      "models": {
+        "fast": "claude-sonnet-5-5-low",
+        "medium": "claude-sonnet-5-5-medium",
+        "high": "claude-opus-5-5-high"
+      },
+      "note": "When Claude Code stops on its usage limit, the same agent retries once through agy (Antigravity's Claude models, on your Google quota), on the model of the same tier. Only if you allowed antigravity (node .harness/engines.mjs). Remove this block to turn it off."
+    }
+  },
+  "dailyLimits": {
+    "note": "Optional per-engine daily caps, counted by the controller from its own log (UTC day): calls, tokens (engines that report them, e.g. claude) and usd. When a cap is reached the agent is not started; claude can then continue on agy via quotaFallback. Example: \"antigravity\": { \"calls\": 80 }, \"claude\": { \"usd\": 5 }. Only 'note' = no cap."
   }
 }

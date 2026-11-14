@@ -15,6 +15,10 @@
     "auto": "node .harness/daemon.mjs --autonomous",
     "autopilot": "node .harness/daemon.mjs --autonomous",
     "status": "node .harness/status.mjs",
-    "doctor": "node .harness/doctor.mjs"
-  }
+    "doctor": "node .harness/doctor.mjs",
+    "usage": "node .harness/usage.mjs",
+    "engines": "node .harness/engines.mjs"
+  },
+  "author": "TAIMO",
+  "license": "MIT"
 }

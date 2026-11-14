@@ -8,7 +8,8 @@
  *
  * Answers are saved per person in .harness/approvals.json (git-ignored), so every teammate decides for themselves.
  */
-import { loadConfig, probeEngine, engineConsent, setEngineConsent, ROUTABLE_ENGINES } from './lib/common.mjs';
+import { loadConfig, probeEngine, engineConsent, setEngineConsent, ROUTABLE_ENGINES, helpIfAsked } from './lib/common.mjs';
+helpIfAsked(import.meta.url);
 import { askEngineConsent, ENGINE_LABELS } from './lib/consent.mjs';
 
 const config = loadConfig();

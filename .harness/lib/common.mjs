@@ -84,6 +84,22 @@ export function winQuote(a) {
   return s === '' || /[\s"&|<>^()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+/** `--help` / `-h` on any harness command: print the usage comment at the top of that file and exit 0. */
+export function helpIfAsked(moduleUrl, argv = process.argv.slice(2)) {
+  if (!argv.includes('--help') && !argv.includes('-h')) return;
+  const src = fs.readFileSync(new URL(moduleUrl), 'utf8');
+  console.log(src.split('*/')[0].replace(/^#!.*\n/, '').replace(/^\/\*\*?/, '').replace(/^ \* ?/gm, '').trim());
+  process.exit(0);
+}
+
+/**
+ * One quoted Windows command line (binary + args) for spawn(line, { shell: true }). Passing an args array together with
+ * shell: true only concatenates them unquoted (Node DEP0190), which breaks paths with spaces; this quotes every part.
+ */
+export function winCommandLine(bin, args = []) {
+  return [bin, ...args].map(winQuote).join(' ');
+}
+
 // ───────────────────────────── engine flag probe ─────────────────────────────
 
 /** Flags a profile relies on: every arg starting with "-" (placeholders excluded). */
@@ -117,7 +133,9 @@ export function probeEngine(profile, { force = false } = {}) {
   const first = (profile.args || [])[0];
   const sub = first && !first.startsWith('-') && !first.includes('{') ? [first] : [];
   const isWin = process.platform === 'win32';
-  const r = spawnSync(binPath, [...sub, '--help'], { encoding: 'utf8', timeout: 15000, shell: isWin, env: { ...process.env, NO_COLOR: '1' } });
+  const r = isWin
+    ? spawnSync(winCommandLine(binPath, [...sub, '--help']), { encoding: 'utf8', timeout: 15000, shell: true, env: { ...process.env, NO_COLOR: '1' } })
+    : spawnSync(binPath, [...sub, '--help'], { encoding: 'utf8', timeout: 15000, env: { ...process.env, NO_COLOR: '1' } });
   const help = `${r.stdout || ''}\n${r.stderr || ''}`;
   let result;
   if (!help.trim()) {

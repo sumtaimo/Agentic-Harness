@@ -6,7 +6,8 @@
  */
 
 import fs from 'node:fs';
-import { FILES, DIRS, readJsonSafe } from './lib/common.mjs';
+import { FILES, DIRS, readJsonSafe, helpIfAsked } from './lib/common.mjs';
+helpIfAsked(import.meta.url);
 import { readBacklog, backlogCounts } from './lib/governance.mjs';
 
 const s = readJsonSafe(FILES.state, null);

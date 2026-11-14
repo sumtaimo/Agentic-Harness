@@ -24,7 +24,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DIRS, FILES, ensureDirs, readJsonSafe } from './lib/common.mjs';
+import { DIRS, FILES, ensureDirs, readJsonSafe, helpIfAsked } from './lib/common.mjs';
+helpIfAsked(import.meta.url);
 import {
   GOV, STATUSES, readBacklog, writeBacklog, updateBacklogItem, validateBacklog, nextReady, backlogCounts,
   itemToJob, snapshotRelease, resetMemory, listReleases, loadSkills

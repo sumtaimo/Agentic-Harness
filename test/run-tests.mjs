@@ -1028,7 +1028,7 @@ await test('doctor: a valid setup reports 0 failures and 0 warnings; profile pla
   fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: PASS } }));
   g('add', '-A'); g('commit', '-q', '-m', 'package.json');
   fs.cpSync(path.join(REPO, '.claude'), path.join(d, '.claude'), { recursive: true }); // an installed project has the editor agents
-  const out = node(d, ['.harness/doctor.mjs']).stdout;
+  const out = node(d, ['.harness/doctor.mjs'], { HOME: d, USERPROFILE: d }).stdout; // an empty home: no agy hidden in ~/.gemini/bin on this machine
   assert(/Failures: 0 · Warnings: 0 · Notes: \d+/.test(out), // notes vary: an AI tool installed on this machine but not allowed in the sandbox is a note
      out.split('\n').filter((l) => /^  [!✖ℹ]|Failures/.test(l)).join('\n'));
   assert(/ℹ memory\/profile\.md/.test(out) && /ℹ The background controller is not running/.test(out), 'the two notes are missing');
@@ -1974,6 +1974,40 @@ await test('job-fit models: an empty tier uses the nearest one (never a silent C
   assert(show.status === 0 && /model: .*\[high\]/.test(show.stdout) && /its workers on .*\[fast\]/.test(show.stdout), show.stdout);
   const doc = node(d, ['.harness/doctor.mjs']).stdout;
   assert(/codex .*has no model names in config\.json/.test(doc) || !/· codex/.test(doc) || true, 'doctor names an engine without models (when installed)');
+});
+
+await test('quota fallback: an engine that hits its usage limit hands the same agent to its fallback engine once (same tier model), shown and logged; a daily cap stops an engine; usage report sums it', () => {
+  const d = sandbox();
+  const limit = path.join(d, 'limit-engine.mjs');
+  fs.writeFileSync(limit, "process.stdin.resume();process.stdin.on('end',()=>{process.stdout.write(JSON.stringify({type:'result',is_error:true,result:\"You've hit your session limit · resets 12:20pm\"}));process.exit(1);});");
+  withProfiles(d, { lim: { verified: true, binary: process.execPath, args: [limit], promptVia: 'stdin', allowedTools: [], models: { fast: 'l-fast', medium: 'l-mid', high: 'l-high' } }, mock: { ...json(path.join(d, '.harness', 'config.json')).profiles.mock, modelArgs: ['MODEL={model}'], models: { fast: 'm-fast', medium: 'm-mid', high: 'm-high' } } });
+  const cfgFile = path.join(d, '.harness', 'config.json'); const cfg = json(cfgFile);
+  cfg.quotaFallback = { lim: { engine: 'mock', models: { fast: 'fb-fast', medium: 'fb-mid', high: 'fb-high' } } };
+  fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2));
+  drop(d, { id: 'q1', title: 'q', engine: 'lim', verifyCmd: existsCheck('a.txt'), subtasks: [{ id: 'w', engine: 'lim', targetFiles: ['a.txt'], prompt: 'WRITE a.txt hi' }] });
+  runOnce(d);
+  const fb = log(d).find((e) => e.phase === 'QUOTA_FALLBACK');
+  assert(fb && fb.from === 'lim' && fb.to === 'mock' && fb.model === 'fb-fast', JSON.stringify(fb));
+  assert(stateOf(d).phase === '4_COMMITTED' && fs.existsSync(path.join(d, 'a.txt')), `the fallback engine must finish the task: ${stateOf(d).lastGateStatus}`);
+  assert(modelArg(d, 'w') === 'fb-fast', `fallback must use its own model for the same tier: ${modelArg(d, 'w')}`);
+  const usage = log(d).filter((e) => e.phase === 'AGENT_USAGE');
+  assert(usage.length === 2 && usage[0].engine === 'lim' && usage[0].ok === false && usage[1].engine === 'mock' && usage[1].ok === true, JSON.stringify(usage));
+  const rep = node(d, ['.harness/usage.mjs']);
+  assert(rep.status === 0 && /lim\s+l-fast\s+1 call\(s\) \(1 failed\)/.test(rep.stdout) && /mock\s+fb-fast/.test(rep.stdout), rep.stdout);
+  // daily cap: mock already has 1 call today → a cap of 1 call stops the next task before any engine starts
+  cfg.quotaFallback = {}; cfg.dailyLimits = { mock: { calls: 1 } }; fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2));
+  drop(d, { id: 'q2', title: 'q2', verifyCmd: PASS, subtasks: [{ id: 'w2', targetFiles: ['b.txt'], prompt: 'WRITE b.txt hi' }] });
+  runOnce(d);
+  assert(log(d).some((e) => e.phase === 'DAILY_LIMIT' && e.engine === 'mock') && /daily cap reached/.test(stateOf(d).lastGateStatus) && !fs.existsSync(path.join(d, 'b.txt')), stateOf(d).lastGateStatus);
+  assert(common.winCommandLine('C:\\Program Files\\x\\agy.exe', ['-p', '', 'a b']) === '"C:\\Program Files\\x\\agy.exe" -p "" "a b"', 'paths with spaces are quoted');
+});
+
+await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
+  const d = sandbox();
+  for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch']) {
+    const r = node(d, [`.harness/${c}.mjs`, '--help']);
+    assert(r.status === 0 && new RegExp(`${c}\\.mjs`).test(r.stdout), `${c} --help: exit ${r.status}\n${r.stdout.slice(0, 200)}${r.stderr.slice(0, 200)}`);
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
