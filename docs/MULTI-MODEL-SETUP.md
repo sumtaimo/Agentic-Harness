@@ -12,7 +12,7 @@ and the harness starts it as a local subprocess, the same way you would from a t
 ```
 harness controller ──spawn──▶ claude -p --output-format json ...   (prompt piped on stdin)
                    ──spawn──▶ agy -p "<prompt>" --model <tier model>  (prompt as an argument)
-                   ──spawn──▶ codex exec --full-auto -               (prompt piped on stdin)
+                   ──spawn──▶ codex exec --sandbox workspace-write -  (prompt piped on stdin)
 ```
 
 - Each tool's command line is a **profile** in `.harness/config.json` → `profiles` (binary, args, how the prompt is passed).
@@ -161,9 +161,9 @@ number in `models`.
   | `high` | planning, architecture, retry after a failed check | `gemini-4-hydrogen-high` (Gemini 4 Hydrogen) |
 
   When Google renames a model, run `agy models` and update `profiles.antigravity.models` in `.harness/config.json`.
-- **`codex`:** every tier is `null`. No `--model` is passed, so the CLI uses **its own newest default
-  model** on every tier. To save quota on the fast tier, set `models.fast` to an alias that `<tool> --help` documents.
-  Use an alias, not a dated version.
+- **`codex`:** one model, `gpt-6-luna` (the newest listed by `codex debug models`), with the reasoning effort per tier:
+  `gpt-6-luna@low` / `@medium` / `@high` becomes `--model gpt-6-luna -c model_reasoning_effort=<effort>`. This also
+  overrides a high default effort in your `~/.codex/config.toml`. When OpenAI renames it, update `profiles.codex.models`.
 - **Flag probe:** the doctor only requires `--model` in `<tool> --help` when at least one tier has an alias, so an unused model flag can never disable an engine.
 
 ### Override the tier

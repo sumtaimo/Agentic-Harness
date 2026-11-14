@@ -194,7 +194,14 @@ function buildArgs(profile, prompt, allowedTools, disallowedTools = [], stream =
     args.push(v);
   }
   // Model tier: only when the tier maps to an alias; otherwise no flag, so the CLI uses its own newest default.
-  if (model && Array.isArray(profile.modelArgs)) args.push(...profile.modelArgs.map((a) => a.replace('{model}', model)));
+  // "name@effort" (e.g. codex "gpt-6-luna@low") also fills {effort}; without an effort, an {effort} arg and its flag are dropped.
+  if (model && Array.isArray(profile.modelArgs)) {
+    const [name, effort] = String(model).split('@');
+    for (const a of profile.modelArgs) {
+      if (a.includes('{effort}') && !effort) { if (/^-/.test(args[args.length - 1] || '')) args.pop(); continue; }
+      args.push(a.replace('{model}', name).replace('{effort}', effort || ''));
+    }
+  }
   const mcpFile = profile.mcpConfigPath && path.join(ROOT, profile.mcpConfigPath);
   if (profile.useMcp && mcpFile && fs.existsSync(mcpFile)) {
     args.push(...(profile.mcpArgs || []).map((a) => a.replace('{mcpConfig}', mcpFile)));

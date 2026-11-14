@@ -1732,15 +1732,16 @@ await test('model tiers (pure): low → fast, standard → medium, architecture/
   const cfg = json(path.join(REPO, '.harness', 'config.json'));
   const c = cfg.profiles.claude;
   assert(c.models.fast === 'haiku' && c.models.medium === 'sonnet' && c.models.high === 'opus' && c.modelArgs.join(' ') === '--model {model}', `claude aliases: ${JSON.stringify(c.models)}`);
-  // Aliases only, except antigravity: agy has no aliases, so it uses the exact IDs from 'agy models' (owner decision).
-  for (const [name, p] of Object.entries(cfg.profiles)) if (name !== 'antigravity') for (const m of Object.values(p.models || {})) assert(m === null || !/\d/.test(m), `${name}: model "${m}" looks like a pinned version; use an alias`);
+  // Aliases only, except antigravity and codex: neither CLI has aliases, so it uses the exact IDs from 'agy models' (owner decision).
+  for (const [name, p] of Object.entries(cfg.profiles)) if (!['antigravity', 'codex'].includes(name)) for (const m of Object.values(p.models || {})) assert(m === null || !/\d/.test(m), `${name}: model "${m}" looks like a pinned version; use an alias`);
   const ag = cfg.profiles.antigravity;
   assert(ag.models.fast === 'gemini-3.8-flash-medium' && ag.models.medium === 'gemini-4-argon-medium' && ag.models.high === 'gemini-4-hydrogen-high' && ag.modelArgs.join(' ') === '--model {model}', `antigravity tiers: ${JSON.stringify(ag.models)}`);
   assert(common.resolveModel(c, { tier: 'fast' }).model === 'haiku' && common.resolveModel(c, { tier: 'high' }).model === 'opus', 'claude tier → alias');
-  for (const k of ['codex']) assert(common.resolveModel(cfg.profiles[k], { tier: 'fast' }).model === null, `${k}: no alias → no --model (the CLI uses its newest default)`);
+  assert(common.resolveModel(cfg.profiles.codex, { tier: 'fast' }).model === 'gpt-6-luna@low' && common.resolveModel(cfg.profiles.codex, { tier: 'high' }).model === 'gpt-6-luna@high', 'codex: one model, reasoning effort per tier');
+  assert(!Object.values(cfg.profiles).some((p) => common.usesCliDefault(p)), 'no engine may silently run on its CLI default model');
   assert(JSON.stringify(common.resolveModel(c, { tier: 'fast', override: 'high' })) === JSON.stringify({ tier: 'high', model: 'opus', source: 'override-tier' }), 'a tier override picks that tier');
   assert(common.resolveModel(c, { tier: 'fast', override: 'fable' }).model === 'fable', 'an alias override is passed through');
-  assert(common.profileFlags(c).includes('--model') && !common.profileFlags(cfg.profiles.codex).includes('--model'), 'the probe checks --model only where an alias is configured');
+  assert(common.profileFlags(c).includes('--model') && !common.profileFlags({ args: ['-p'], modelArgs: ['--model', '{model}'], models: { fast: null, medium: null, high: null } }).includes('--model'), 'the probe checks --model only where an alias is configured');
 });
 
 await test('model tiers end to end (1 engine): orchestrator high, lead-ba and lead-dev medium, QA + small edits fast, multi-file coding medium', () => {

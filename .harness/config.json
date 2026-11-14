@@ -131,25 +131,28 @@
     },
     "codex": {
       "verified": false,
-      "note": "UNVERIFIED: codex is not installed on the machines tested so far. OpenAI Codex CLI; '-' means read the prompt from stdin.",
+      "note": "Checked with codex-cli 0.169.0 (2026-11-14): '--full-auto' no longer exists; 'exec --sandbox workspace-write' runs non-interactively and may edit files in the project only. '-' reads the prompt from stdin. Log in once with 'codex login'.",
       "binary": "codex",
       "args": [
         "exec",
-        "--full-auto",
+        "--sandbox",
+        "workspace-write",
         "-"
       ],
       "promptVia": "stdin",
       "allowedTools": [],
       "modelArgs": [
         "--model",
-        "{model}"
+        "{model}",
+        "-c",
+        "model_reasoning_effort={effort}"
       ],
       "models": {
-        "fast": null,
-        "medium": null,
-        "high": null
+        "fast": "gpt-6-luna@low",
+        "medium": "gpt-6-luna@medium",
+        "high": "gpt-6-luna@high"
       },
-      "modelsNote": "No alias set: no --model flag is passed, so the CLI uses its own newest default model on every tier. To save quota on the fast tier, set models.fast to an ALIAS that `codex --help` documents (not a pinned version)."
+      "modelsNote": "From 'codex debug models' (codex-cli 0.169.0): gpt-6-luna is the newest listed model; tiers differ by reasoning effort (name@effort → --model name -c model_reasoning_effort=effort). This overrides the effort in ~/.codex/config.toml, which may be set high (e.g. xhigh) for every call. When OpenAI renames a model, run 'codex debug models' and update these."
     }
   },
   "quotaFallback": {

@@ -60,19 +60,19 @@ after(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-const CODEX_HELP = `printf '%s\\n' 'Usage: codex exec [options] [PROMPT]' '  --full-auto          Run without asking for approval in the workspace' '  -h, --help           Show help'`;
+const CODEX_HELP = `printf '%s\\n' 'Usage: codex exec [options] [PROMPT]' '  -s, --sandbox <SANDBOX_MODE>  Select the sandbox policy' '  -m, --model <MODEL>  Model the agent should use' '  -c, --config <key=value>  Override a configuration value' '  -h, --help           Show help'`;
 const AGY_HELP = `printf '%s\\n' 'Usage: agy [options]' '  -p, --prompt <text>  Run one prompt headless and exit' '  --model              Model for the current CLI session' '  -h, --help           Show help'`;
 
 test('profileFlags extracts dash flags from args', () => {
   assert.deepEqual(profileFlags({ args: ['--yolo', 'sub', '--', '--x={p}'] }), ['--yolo']);
-  assert.deepEqual(profileFlags(profiles.codex), ['--full-auto']);
+  assert.deepEqual(profileFlags(profiles.codex).sort(), ['--model', '--sandbox', '-c'], 'codex 0.169: exec --sandbox workspace-write, model + reasoning effort');
   assert.deepEqual(profileFlags(profiles.antigravity).sort(), ['--model', '-p'], 'agy has model tiers, so --model is probed too');
   assert.equal(profiles.antigravity.binary, 'agy');
   assert.equal(profiles.antigravity.promptVia, 'arg');
   assert.deepEqual(profiles.antigravity.args, ['-p', '{prompt}']);
 });
 
-test('fake codex listing --full-auto is compatible and auto picks it', () => {
+test('fake codex listing --sandbox, --model and -c is compatible and auto picks it', () => {
   useBin('codex-ok', { codex: CODEX_HELP });
   const probe = probeEngine(profiles.codex, { force: true });
   assert.equal(probe.installed, true);
@@ -86,7 +86,7 @@ test('an old codex that only lists --yolo is incompatible and auto falls through
   useBin('codex-old', { codex: `printf '%s\\n' '  -y, --yolo   Auto-approve'`, agy: AGY_HELP });
   const probe = probeEngine(profiles.codex, { force: true });
   assert.equal(probe.compatible, false);
-  assert.deepEqual([...probe.missing], ['--full-auto']);
+  assert.deepEqual([...probe.missing].sort(), ['--model', '--sandbox', '-c']);
   assert.equal(resolveProfile(config).name, 'antigravity');
 });
 
