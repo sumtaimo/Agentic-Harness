@@ -32,7 +32,7 @@ import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd,
   listProjectFiles, safeTarget,
-  winQuote, winCommandLine, chooseModelTier, resolveModel, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked,
+  winQuote, winCommandLine, chooseModelTier, resolveModel, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
 } from './lib/common.mjs';
 helpIfAsked(import.meta.url); // "--help" prints the usage; it must never start the controller
 
@@ -1187,6 +1187,7 @@ async function executeSquareCycle(taskFile) {
   const integration = integrationFor(task); let gitCtx = null; let gitResult = null;
   const title = task.title || path.basename(taskFile);
   resetCost();
+  taskStartedIso = new Date().toISOString();
   writeState({ planSummary: '-', workerSummary: '-', currentTaskFile: taskFile, costUsd: 0 });
   lastFinished = { autonomous: !!task.autonomous, backlogId: task.backlogId, title, ok: false };
   autoTierCap = !!task.autonomous && task.costApproved !== true && !highAlwaysAllowed();
@@ -1251,7 +1252,13 @@ async function executeSquareCycle(taskFile) {
   return false;
 }
 
+let taskStartedIso = null;
 function finishSession(task, plan, result, cycles, errors, outputs, rollback = null, gitResult = null) {
+  // One short line in the live feed (watch.mjs / the screen), so AI use is never silent; no extra AI call.
+  if (taskStartedIso) {
+    const spent = usageLine(aiUsageSince(taskStartedIso)); const today = usageTodayLine(config);
+    liveLog(`  [harness]          AI used by this task: ${spent || 'none'}${today ? ` · today: ${today}` : ''}`);
+  }
   const mem = config.memory || {};
   const title = task.title || task.id || 'task';
   try {

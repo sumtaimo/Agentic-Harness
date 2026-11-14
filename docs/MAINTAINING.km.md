@@ -6,7 +6,7 @@ English version: [`MAINTAINING.md`](MAINTAINING.md).
 
 | | វាជាអ្វី | អ្នកណាកែ |
 |---|---|---|
-| **Lab**៖ branch `main` នៃ repository នេះ | កន្លែងសាងសង់ និងសាកល្បង harness ពិតៗរាល់ថ្ងៃ | ម្ចាស់ (និង AI ដែលធ្វើការជាមួយគាត់) |
+| **Lab**៖ branch `lab` នៃ repository នេះ | កន្លែងសាងសង់ និងសាកល្បង harness ពិតៗរាល់ថ្ងៃ | ម្ចាស់ (និង AI ដែលធ្វើការជាមួយគាត់) |
 | **Template**៖ branch `release` នៃ repository នេះ | កំណែដែលបានសាករួច៖ អ្វីដែល `npx github:sumtaimo/Agentic-Harness#release` ដំឡើង និងអ្វីដែល landing page បង្ហាញ | គ្មាននរណាកែផ្ទាល់ទេ៖ lab ត្រូវបានចម្លងចូលវា ក្រោយពេលជាប់ការសាក និងមានការយល់ព្រមពីម្ចាស់ |
 | **Projects** | repository ណាមួយដែលបានដំឡើង harness (របស់អ្នក ឬអ្នកផ្សេង) | តែ settings របស់ខ្លួនប៉ុណ្ណោះ៖ កូដស្នូលរបស់ harness ត្រូវបានការពារមិនឲ្យកែនៅទីនោះ |
 
@@ -47,7 +47,7 @@ backlog និង memory របស់អ្នកត្រូវបានរក�
 
 ## បញ្ជីពិនិត្យមុនចេញផ្សាយ (សម្រាប់អ្នកថែទាំ)
 
-រត់ទាំងនេះក្នុង repository template តាមលំដាប់។ គ្មានអ្វីទៅ `main` ទេ លុះត្រាតែជាប់ទាំងអស់ **ហើយម្ចាស់យល់ព្រម**។
+រត់ទាំងនេះក្នុង repository template តាមលំដាប់។ គ្មានអ្វីទៅ `lab` ទេ លុះត្រាតែជាប់ទាំងអស់ **ហើយម្ចាស់យល់ព្រម**។
 
 1. `npm test`៖ ឈុតតេស្តឥតគិតថ្លៃ (ប្រើតែ engine ក្លែង ហើយលាក់ឧបករណ៍ AI ពិតលើម៉ាស៊ីនរបស់អ្នក)។
 2. `npm run audit -- --site`៖ ដំឡើងក្នុង project ទទេដូចអ្នកប្រើថ្មី ហើយពិនិត្យរាល់ពាក្យបញ្ជា ការយោងក្នុងឯកសារ
@@ -55,16 +55,16 @@ backlog និង memory របស់អ្នកត្រូវបានរក�
 3. ការរត់ពិត៖ តែពេល command line ឬ models របស់ engine ផ្លាស់ប្តូរ ហើយតែពេលម្ចាស់យល់ព្រម (វាប្រើ quota)។
    ការងារតូចមួយក្នុង project សាកល្បង (`npm run demo` រួចការងារ `hello.txt` ក្នុង `docs/ENGINES.md`)។
 4. បង្កើន `"version"` ក្នុង `package.json` ពេលកូដស្នូលផ្លាស់ប្តូរ (ការដំឡើងនីមួយៗកត់ត្រាវា)។
-5. Commit លើ `main` (lab) រួចសួរម្ចាស់មុន push។ Push ធម្មតាប៉ុណ្ណោះ។
+5. Commit លើ `lab` រួចសួរម្ចាស់មុន push។ Push ធម្មតាប៉ុណ្ណោះ។
 6. **ចេញផ្សាយ**៖ ពេលកំណែក្នុង lab ត្រូវបានប្រើពិតរួច ហើយម្ចាស់និយាយថា «release» ចម្លងវាទៅ template៖
-   `git push origin main:release` (push ធម្មតា កុំ force)។ ចាប់ពីពេលនោះ អ្នកប្រើដែលដំឡើងពី `#release` និង landing page
+   `git push origin lab:release` (push ធម្មតា កុំ force)។ ចាប់ពីពេលនោះ អ្នកប្រើដែលដំឡើងពី `#release` និង landing page
    (ដែល deploy ពី `release`) ទទួលបានវា។ គ្មានអ្វីទៅដល់អ្នកប្រើមុនជំហាននេះទេ។
 
 ## ច្បាប់របស់ម្ចាស់
 
 - សួរមុនរាល់ការ push មុនកែ `.harness/config.json` ឬ `.harness/charter.md` មុនដំឡើងកម្មវិធីសកល ឬបន្ថែម dependencies
   និងមុនអ្វីៗដែលចំណាយលុយ ឬ quota AI។
-- កុំ force-push ឬសរសេរប្រវត្តិ `main` ឡើងវិញ ដោយគ្មានការយល់ព្រមច្បាស់សម្រាប់សកម្មភាពនោះជាក់លាក់។
+- កុំ force-push ឬសរសេរប្រវត្តិ `lab` ឬ `release` ឡើងវិញ ដោយគ្មានការយល់ព្រមច្បាស់សម្រាប់សកម្មភាពនោះជាក់លាក់។
 - កុំចាប់ផ្តើម autonomous (`npm run auto`, `/harness:auto`) លុះត្រាតែមានការប្រាប់។
 - គ្មានឈ្មោះ model ក្នុង commits, code comments ឬឯកសារ៖ វានៅតែក្នុង `.harness/config.json` ប៉ុណ្ណោះ
   (`npm run audit` ពិនិត្យវា ដោយប្រើឈ្មោះក្នុង config)។

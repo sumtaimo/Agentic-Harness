@@ -44,7 +44,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline/promises';
-import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable } from './lib/common.mjs';
+import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable, aiUsageSince, usageLine, usageTodayLine } from './lib/common.mjs';
 import { askEngineConsent } from './lib/consent.mjs';
 
 if (process.env.HARNESS_WORKER === '1') {
@@ -203,6 +203,9 @@ fs.writeFileSync(`${inboxPath}.tmp`, JSON.stringify(job, null, 2)); // atomic ha
 fs.renameSync(`${inboxPath}.tmp`, inboxPath);                       // the daemon never sees half a file
 console.log(`Dispatched [${(engine || config.activeProfile).toUpperCase()}] job ${job.id} (${job.hierarchy ? 'orchestrator → leads → workers, per team.json' : usePlanner ? 'AI planner will choose the workers' : `${job.subtasks.length} worker[s]`}) -> ${path.relative(ROOT, inboxPath)}`);
 console.log(`Check: ${checkLine}`);
+// One short line so the person always sees that this spends their AI quota (no AI call: read from the log).
+{ const today = usageTodayLine(config); console.log(`AI: ${engine || 'auto'}, model picked per job (fast / medium / high)${today ? ` · used today: ${today}` : ''}`); }
+const startedIso = new Date().toISOString();
 console.log(`JOB_ID=${job.id}`);
 console.log(`LIVE_FROM=${(() => { try { return fs.statSync(path.join(ROOT, '.harness', 'live.log')).size; } catch { return 0; } })()}`);
 if (branch) console.log(`Git: result is merged into '${branch}' only if the check passes; your folder and protected branches are not touched.`);
@@ -227,9 +230,12 @@ for (;;) {
   if (done || failed) {
     const sessions = fs.readdirSync(DIRS.sessions).filter((f) => f.includes(job.id));
     const note = sessions.length ? path.join('.harness', 'memory', 'sessions', sessions[sessions.length - 1]) : '(none)';
-    if (done) { console.log(`RESULT: COMMITTED ✔  (session note: ${note})`); process.exit(0); }
+    const spent = usageLine(aiUsageSince(startedIso));
+    const today = usageTodayLine(config);
+    const aiLine = `AI used by this job: ${spent || 'none'}${today ? ` · today: ${today}` : ''}`;
+    if (done) { console.log(`RESULT: COMMITTED ✔  (session note: ${note})\n${aiLine}`); process.exit(0); }
     const body = readJsonSafe(path.join(DIRS.failed, failed));
-    console.log(`RESULT: NOT DONE ✖  ${body.haltReason || ''}\nSession note: ${note}`);
+    console.log(`RESULT: NOT DONE ✖  ${body.haltReason || ''}\nSession note: ${note}\n${aiLine}`);
     process.exit(1);
   }
   await new Promise((r) => setTimeout(r, 1000));

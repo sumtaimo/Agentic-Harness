@@ -85,6 +85,41 @@ export function winQuote(a) {
   return s === '' || /[\s"&|<>^()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+// ───────────────────────────── AI use, in one short line ─────────────────────────────
+// A person must always SEE when the harness spends their AI quota, without a long report: one line, no AI call.
+
+/** Sum the AGENT_USAGE log lines since an ISO time → { <engine>: { calls, failed, tokens, usd } }. */
+export function aiUsageSince(sinceIso) {
+  const out = {};
+  try {
+    for (const line of fs.readFileSync(FILES.log, 'utf8').split('\n')) {
+      if (!line.includes('"AGENT_USAGE"')) continue;
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      if (e.ts < sinceIso) continue;
+      const r = (out[e.engine] ||= { calls: 0, failed: 0, tokens: 0, usd: 0 });
+      r.calls++; if (!e.ok) r.failed++; r.tokens += Number(e.tokens) || 0; r.usd += Number(e.usd) || 0;
+    }
+  } catch { /* no log yet */ }
+  return out;
+}
+
+/** "agy 5/80 calls · claude 2/60 calls, $0.40/$5" for today (UTC), with the daily caps; '' when nothing was used. */
+export function usageTodayLine(config = loadConfig()) {
+  const used = aiUsageSince(`${new Date().toISOString().slice(0, 10)}T00:00:00`);
+  const name = (k) => (k === 'antigravity' ? 'agy' : k);
+  return Object.entries(used).map(([k, r]) => {
+    const cap = (config.dailyLimits || {})[k] || {};
+    const calls = `${r.calls}${typeof cap.calls === 'number' ? `/${cap.calls}` : ''} call(s)`;
+    const usd = r.usd || typeof cap.usd === 'number' ? `, $${r.usd.toFixed(2)}${typeof cap.usd === 'number' ? `/$${cap.usd}` : ''}` : '';
+    return `${name(k)} ${calls}${usd}`;
+  }).join(' · ');
+}
+
+/** "agy 2 call(s) (1 failed) · codex 1 call(s)" for one job, '' when none. */
+export function usageLine(used) {
+  return Object.entries(used).map(([k, r]) => `${k === 'antigravity' ? 'agy' : k} ${r.calls} call(s)${r.failed ? ` (${r.failed} failed)` : ''}${r.usd ? `, $${r.usd.toFixed(2)}` : ''}`).join(' · ');
+}
+
 // ───────────────────────────── harness core integrity ─────────────────────────────
 // The harness CODE (.harness/*.mjs, .harness/lib/*.mjs) belongs to the template. A project uses it but never edits it:
 // the installer records a fingerprint of each core file in .harness/MANIFEST.json, and doctor warns when one changed.
