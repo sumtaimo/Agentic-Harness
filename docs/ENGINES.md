@@ -21,36 +21,40 @@ Each profile may have `"models": { "fast", "medium", "high" }` and `"modelArgs"`
 The controller picks a tier per agent from the job's complexity. Small edits, docs and QA get `fast`, normal coding gets `medium`,
 architecture planning gets `high`, and a failed check escalates one tier. The tier's alias is then passed to the CLI.
 
-- Aliases only, never pinned versions. `claude` uses `haiku`, `sonnet` and `opus`, which Claude Code resolves to the newest release.
-- Codex has one current model (`gpt-6-luna`) with reasoning levels, so its tiers are `gpt-6-luna@low` / `@medium` / `@high`
-  (`--model gpt-6-luna -c model_reasoning_effort=low`). This also overrides a high default effort in `~/.codex/config.toml`.
-- `agy` has no aliases, so Antigravity uses exact IDs from `agy models`: `fast` = `gemini-3.8-flash-medium`, `medium` (coding) = `gemini-4-argon-medium`, `high` (planning) = `gemini-4-hydrogen-high`. Real runs on all three tiers passed on 2026-11-14 (Flash: create a file; Argon: write add(a, b); Hydrogen: write mul(a, b); each checked by a real command and COMMITTED).
+- Claude Code: the CLI's own aliases, which it resolves to the newest release, so nothing needs editing when a model ships.
+- Codex: one model with a reasoning effort per tier, written `name@effort` and passed as `--model name -c model_reasoning_effort=effort`.
+  This also overrides a high default effort in `~/.codex/config.toml`. Names come from `codex debug models`.
+- Antigravity: `agy` has no aliases, so its tiers use exact IDs from `agy models`. Real runs on all three tiers passed on
+  2026-11-14 (create a file, write add(a, b), write mul(a, b); each checked by a real command and COMMITTED).
+- The model names themselves live only in `.harness/config.json` → `profiles.<engine>.models`.
 
 ## Every agent gets a model that fits its job
 
 The controller never leaves the model to chance. Per agent it picks a tier from the job, then the model of that tier:
 
-| Agent | Tier | Antigravity | Claude Code |
-|---|---|---|---|
-| orchestrator, PO architect (plan across modules) | high | Gemini 4 Hydrogen | opus |
-| lead-ba, lead-dev (split their own slice) | medium | Gemini 4 Argon | sonnet |
-| lead-qa, docs/QA workers, 1-file small edits | fast | Gemini 3.8 Flash | haiku |
-| coding workers (several files) | medium | Gemini 4 Argon | sonnet |
-| any retry after a failed check | one tier up | | |
+| Agent | Tier |
+|---|---|
+| orchestrator, PO architect (plan across modules) | high |
+| lead-ba, lead-dev (split their own slice) | medium |
+| lead-qa, docs/QA workers, 1-file small edits | fast |
+| coding workers (several files) | medium |
+| any retry after a failed check | one tier up |
+
+Each tier maps to one model per engine in `.harness/config.json`; `node .harness/team.mjs show` prints the result.
 
 - An empty tier uses the nearest configured one, so a CLI default is never used by accident. Only an engine with no
-  model names at all (Codex today) runs on its own default, and `doctor` warns about it.
+  model names at all runs on its own default, and `doctor` warns about it.
 - In Claude Code, the named agents get their model too (`model:` in `.claude/agents/lead-*.md`, written by
-  `node .harness/team.mjs sync-agents`): lead-ba and lead-qa use haiku, lead-dev uses sonnet. Without it they would
-  inherit your session model (often opus) for simple docs and tests.
+  `node .harness/team.mjs sync-agents`): lead-ba and lead-qa get the fast tier, lead-dev the medium tier. Without it they
+  would inherit your session model (often the most expensive one) for simple docs and tests.
 - See every agent's model: `node .harness/team.mjs show`. The live feed prints the model each agent starts on.
 - Override for one member: `"model"` in `team.json` (an alias or a tier name); for one task: `dispatch --model`.
 
 ## Saving quota: reroute, daily caps, usage report
 
 - **Claude limit → agy.** When Claude Code stops on its usage limit, the same agent retries once through `agy`, on
-  Antigravity's Claude models (your Google quota): fast = `claude-sonnet-5-5-low`, medium = `claude-sonnet-5-5-medium`,
-  high = `claude-opus-5-5-high`. Only if you allowed antigravity. The live feed shows `⇄ claude usage limit → continuing
+  Antigravity's Claude models, on the same tier (set in `config.json` → `quotaFallback.claude.models`). Only if you
+  allowed antigravity. The live feed shows `⇄ claude usage limit → continuing
   on antigravity`; the log has `QUOTA_FALLBACK`. Set in `config.json` → `quotaFallback`; delete that block to turn it off.
 - **Daily caps.** `config.json` → `dailyLimits`, per engine: `calls`, `tokens` (engines that report them, e.g. Claude)
   and `usd`. The template ships with **antigravity: 80 calls/day** and **claude: $5 or 60 calls/day** (whichever comes
@@ -130,8 +134,8 @@ succeeds. Today `claude` and `antigravity` are `"verified": true`.
 | Profile | Configured now | Status |
 |---|---|---|
 | `claude` | binary `claude`, `-p`, prompt on stdin | verified |
-| `antigravity` | binary `agy`, args `-p {prompt}` (prompt as argument), no auto-approve | verified on Windows 11 / Node 24 with `agy` 1.5.8 (2026-11-14): a scoped file task ran, the real check passed and the job was COMMITTED, also with a 3,049-character goal; all three model tiers (Flash, Argon, Hydrogen) passed real runs |
-| `codex` | binary `codex`, args `exec --sandbox workspace-write -`, prompt on stdin, `--model` + reasoning effort | partly verified with codex-cli 0.169.0 (2026-11-14): flags, model and effort accepted (`approval: never`, `sandbox: workspace-write`); a full task was stopped by the account's usage limit, so not marked verified yet |
+| `antigravity` | binary `agy`, args `-p {prompt}` (prompt as argument), no auto-approve | verified on Windows 11 / Node 24 with `agy` 1.5.8 (2026-11-14): a scoped file task ran, the real check passed and the job was COMMITTED, also with a 3,049-character goal; all three model tiers passed real runs |
+| `codex` | binary `codex`, args `exec --sandbox workspace-write -`, prompt on stdin, `--model` + reasoning effort | partly verified with codex-cli 0.169.0 (2026-11-14): flags, model and effort accepted (`approval: never`, `sandbox: workspace-write`); a full task has not completed yet, so not marked verified |
 
 Notes for Antigravity:
 

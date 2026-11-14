@@ -45,6 +45,15 @@ function sandbox({ worktrees = false } = {}) {
 // in this suite sees "no usable engine" unless a test passes HARNESS_ENGINES itself.
 process.env.HARNESS_ENGINES = '';
 const env = { ...process.env, HARNESS_SILENT: '1', HARNESS_AGENT: '', HARNESS_LIVE: '0', HARNESS_YES: '1' }; // the approval gate has its own test
+// The suite never sees the AI CLIs installed on this machine (claude, codex, agy): it uses fake engines only. Every
+// real CLI on PATH costs a ~2 s '--help' probe in each doctor / install / auto-assign, and would make results depend
+// on what is installed. So PATH loses every folder that holds one of them (node, git and npm stay).
+{
+  const AI_BINS = ['claude', 'codex', 'agy'].flatMap((b) => [b, `${b}.cmd`, `${b}.exe`, `${b}.ps1`]);
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+  env[key] = String(env[key] || '').split(path.delimiter).filter((dir) => dir && !AI_BINS.some((b) => { try { return fs.existsSync(path.join(dir, b)); } catch { return false; } })).join(path.delimiter);
+  process.env[key] = env[key]; // also for the tests that spawn with process.env directly
+}
 delete env.HARNESS_WORKER;
 const node = (dir, args, extraEnv = {}) => spawnSync(process.execPath, args, { cwd: dir, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 60000 });
 const json = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
@@ -1845,6 +1854,9 @@ await test('doctor: a project with UI files but no browser testing tool gets a n
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-doctor-browser-'));
   const demo = path.join(base, 'demo');
   assert(spawnSync(process.execPath, [path.join(REPO, 'examples', 'make-demo.mjs'), demo], { encoding: 'utf8' }).status === 0, 'demo');
+  // A fake, allowed engine: this test is about the browser note, not about which AI CLIs this machine has.
+  withProfiles(demo, { mock: { verified: true, binary: process.execPath, args: [MOCK], promptVia: 'stdin', allowedTools: [], models: { fast: 'm', medium: 'm', high: 'm' } } });
+  { const f = path.join(demo, '.harness', 'config.json'); const c = json(f); c.activeProfile = 'mock'; c.autoOrder = ['mock']; fs.writeFileSync(f, JSON.stringify(c, null, 2)); }
   const doctor = (env = {}) => spawnSync(process.execPath, ['.harness/doctor.mjs'], { cwd: demo, encoding: 'utf8', env: { ...process.env, ...env } });
   let r = doctor();
   assert(!/Browser testing/.test(r.stdout), `no UI files, so no browser section:\n${r.stdout}`);

@@ -93,7 +93,7 @@ const en = {
     noModel: 'tool default',
     apply: 'See this for your own machine:',
     after: 'With 1 tool, it does every job. With 2, one plans and one codes. With 3 or more, planning, code and tests each get their own.^4',
-    note4: 'Claude Code takes size names (`haiku`, `sonnet`, `opus`). Antigravity uses Gemini 3.8 Flash, Gemini 4 Argon for coding and Gemini 4 Hydrogen for planning. Codex uses its own newest model.',
+    note4: 'Each tool has a fast, a medium and a high model, set once in `.harness/config.json`. Claude Code takes its own aliases, so it always gets the newest release.',
   },
   setup: {
     intro: 'Pick your situation. Each step is one command.',
@@ -252,7 +252,7 @@ const kh: Dict = {
     noModel: 'លំនាំដើមរបស់ឧបករណ៍',
     apply: 'មើលលទ្ធផលនេះសម្រាប់ម៉ាស៊ីនរបស់អ្នក៖',
     after: 'មានឧបករណ៍ 1 វាធ្វើគ្រប់ការងារ។ មាន 2 មួយរៀបផែនការ មួយសរសេរកូដ។ មាន 3 ឡើងទៅ ផែនការ កូដ និងតេស្ត មានឧបករណ៍រៀងខ្លួន។^4',
-    note4: 'Claude Code ទទួលឈ្មោះទំហំ (`haiku`, `sonnet`, `opus`)។ Antigravity ប្រើ Gemini 3.8 Flash, Gemini 4 Argon សម្រាប់សរសេរកូដ និង Gemini 4 Hydrogen សម្រាប់រៀបផែនការ។ Codex ប្រើ model ថ្មីបំផុតរបស់ខ្លួន។',
+    note4: 'ឧបករណ៍នីមួយៗមាន model លឿន មធ្យម និងខ្លាំង ដែលកំណត់ម្តងក្នុង `.harness/config.json`។ Claude Code ប្រើឈ្មោះ alias របស់ខ្លួន ដូច្នេះវាទទួលបាន model ថ្មីបំផុតជានិច្ច។',
   },
   setup: {
     intro: 'ជ្រើសស្ថានភាពរបស់អ្នក។ ជំហាននីមួយៗគឺពាក្យបញ្ជាមួយ។',
