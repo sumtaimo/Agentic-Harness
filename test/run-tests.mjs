@@ -2104,6 +2104,20 @@ await test('fresh sessions: a new, unchanged session worktree that is behind the
   assert(!fs.existsSync(path.join(main, 'new.txt')), 'the main folder is never changed by the hook');
 });
 
+await test('Claude Code session agents are counted: each started lead is a "claude-code" call in the usage log, shown in one line; the daily cap stops a delegation before any agent starts', () => {
+  const d = sandbox();
+  const b = vis(d, 'brief', '--goal', 'build a', '--check', TRIO_CHECK); const id = runIdOf(b);
+  const a = vis(d, 'assign', id, deleg(trio()));
+  assert(a.status === 0 && /^AI: 3 Claude Code agent\(s\) for this run · today: claude-code 3\/60 call\(s\)$/m.test(a.stdout), a.stdout + a.stderr);
+  const used = log(d).filter((e) => e.phase === 'AGENT_USAGE' && e.engine === 'claude-code').map((e) => e.worker).sort().join();
+  assert(used === 'lead-ba,lead-dev,lead-qa', used);
+  assert(/claude-code\s+\S+\s+3 call\(s\)|claude-code .*3 call\(s\)/.test(node(d, ['.harness/usage.mjs']).stdout), 'usage report shows the session agents');
+  const f = path.join(d, '.harness', 'config.json'); const c = json(f); c.dailyLimits = { 'claude-code': { calls: 4 } }; fs.writeFileSync(f, JSON.stringify(c, null, 2));
+  const b2 = vis(d, 'brief', '--goal', 'build b', '--check', TRIO_CHECK, '--force'); const id2 = runIdOf(b2);
+  const a2 = vis(d, 'assign', id2, deleg(trio()));
+  assert(a2.status === 7 && /DAILY_LIMIT: Claude Code session agents used 3\/4/.test(a2.stderr), `exit ${a2.status}: ${a2.stdout}${a2.stderr}`);
+});
+
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
   const d = sandbox();
   for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch']) { // daemon --help once started the controller

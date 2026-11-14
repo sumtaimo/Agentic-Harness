@@ -25,9 +25,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { ROOT, HARNESS_DIR, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, memoryContext, recordSession, remember, safeTarget, helpIfAsked, pendingCostReasons, loadApprovals } from './lib/common.mjs';
+import { ROOT, HARNESS_DIR, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, memoryContext, recordSession, remember, safeTarget, helpIfAsked, pendingCostReasons, loadApprovals, aiUsageSince, usageTodayLine } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
-import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns } from './lib/governance.mjs';
+import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor } from './lib/governance.mjs';
 
 if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must not use the editor workflow.'); process.exit(2); }
 ensureDirs();
@@ -276,6 +276,21 @@ function assign() {
     if (run.assignAttempts >= 3) { run.status = 'ESCALATED'; run.reason = `The orchestrator could not produce a valid delegation in 3 attempts: ${e.message}`; saveRun(run); if (run.backlogId) updateBacklogItem(run.backlogId, { status: 'BLOCKED', blockedReason: `ESCALATED: ${run.reason}` }); die(`REJECTED (attempt ${run.assignAttempts}/3): ${e.message}\nESCALATED to the human: ${run.reason}`, 2); }
     saveRun(run);
     die(`REJECTED (attempt ${run.assignAttempts}/3): ${e.message}\nFix the delegation and run assign again. Nothing was started.`, 1);
+  }
+  // Claude Code session agents count too: each started lead is one call of "claude-code" in the usage log, checked
+  // against dailyLimits["claude-code"].calls. Tokens are not visible to the controller (they are in the session).
+  {
+    const cap = (config.dailyLimits || {})['claude-code'];
+    const today = (aiUsageSince(`${new Date().toISOString().slice(0, 10)}T00:00:00`)['claude-code'] || { calls: 0 }).calls;
+    if (cap && typeof cap.calls === 'number' && today + plan.assignments.length > cap.calls) {
+      saveRun(run);
+      die(`DAILY_LIMIT: Claude Code session agents used ${today}/${cap.calls} call(s) today; this delegation needs ${plan.assignments.length} more. Nothing was started. Raise "dailyLimits" → "claude-code" in config.json only if the user accepts the use.`, 7);
+    }
+    const ts = new Date().toISOString();
+    const lines = plan.assignments.map((a) => { const lead = leads.find((l) => l.id === a.lead); return JSON.stringify({ ts, phase: 'AGENT_USAGE', message: `${a.lead}: claude-code ${editorModelFor(lead, config) || 'session model'} (editor run ${id})`, worker: a.lead, engine: 'claude-code', model: editorModelFor(lead, config), tier: null, ok: true, tokens: null, usd: 0, ms: 0, run: id }); });
+    fs.appendFileSync(FILES.log, `${lines.join('\n')}\n`);
+    const t = usageTodayLine(config);
+    console.log(`AI: ${plan.assignments.length} Claude Code agent(s) for this run · today: ${t}\n`);
   }
   run.interfaceContract = [run.interfaceContract, typeof plan.interfaceContract === 'string' ? plan.interfaceContract.slice(0, 4000) : ''].filter(Boolean).join('\n');
   run.assignments = plan.assignments.map((a) => ({ lead: a.lead, goal: a.goal.trim(), files: a.files }));

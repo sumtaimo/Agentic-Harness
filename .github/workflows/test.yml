@@ -15,8 +15,13 @@ concurrency:
 
 jobs:
   npm-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Linux, macOS and Windows: the harness must work for every user, not only on the lab machine.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,6 +30,7 @@ jobs:
       # No "npm install": the project has no dependencies.
       # Each failing test is also raised as an annotation, so it is visible on the run page (and the public API)
       # without opening the full log.
+      - run: git config --global user.name ci && git config --global user.email ci@ci.local
       - name: npm test
         shell: bash
         run: |
@@ -33,3 +39,5 @@ jobs:
             grep -E '^\s*✖|^not ok|Error' test-output.txt | head -40 | sed 's/^\s*/::error title=npm test::/'
             exit 1
           }
+      - name: npm run audit
+        run: npm run audit
