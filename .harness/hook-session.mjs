@@ -52,6 +52,12 @@ try {
   if (held.length) lines.push(`- ${held.length} task(s) wait for the user's OK because they may use a lot of quota: ${held.slice(0, 3).map((t) => `${t.id} ("${t.title || t.goal}")`).join(', ')}. Tell the user; run  node .harness/backlog.mjs approve <id>  only after a clear yes for that task.`);
   const { loadApprovals } = await import('./lib/common.mjs');
   if (!Object.values(loadApprovals().engines || {}).some((v) => v === true)) lines.push('- No AI tool is allowed yet for headless runs (dispatch / daemon). The user allows each one once in a terminal: node .harness/engines.mjs. Never run "engines.mjs allow" for them.');
+  const { checkCore } = await import('./lib/common.mjs');
+  const core = checkCore();
+  if (core.manifest) {
+    lines.push('- This project USES the harness: never edit .harness/*.mjs or .harness/lib/** (the template owns them). A harness bug is reported to the template, not patched here.');
+    if (core.changed.length || core.missing.length) lines.push(`- WARNING: the harness core was edited in this project (${[...core.changed, ...core.missing].join(', ')}). Tell the user; re-installing from the template restores it.`);
+  }
   if (stopped.length && !open.length) lines.push(`- A previous editor run stopped and needs a human decision: ${stopped[0].id} ("${stopped[0].title}", ${stopped[0].status}). Report it to the user if they have not seen it.`);
   lines.push('- To run work with visible named agents: use /harness:run <goal>. Autonomous: /harness:auto. Team: /harness:team. Status: /harness:status. Health check: /harness:doctor. Teach a rule: /harness:teach <rule>.');
   console.log(lines.join('\n'));

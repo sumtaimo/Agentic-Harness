@@ -17,7 +17,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -31,7 +31,9 @@ if (!RESET && path.resolve(target) === path.resolve(SRC)) { console.error('Targe
 
 const report = [];
 // Runtime + personal history never travels to another project.
-const RUNTIME = new Set(['state.json', 'telemetry.log', 'daemon.pid', 'engine-probe.json', 'auto-lessons.md', 'live.log', 'auto-state.json']);
+// approvals.json is per person (which AI tools THEY allowed): copying it would silently allow the template owner's tools.
+// MANIFEST.json is written fresh for each install below.
+const RUNTIME = new Set(['state.json', 'telemetry.log', 'daemon.pid', 'engine-probe.json', 'auto-lessons.md', 'live.log', 'auto-state.json', 'approvals.json', 'MANIFEST.json']);
 // The target project's own data wins: memory, config, charter, backlog, roles, skills, team.
 // A new project gets a blank profile, never the profile of whoever owns this template copy.
 const PROFILE_TEMPLATE = `# User profile
@@ -149,8 +151,17 @@ if (RESET) {
 
 copyDir(path.join(SRC, '.harness'), path.join(target, '.harness'));
 
+// Fingerprint of the harness core code, so doctor can tell when a project (or an AI in it) edited the template's files.
+{
+  const { hashCore } = await import(pathToFileURL(path.join(target, '.harness', 'lib', 'common.mjs')).href);
+  const version = (() => { try { return JSON.parse(fs.readFileSync(path.join(SRC, 'package.json'), 'utf8')).version; } catch { return null; } })();
+  fs.writeFileSync(path.join(target, '.harness', 'MANIFEST.json'), `${JSON.stringify({ template: 'agentic-harness', version, installedAt: new Date().toISOString(), note: 'Fingerprints of the harness core code from the template. Do not edit: doctor compares them; re-install to update.', files: hashCore(target) }, null, 2)}
+`);
+  report.push('wrote  .harness/MANIFEST.json (fingerprints of the harness core)');
+}
+
 const MARK = '<!-- agentic-harness -->';
-const POINTER = `${MARK}\n## Agentic harness\n\nThis project has an agentic harness in \`.harness/\`. Read and follow \`AGENTS.md\` (section "Agentic harness" or the whole file) and the user's memory in \`.harness/memory/profile.md\` and \`.harness/memory/lessons.md\` before working. Save user corrections/preferences with \`node .harness/memory.mjs remember "<rule>"\`.\n`;
+const POINTER = `${MARK}\n## Agentic harness\n\nThis project has an agentic harness in \`.harness/\`. Read and follow \`AGENTS.md\` (section "Agentic harness" or the whole file) and the user's memory in \`.harness/memory/profile.md\` and \`.harness/memory/lessons.md\` before working. Save user corrections/preferences with \`node .harness/memory.mjs remember "<rule>"\`. Never edit the harness core (\`.harness/*.mjs\`, \`.harness/lib/**\`): it comes from the template; report harness bugs instead of patching them here.\n`;
 
 for (const rel of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.github/copilot-instructions.md', '.cursor/rules/harness.mdc', '.windsurfrules']) {
   const d = path.join(target, rel); const s = path.join(SRC, rel);
@@ -222,6 +233,20 @@ else {
       }
     }
   }
+}
+
+// In a PROJECT the harness core is read-only for Claude Code (people and agents use the harness, they do not edit it;
+// a fix belongs in the template). The template repository itself has no such rule, so maintainers can work on it.
+{
+  const setPath = path.join(target, '.claude', 'settings.json');
+  const CORE_DENY = ['Edit(.harness/*.mjs)', 'Write(.harness/*.mjs)', 'Edit(.harness/lib/**)', 'Write(.harness/lib/**)', 'Edit(.harness/MANIFEST.json)', 'Write(.harness/MANIFEST.json)'];
+  try {
+    const s = JSON.parse(fs.readFileSync(setPath, 'utf8'));
+    s.permissions = s.permissions || {};
+    const deny = new Set(s.permissions.deny || []);
+    const before = deny.size; CORE_DENY.forEach((r) => deny.add(r));
+    if (deny.size !== before) { s.permissions.deny = [...deny]; fs.writeFileSync(setPath, JSON.stringify(s, null, 2) + '\n'); report.push('added  .claude/settings.json deny rules: the harness core is read-only in this project'); }
+  } catch { /* no or invalid settings.json: reported above */ }
 }
 
 const gi = path.join(target, '.gitignore');

@@ -13,7 +13,7 @@
         "lead-qa"
       ],
       "budget": {
-        "maxCostUsd": 2.0,
+        "maxCostUsd": 2,
         "maxMinutes": 30
       }
     },
@@ -55,7 +55,9 @@
       "reports_to": "orchestrator",
       "scope": [
         "tests/**",
-        "test/**"
+        "test/**",
+        "src/**/*.test.*",
+        "src/**/*.spec.*"
       ],
       "maxWorkers": 2,
       "budget": {

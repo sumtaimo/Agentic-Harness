@@ -1508,7 +1508,7 @@ await test('documentation matches reality: every script, sub-command and slash c
     for (const m of t.matchAll(/visible\.mjs (brief|assign|verify|rollback|propose|status|report|[a-z]+)\b/g)) if (!new RegExp(`case '${m[1]}'`).test(sources.visible)) problems.push(`${f}: visible.mjs has no sub-command "${m[1]}"`);
     for (const m of t.matchAll(/team\.mjs (show|validate|sync-agents|[a-z-]+)\b/g)) if (!sources.team.includes(`'${m[1]}'`)) problems.push(`${f}: team.mjs has no "${m[1]}"`);
     for (const m of t.matchAll(/\/harness:([a-z]+)/g)) if (!cmdFiles.has(m[1])) problems.push(`${f}: slash command /harness:${m[1]} does not exist`);
-    for (const m of t.matchAll(/`(\.harness\/(?:[a-z-]+\/)*[A-Za-z0-9_.-]+\.(?:mjs|json|md))`/g)) if (!/<|\*/.test(m[1]) && !fs.existsSync(path.join(REPO, m[1])) && !/live\.log|state\.json|telemetry|daemon\.pid|auto-state|engine-probe|auto-lessons|report\.md|run\.json|failed\/|completed\/|visible\/|releases\/|sessions\/|inbox\//.test(m[1])) problems.push(`${f}: mentions ${m[1]}, which does not exist`);
+    for (const m of t.matchAll(/`(\.harness\/(?:[a-z-]+\/)*[A-Za-z0-9_.-]+\.(?:mjs|json|md))`/g)) if (!/<|\*/.test(m[1]) && !fs.existsSync(path.join(REPO, m[1])) && !/live\.log|state\.json|telemetry|daemon\.pid|auto-state|engine-probe|auto-lessons|approvals.json|MANIFEST.json|report\.md|run\.json|failed\/|completed\/|visible\/|releases\/|sessions\/|inbox\//.test(m[1])) problems.push(`${f}: mentions ${m[1]}, which does not exist`);
   }
   assert(problems.length === 0, problems.slice(0, 12).join('\n      '));
   assert(fs.existsSync(path.join(REPO, 'docs', 'WORKFLOW.md')) && /docs\/WORKFLOW\.md/.test(fs.readFileSync(path.join(REPO, 'README.md'), 'utf8')), 'README must link to docs/WORKFLOW.md');
@@ -2043,6 +2043,41 @@ await test('quota fallback chain: A → B when A is out; if B is out too it stop
   assert(/usage limit/.test(stateOf(d).lastGateStatus), stateOf(d).lastGateStatus);
   const shipped = json(path.join(REPO, '.harness', 'config.json')).quotaFallback;
   assert(shipped.claude?.engine === 'antigravity' && shipped.codex?.engine === 'antigravity' && shipped.antigravity?.engine === 'claude', JSON.stringify(shipped));
+});
+
+await test('one owner per file: a file-type scope (src/**/*.test.*) wins over a folder scope (src/**); the shipped team gives colocated tests to QA', () => {
+  const leads = [{ id: 'dev', scope: ['src/**'] }, { id: 'qa', scope: ['tests/**', 'src/**/*.test.*'] }];
+  const owners = (f) => leads.filter((l) => gov.leadOwns(l, f, leads)).map((l) => l.id).join();
+  assert(owners('src/a.ts') === 'dev' && owners('src/ui/a.test.tsx') === 'qa' && owners('tests/x.js') === 'qa' && owners('docs/x.md') === '', 'precedence');
+  assert(gov.isFileTypeGlob('src/**/*.test.*') && !gov.isFileTypeGlob('src/**') && !gov.isFileTypeGlob('docs/*'), 'file-type vs folder');
+  let err = '';
+  try { gov.validateDelegation({ assignments: [{ lead: 'dev', goal: 'g', files: ['src/a.test.ts'] }] }, { leads, delegable: new Set(['dev', 'qa']) }); } catch (e) { err = e.message; }
+  assert(/another lead owns it/.test(err), `a dev assignment of a test file must be refused: ${err}`);
+  const team = json(path.join(REPO, '.harness', 'team.json')); const L = team.members.filter((m) => m.level === 'lead');
+  assert(L.filter((l) => gov.leadOwns(l, 'src/button.test.tsx', L)).map((l) => l.id).join() === 'lead-qa', 'shipped team: colocated tests belong to lead-qa');
+  assert(L.filter((l) => gov.leadOwns(l, 'src/button.tsx', L)).map((l) => l.id).join() === 'lead-dev', 'shipped team: code belongs to lead-dev');
+});
+
+await test('harness core protection: install fingerprints the core, never copies approvals.json, blocks core edits for Claude Code; doctor flags a local edit', () => {
+  const src = sandbox(); fs.writeFileSync(path.join(src, '.harness', 'approvals.json'), JSON.stringify({ engines: { mock: true } })); // a maintainer's own answers
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-core-'));
+  const r = node(REPO, ['install.mjs', proj]);
+  assert(r.status === 0 && /MANIFEST\.json/.test(r.stdout) && /core is read-only/.test(r.stdout), r.stdout + r.stderr);
+  assert(!fs.existsSync(path.join(proj, '.harness', 'approvals.json')), 'approvals.json is personal and must never be installed');
+  const m = json(path.join(proj, '.harness', 'MANIFEST.json'));
+  assert(m.version && m.files['.harness/dispatch.mjs'] && m.files['.harness/lib/common.mjs'], JSON.stringify(Object.keys(m.files)));
+  const deny = json(path.join(proj, '.claude', 'settings.json')).permissions.deny;
+  assert(deny.includes('Edit(.harness/*.mjs)') && deny.includes('Write(.harness/lib/**)'), deny.join());
+  assert(!json(path.join(REPO, '.claude', 'settings.json')).permissions.deny.includes('Edit(.harness/*.mjs)'), 'the template itself stays editable');
+  let doc = node(proj, ['.harness/doctor.mjs'], { HOME: proj, USERPROFILE: proj });
+  assert(/unchanged since install/.test(doc.stdout), doc.stdout);
+  fs.appendFileSync(path.join(proj, '.harness', 'dispatch.mjs'), '\n// local patch\n');
+  doc = node(proj, ['.harness/doctor.mjs'], { HOME: proj, USERPROFILE: proj });
+  assert(/harness core differs from the template: \.harness\/dispatch\.mjs \(edited\)/.test(doc.stdout), doc.stdout);
+  const hook = node(proj, ['.harness/hook-session.mjs']);
+  assert(/never edit \.harness\/\*\.mjs/.test(hook.stdout) && /WARNING: the harness core was edited/.test(hook.stdout), hook.stdout);
+  const tpl = node(REPO, ['.harness/doctor.mjs'], { HOME: proj, USERPROFILE: proj });
+  assert(/this is the template repository itself/.test(tpl.stdout), 'the template is where the core is maintained');
 });
 
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {

@@ -32,7 +32,7 @@ const COMMANDS: Command[] = [
   { cmd: 'node .harness/doctor.mjs', where: 'terminal', key: 'doctorCli' },
   { cmd: 'node .harness/status.mjs --log 15', where: 'terminal', key: 'statusCli' },
   { cmd: 'node .harness/memory.mjs remember "<rule>"', where: 'terminal', key: 'remember' },
-  { cmd: 'npx github:sumtaimo/Agentic-Harness --reset', where: 'terminal', key: 'reset' },
+  { cmd: 'npx github:sumtaimo/Agentic-Harness#release --reset', where: 'terminal', key: 'reset' },
 ];
 
 export function CommandReference({ n }: { n: number }) {

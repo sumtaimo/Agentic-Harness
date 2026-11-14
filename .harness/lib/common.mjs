@@ -7,6 +7,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -82,6 +83,40 @@ export function which(binary) {
 export function winQuote(a) {
   const s = String(a);
   return s === '' || /[\s"&|<>^()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+// ───────────────────────────── harness core integrity ─────────────────────────────
+// The harness CODE (.harness/*.mjs, .harness/lib/*.mjs) belongs to the template. A project uses it but never edits it:
+// the installer records a fingerprint of each core file in .harness/MANIFEST.json, and doctor warns when one changed.
+// Your own settings (config.json, charter.md, team.json, roles/, skills/, backlog, memory) are yours to edit.
+
+/** Relative paths ("/"-separated) of the harness core code files under a project root. */
+export function coreFiles(root = ROOT) {
+  const out = [];
+  for (const dir of ['.harness', '.harness/lib']) {
+    try { for (const f of fs.readdirSync(path.join(root, dir))) if (f.endsWith('.mjs')) out.push(`${dir}/${f}`); } catch { /* missing dir */ }
+  }
+  return out.sort();
+}
+
+/** { "<rel path>": sha256 } of the core files, line endings normalized (a CRLF checkout is not a change). */
+export function hashCore(root = ROOT) {
+  const out = {};
+  for (const rel of coreFiles(root)) out[rel] = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, rel), 'utf8').replace(/\r\n/g, '\n')).digest('hex');
+  return out;
+}
+
+/** Compare the core files with .harness/MANIFEST.json → { manifest: object|null, changed: [], missing: [], added: [] }. */
+export function checkCore(root = ROOT) {
+  const manifest = readJsonSafe(path.join(root, '.harness', 'MANIFEST.json'), null);
+  if (!manifest || typeof manifest.files !== 'object') return { manifest: null, changed: [], missing: [], added: [] };
+  const now = hashCore(root);
+  return {
+    manifest,
+    changed: Object.keys(manifest.files).filter((f) => now[f] && now[f] !== manifest.files[f]),
+    missing: Object.keys(manifest.files).filter((f) => !now[f]),
+    added: Object.keys(now).filter((f) => !(f in manifest.files)),
+  };
 }
 
 /** `--help` / `-h` on any harness command: print the usage comment at the top of that file and exit 0. */

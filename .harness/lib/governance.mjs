@@ -40,6 +40,23 @@ export function matchesAny(p, globs = []) {
   return globs.some((g) => probes.some((x) => globToRegex(g).test(x)));
 }
 
+/**
+ * A FILE-TYPE scope ends in a file-name pattern (e.g. "src/**\/*.test.*"); a FOLDER scope ends in "**" or "*" (e.g. "src/**").
+ * When a file matches a folder scope of one lead and a file-type scope of another, the file-type scope wins: so
+ * src/button.test.tsx belongs to the QA lead, src/button.tsx to the dev lead, and every file still has ONE owner.
+ */
+export function isFileTypeGlob(g) {
+  const last = String(g).replace(/\\/g, '/').split('/').pop();
+  return last !== '**' && last !== '*' && last.includes('*');
+}
+
+/** Does this lead own file f, given all leads (file-type scopes of other leads take precedence over folder scopes)? */
+export function leadOwns(lead, f, leads = [lead]) {
+  if (!withinAll(f, lead.scope || [])) return false;
+  if ((lead.scope || []).filter(isFileTypeGlob).some((g) => matchesAny(f, [g]))) return true;
+  return !leads.some((o) => o.id !== lead.id && (o.scope || []).filter(isFileTypeGlob).some((g) => matchesAny(f, [g])));
+}
+
 /** For a folder target: is EVERYTHING inside it allowed? (needs a glob that covers dir/**) */
 export function withinAll(p, globs = []) {
   const n = String(p).replace(/\\/g, '/').replace(/^\.\//, '');
@@ -310,6 +327,7 @@ export function validateTeam(team, { roles = {}, charter = null, plannerMaxWorke
   }
   for (let i = 0; i < leads.length; i++) for (let j = i + 1; j < leads.length; j++) {
     for (const a of leads[i].scope || []) for (const b of leads[j].scope || []) {
+      if (isFileTypeGlob(a) !== isFileTypeGlob(b)) continue; // a file-type scope takes its files out of a folder scope: one owner
       if (globsOverlap(a, b)) errors.push(`leads "${leads[i].id}" and "${leads[j].id}" have overlapping scopes ("${a}" / "${b}"); two teams could collide on a file`);
     }
   }
@@ -389,7 +407,7 @@ export function validateDelegation(plan, { leads, delegable, userAllowed = [] })
     if (!Array.isArray(a.files) || !a.files.length) throw new Error(`assignment to "${lead.id}" has no files.`);
     a.files = a.files.map((f) => { const s = safeTarget(f); if (!s) throw new Error(`assignment to "${lead.id}" has an unsafe path "${f}".`); const base = s.replace(/\/+$/, ''); return String(f).endsWith('/') ? `${base}/` : base; });
     for (const f of a.files) {
-      if (!withinAll(f, lead.scope)) throw new Error(`file "${f}" is outside lead "${lead.id}"'s scope (${lead.scope.join(', ')}).`);
+      if (!leadOwns(lead, f, leads)) throw new Error(`file "${f}" is outside lead "${lead.id}"'s scope (${lead.scope.join(', ')})${withinAll(f, lead.scope) ? '; a more specific scope of another lead owns it (e.g. test files belong to the QA lead)' : ''}.`);
       if (userAllowed.length && !inside(strip(f), userAllowed)) throw new Error(`file "${f}" is outside the files the user allowed (${userAllowed.join(', ')}).`);
       for (const [other, by] of claimed) {
         if (by !== lead.id && (strip(f) === strip(other) || strip(f).startsWith(`${strip(other)}/`) || strip(other).startsWith(`${strip(f)}/`))) throw new Error(`Swarm Lock Collision: "${f}" (${lead.id}) overlaps "${other}" (${by}).`);

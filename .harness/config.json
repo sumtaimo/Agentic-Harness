@@ -53,7 +53,7 @@
   "profiles": {
     "claude": {
       "verified": true,
-      "note": "Claude Code headless mode. Prompt goes on stdin. {output} = json (quiet) or stream-json (live agent activity in the terminal). Role tools -> --allowedTools; charter forbiddenPaths/forbiddenTools -> --disallowedTools. CLAUDE.md @imports profile.md + lessons.md, so the harness does not inject those twice (except in worktrees).",
+      "note": "VERIFIED end to end with the opt-in real-agent test (npm run test:live): a single worker, the AI planner and two parallel workers. Claude Code headless mode. Prompt goes on stdin. {output} = json (quiet) or stream-json (live agent activity in the terminal). Role tools -> --allowedTools; charter forbiddenPaths/forbiddenTools -> --disallowedTools. CLAUDE.md @imports profile.md + lessons.md, so the harness does not inject those twice (except in worktrees).",
       "binary": "claude",
       "args": [
         "-p",
