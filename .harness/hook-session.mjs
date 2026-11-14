@@ -47,6 +47,11 @@ try {
   } else if (charter.autonomous && /\(describe your product goals here/.test(charter.text)) {
     lines.push('- Auto mode is ON but there is nothing READY and the charter objectives are not filled in, so the harness will not plan anything by itself. Add a task (node .harness/backlog.mjs add "<title>" --status READY) or fill in the objectives in .harness/charter.md.');
   }
+  // Waiting for the human: big runs held by autopilot, and AI tools nobody allowed yet (headless runs need one).
+  const held = readBacklog().tasks.filter((t) => t.status === 'BLOCKED' && t.needsApproval);
+  if (held.length) lines.push(`- ${held.length} task(s) wait for the user's OK because they may use a lot of quota: ${held.slice(0, 3).map((t) => `${t.id} ("${t.title || t.goal}")`).join(', ')}. Tell the user; run  node .harness/backlog.mjs approve <id>  only after a clear yes for that task.`);
+  const { loadApprovals } = await import('./lib/common.mjs');
+  if (!Object.values(loadApprovals().engines || {}).some((v) => v === true)) lines.push('- No AI tool is allowed yet for headless runs (dispatch / daemon). The user allows each one once in a terminal: node .harness/engines.mjs. Never run "engines.mjs allow" for them.');
   if (stopped.length && !open.length) lines.push(`- A previous editor run stopped and needs a human decision: ${stopped[0].id} ("${stopped[0].title}", ${stopped[0].status}). Report it to the user if they have not seen it.`);
   lines.push('- To run work with visible named agents: use /harness:run <goal>. Autonomous: /harness:auto. Team: /harness:team. Status: /harness:status. Health check: /harness:doctor. Teach a rule: /harness:teach <rule>.');
   console.log(lines.join('\n'));

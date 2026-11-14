@@ -55,6 +55,11 @@ A tiny project to try the agentic harness. There is no code yet: the agents will
    \`/harness:run Add a word counter: wordCount(text) returns the number of words, 0 for an empty string, TypeError if text is not a string\`
 6. Read the report. Nothing is committed for you. Look at what changed with \`git status\` and \`git diff\`, commit if you like.
 
+## Running it from a terminal instead (headless)
+
+The controller only uses an AI tool you allowed once on this machine: run \`node .harness/engines.mjs\` first.
+Big runs (team or parallel mode) ask before they start.
+
 ## What to look for
 - The agent names (\`lead-ba\`, \`lead-dev\`, \`lead-qa\`) working at the same time.
 - The report: which agent did what, and **PASSED** only if the real check (\`npm test\`) passed.

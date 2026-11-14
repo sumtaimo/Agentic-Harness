@@ -8,6 +8,7 @@ Run the harness in **autonomous mode**, as the orchestrator, strictly inside `.h
 2. Pick a session id like `A-<yyyymmddhhmm>`. Run `node .harness/visible.mjs brief --next --auto-session <sid>` (add `--check "<cmd>"` only if I gave one). Read the exit result:
    - **exit 0:** you have a brief for the highest-priority READY task. Do steps 2–5 of `/harness:run` for it (delegate with `assign`, start all assigned agents in one message, `verify`).
    - **exit 6 (nothing READY):** if the charter objectives are filled in, act as the product owner: propose at most the remaining budget of small, independently verifiable tasks as JSON and run `node .harness/visible.mjs propose <sid> '{"tasks":[{"title","goal","priority","files":["src/x.js"],"acceptanceCriteria":["…"],"interfaceContract":"…"}]}'`, then `brief --next --auto-session <sid>` again. If the objectives are still the placeholder (exit 5) or the backlog is empty, tell me and stop. Do not invent work.
+   - If the brief prints **HELD for the human's OK**, those tasks may use a lot of quota: list them in your report. Never run `backlog.mjs approve` yourself; only after the user says yes for that task.
    - **exit 3 (budget used):** stop and report.
    - **exit 4 (paused) or 2 (escalated):** stop and report exactly why; a human must decide.
 3. After each task passes (the controller said PASSED), go back to step 2 for the next READY task, until the budget (`maxAutoTasksPerRun`, or the number I gave) is used, nothing is READY, or anything fails. **Any failure stops autonomy**: do not start the next task.

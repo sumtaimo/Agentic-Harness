@@ -49,6 +49,8 @@ function project(name) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), `harness-live-${name}-`));
   const r = sh(process.execPath, [path.join(REPO, 'install.mjs'), d]);
   if (r.status !== 0) throw new Error(`install failed: ${r.stderr}`);
+  // Running test:live is the person's consent to use their Claude Code, in these throwaway projects only.
+  fs.writeFileSync(path.join(d, '.harness', 'approvals.json'), JSON.stringify({ engines: { claude: true } }));
   fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name: `live-${name}`, private: true, scripts: { test: 'node --test' } }));
   git(d, 'init', '-q', '-b', 'main'); git(d, 'config', 'user.email', 'live@test'); git(d, 'config', 'user.name', 'live'); git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'initial');
   return d;

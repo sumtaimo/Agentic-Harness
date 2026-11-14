@@ -6,8 +6,23 @@
       "detail": "Single direct worker, no planner: fastest and cheapest. Files are restored if the check fails.",
       "type": "process",
       "command": "node",
-      "args": [".harness/dispatch.mjs", "--mode", "normal", "--goal", "${input:goal}", "--files", "${input:files}", "--check", "${input:check}", "--wait"],
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "args": [
+        ".harness/dispatch.mjs",
+        "--mode",
+        "normal",
+        "--goal",
+        "${input:goal}",
+        "--files",
+        "${input:files}",
+        "--check",
+        "${input:check}",
+        "--wait"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
       "problemMatcher": []
     },
     {
@@ -15,10 +30,20 @@
       "detail": "Same as task 6: runs READY backlog tasks by itself inside charter.md; results land on the 'uat' branch.",
       "type": "process",
       "command": "node",
-      "args": [".harness/daemon.mjs", "--autonomous"],
+      "args": [
+        ".harness/daemon.mjs",
+        "--autonomous"
+      ],
       "isBackground": true,
-      "runOptions": { "instanceLimit": 1 },
-      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true, "group": "harness" },
+      "runOptions": {
+        "instanceLimit": 1
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "group": "harness"
+      },
       "problemMatcher": []
     },
     {
@@ -234,6 +259,27 @@
         "panel": "shared"
       },
       "problemMatcher": []
+    },
+    {
+      "label": "Harness: AI tools (allow once)",
+      "type": "shell",
+      "command": "node .harness/engines.mjs",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true
+      }
+    },
+    {
+      "label": "Harness: Usage (calls, tokens, cost)",
+      "type": "shell",
+      "command": "node .harness/usage.mjs",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
     }
   ],
   "inputs": [
@@ -245,7 +291,7 @@
     {
       "id": "files",
       "type": "promptString",
-      "description": "Which files/folders may it change? (comma separated, e.g. src/ \u2014 leave empty to let it decide; needed for automatic undo)",
+      "description": "Which files/folders may it change? (comma separated, e.g. src/ — leave empty to let it decide; needed for automatic undo)",
       "default": ""
     },
     {
