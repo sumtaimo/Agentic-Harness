@@ -48,6 +48,9 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 - **Memory** (`.harness/memory/`)៖ `profile.md` និង `lessons.md` ត្រូវបានអានដោយ AI គ្រប់ៗ។ ឧទាហរណ៍ ច្បាប់ L1 តម្រូវឱ្យសួរម្ចាស់ project មុនរាល់ពេល push។
 - **Rollback៖** បើការងារបរាជ័យ ឯកសារទាំងអស់ត្រូវបានស្តារមកដូចដើមវិញដោយស្វ័យប្រវត្តិ។
 - AI មិនដែល push ឬ merge ទៅ `main` ដោយគ្មានការអនុញ្ញាតពីម្ចាស់ project ទេ។
+- **ឧបករណ៍ AI នីមួយៗត្រូវអនុញ្ញាតម្តង** (`node .harness/engines.mjs`)៖ harness មិនប្រើឧបករណ៍ដែលបាន login ដោយស្ងាត់ៗទេ។
+- **ការងារធំសួរមុន** (របៀប team ឬ parallel, workers ៣+, model កម្រិតខ្ពស់)។ ក្នុង autopilot វាត្រូវផ្អាកជា «ត្រូវការការយល់ព្រមពីអ្នក» ហើយការងារផ្សេងបន្ត។ យល់ព្រមដោយ `node .harness/backlog.mjs approve <id>`។
+- **កំណត់ប្រចាំថ្ងៃ និងរបាយការណ៍ប្រើប្រាស់**៖ `config.json` → `dailyLimits` និង `node .harness/usage.mjs`។
 
 ## ៧. ឧទាហរណ៍ពិត
 

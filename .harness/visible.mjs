@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { ROOT, HARNESS_DIR, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, memoryContext, recordSession, remember, safeTarget, helpIfAsked } from './lib/common.mjs';
+import { ROOT, HARNESS_DIR, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, memoryContext, recordSession, remember, safeTarget, helpIfAsked, pendingCostReasons, loadApprovals } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady } from './lib/governance.mjs';
 
@@ -201,7 +201,18 @@ function brief() {
       if (last && last.status !== 'PASSED') die(`Autonomy is paused: the previous run ${last.id} ended ${last.status}. A human must decide before the next task.`, 4);
     }
   }
-  if (wantNext) { item = nextReady(); if (!item) die('Nothing is READY in the backlog.', 6); }
+  if (wantNext) {
+    // Same rule as the headless autopilot: a READY item that may use a lot of quota is held ("Needs your OK"), not started.
+    const held = [];
+    for (item = nextReady(); item; item = nextReady()) {
+      const pending = pendingCostReasons(config, item);
+      if (!pending.length) break;
+      updateBacklogItem(item.id, { status: 'BLOCKED', needsApproval: true, blockedReason: `Needs your OK (may use a lot of quota): ${pending.map((p) => p.text).join('; ')}. Approve: node .harness/backlog.mjs approve ${item.id}` });
+      held.push(`${item.id} ("${item.title || item.goal}")`);
+    }
+    if (held.length) console.log(`HELD for the human's OK (big runs; tell the user, approve only after a clear yes): ${held.join(', ')}. Approve one with: node .harness/backlog.mjs approve <id>`);
+    if (!item) die('Nothing is READY in the backlog.', 6);
+  }
   if (flag('--item')) { item = readBacklog().tasks.find((t) => t.id === flag('--item')); if (!item) die(`No backlog item ${flag('--item')}.`); if (item.status !== 'READY') die(`Backlog item ${item.id} is ${item.status}, not READY.`); }
 
   const goal = item ? (item.goal || item.title) : goalArg;

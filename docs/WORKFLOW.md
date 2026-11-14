@@ -59,6 +59,15 @@ The agents are *named* on purpose: in Claude Code you see **`lead-dev`**, **`lea
 | Autonomous work lands | in your working folder (you review it) | on the `uat` branch, never `main` |
 | Best for | working with the agents in front of you | unattended runs, CI, terminals |
 
+## Quota and consent (both modes)
+
+- **Each AI tool is allowed once per person** (`node .harness/engines.mjs`); headless runs never use a tool you did not allow.
+- **Big runs ask first** (team or parallel mode, 3+ workers, the high model). In autopilot, headless or in Claude Code,
+  they are held as "Needs your OK" and the rest goes on; approve one with `node .harness/backlog.mjs approve <id>`.
+- **Daily caps and a usage report** for headless runs: `config.json` → `dailyLimits`, `node .harness/usage.mjs`.
+  Editor-mode agents run in your Claude Code session, so they count against that session, not these caps.
+- Details: [`ENGINES.md`](ENGINES.md).
+
 ## 4. What is NOT guaranteed (read this before trusting it with a real project)
 
 - **Editor mode catches violations after the fact.** Claude Code cannot restrict a sub-agent to specific files, so an agent *can* write outside its files; the controller then reverts it and fails the run. It cannot undo anything done **outside the project folder**, or in a git-ignored place other than `.env*`.

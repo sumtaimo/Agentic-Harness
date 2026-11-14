@@ -2015,9 +2015,21 @@ await test('quota fallback: an engine that hits its usage limit hands the same a
   assert(common.winCommandLine('C:\\Program Files\\x\\agy.exe', ['-p', '', 'a b']) === '"C:\\Program Files\\x\\agy.exe" -p "" "a b"', 'paths with spaces are quoted');
 });
 
+await test('autopilot in Claude Code (brief --next) holds a big task like the headless one, and takes the next normal task', () => {
+  const d = sandbox(); setCharter(d, {});
+  setBacklog(d, [
+    { id: 'BIG', title: 'team job', priority: 1, status: 'READY', hierarchy: true, goal: 'everything', verifyCmd: PASS },
+    { id: 'OK', title: 'small job', priority: 2, status: 'READY', goal: 'one file', verifyCmd: PASS }]);
+  const r = vis(d, 'brief', '--next', '--auto-session', 'H1');
+  assert(r.status === 0 && /HELD for the human's OK/.test(r.stdout) && /BIG/.test(r.stdout) && /Task: small job/.test(r.stdout), r.stdout + r.stderr);
+  assert(byId(d, 'BIG').status === 'BLOCKED' && byId(d, 'BIG').needsApproval === true, JSON.stringify(byId(d, 'BIG')));
+  const hook = node(d, ['.harness/hook-session.mjs']);
+  assert(/wait for the user's OK/.test(hook.stdout) && /BIG/.test(hook.stdout), `the session hook must tell the AI about held tasks:\n${hook.stdout}`);
+});
+
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
   const d = sandbox();
-  for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch']) {
+  for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch']) { // daemon --help once started the controller
     const r = node(d, [`.harness/${c}.mjs`, '--help']);
     assert(r.status === 0 && new RegExp(`${c}\\.mjs`).test(r.stdout), `${c} --help: exit ${r.status}\n${r.stdout.slice(0, 200)}${r.stderr.slice(0, 200)}`);
   }

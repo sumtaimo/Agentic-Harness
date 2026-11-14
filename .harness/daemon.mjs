@@ -32,8 +32,9 @@ import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd,
   listProjectFiles, safeTarget,
-  winQuote, winCommandLine, chooseModelTier, resolveModel, pendingCostReasons, loadApprovals, engineUsable,
+  winQuote, winCommandLine, chooseModelTier, resolveModel, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked,
 } from './lib/common.mjs';
+helpIfAsked(import.meta.url); // "--help" prints the usage; it must never start the controller
 
 // Autonomous work never moves up to the high (most expensive) tier without the person's OK:
 // set while an autonomous task or the PO_ARCHITECT runs, unless that task was approved or "high-model" is always allowed.
