@@ -52,7 +52,8 @@ The controller never leaves the model to chance. Per agent it picks a tier from 
   high = `claude-opus-5-5-high`. Only if you allowed antigravity. The live feed shows `⇄ claude usage limit → continuing
   on antigravity`; the log has `QUOTA_FALLBACK`. Set in `config.json` → `quotaFallback`; delete that block to turn it off.
 - **Daily caps.** `config.json` → `dailyLimits`, per engine: `calls`, `tokens` (engines that report them, e.g. Claude)
-  and `usd`, for example `"antigravity": { "calls": 80 }`. When a cap is reached the agent is not started (`DAILY_LIMIT`);
+  and `usd`. The template ships with **antigravity: 80 calls/day** and **claude: $5 or 60 calls/day** (whichever comes
+  first); change or remove them there. When a cap is reached the agent is not started (`DAILY_LIMIT`);
   Claude work can still continue on agy. Counted by the controller from its own log, per UTC day.
 - **Where did it go?** `node .harness/usage.mjs` (or `npm run usage`) lists calls, tokens, cost and minutes per day,
   engine and model. Antigravity does not report tokens, so it is counted in calls.

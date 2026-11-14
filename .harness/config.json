@@ -164,6 +164,13 @@
     }
   },
   "dailyLimits": {
-    "note": "Optional per-engine daily caps, counted by the controller from its own log (UTC day): calls, tokens (engines that report them, e.g. claude) and usd. When a cap is reached the agent is not started; claude can then continue on agy via quotaFallback. Example: \"antigravity\": { \"calls\": 80 }, \"claude\": { \"usd\": 5 }. Only 'note' = no cap."
+    "note": "Optional per-engine daily caps, counted by the controller from its own log (UTC day): calls, tokens (engines that report them, e.g. claude) and usd. When a cap is reached the agent is not started; claude can then continue on agy via quotaFallback. Example: \"antigravity\": { \"calls\": 80 }, \"claude\": { \"usd\": 5 }. Remove an engine here for no cap.",
+    "antigravity": {
+      "calls": 80
+    },
+    "claude": {
+      "usd": 5,
+      "calls": 60
+    }
   }
 }
