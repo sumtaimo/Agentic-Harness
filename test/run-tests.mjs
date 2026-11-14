@@ -1037,7 +1037,8 @@ await test('doctor: a valid setup reports 0 failures and 0 warnings; profile pla
   fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: PASS } }));
   g('add', '-A'); g('commit', '-q', '-m', 'package.json');
   fs.cpSync(path.join(REPO, '.claude'), path.join(d, '.claude'), { recursive: true }); // an installed project has the editor agents
-  const out = node(d, ['.harness/doctor.mjs'], { HOME: d, USERPROFILE: d }).stdout; // an empty home: no agy hidden in ~/.gemini/bin on this machine
+  const dr = node(d, ['.harness/doctor.mjs']); const out = `${dr.stdout}
+[exit ${dr.status}] ${dr.stderr || ''}`; // HARNESS_ENGINES='' (suite env): no engine and no ~/.gemini/bin hint from this machine
   assert(/Failures: 0 · Warnings: 0 · Notes: \d+/.test(out), // notes vary: an AI tool installed on this machine but not allowed in the sandbox is a note
      out.split('\n').filter((l) => /^  [!✖ℹ]|Failures/.test(l)).join('\n'));
   assert(/ℹ memory\/profile\.md/.test(out) && /ℹ The background controller is not running/.test(out), 'the two notes are missing');
@@ -2069,14 +2070,14 @@ await test('harness core protection: install fingerprints the core, never copies
   const deny = json(path.join(proj, '.claude', 'settings.json')).permissions.deny;
   assert(deny.includes('Edit(.harness/*.mjs)') && deny.includes('Write(.harness/lib/**)'), deny.join());
   assert(!json(path.join(REPO, '.claude', 'settings.json')).permissions.deny.includes('Edit(.harness/*.mjs)'), 'the template itself stays editable');
-  let doc = node(proj, ['.harness/doctor.mjs'], { HOME: proj, USERPROFILE: proj });
+  let doc = node(proj, ['.harness/doctor.mjs']);
   assert(/unchanged since install/.test(doc.stdout), doc.stdout);
   fs.appendFileSync(path.join(proj, '.harness', 'dispatch.mjs'), '\n// local patch\n');
-  doc = node(proj, ['.harness/doctor.mjs'], { HOME: proj, USERPROFILE: proj });
+  doc = node(proj, ['.harness/doctor.mjs']);
   assert(/harness core differs from the template: \.harness\/dispatch\.mjs \(edited\)/.test(doc.stdout), doc.stdout);
   const hook = node(proj, ['.harness/hook-session.mjs']);
   assert(/never edit \.harness\/\*\.mjs/.test(hook.stdout) && /WARNING: the harness core was edited/.test(hook.stdout), hook.stdout);
-  const tpl = node(REPO, ['.harness/doctor.mjs'], { HOME: proj, USERPROFILE: proj });
+  const tpl = node(REPO, ['.harness/doctor.mjs']);
   assert(/this is the template repository itself/.test(tpl.stdout), 'the template is where the core is maintained');
 });
 

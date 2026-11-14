@@ -42,7 +42,7 @@ for (const [name, p] of Object.entries(config.profiles)) {
   const preferred = name === config.activeProfile || (config.activeProfile === 'auto' && (config.autoOrder || [])[0] === name);
   if (!probe.installed) {
     // agy is often installed but not on PATH (the Antigravity app puts it in ~/.gemini/bin): say exactly how to fix it.
-    const hidden = name === 'antigravity' && ['agy.exe', 'agy'].map((b) => path.join(os.homedir(), '.gemini', 'bin', b)).find((f) => fs.existsSync(f));
+    const hidden = name === 'antigravity' && process.env.HARNESS_ENGINES === undefined && ['agy.exe', 'agy'].map((b) => path.join(os.homedir(), '.gemini', 'bin', b)).find((f) => fs.existsSync(f));
     const pathFix = process.platform === 'win32'
       ? `[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ";$HOME\\.gemini\\bin", 'User')   (PowerShell, then open a new terminal)`
       : `echo 'export PATH="$HOME/.gemini/bin:$PATH"' >> ~/.zshrc   (or ~/.bashrc, then open a new terminal)`;

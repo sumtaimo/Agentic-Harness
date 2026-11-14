@@ -47,7 +47,7 @@ console.log('\nEvery command answers --help (and never starts work)');
 const cmds = fs.readdirSync(path.join(proj, '.harness')).filter((f) => f.endsWith('.mjs') && !['sdk.mjs', 'hook-session.mjs'].includes(f));
 const badHelp = cmds.filter((c) => { const r = run([path.join('.harness', c), '--help'], proj); return r.status !== 0 || !r.stdout.includes(c); });
 check(`${cmds.length} commands answer --help with exit 0`, !badHelp.length, `failing: ${badHelp.join(', ')}`);
-const doc = run(['.harness/doctor.mjs'], proj, { HOME: proj, USERPROFILE: proj });
+const doc = run(['.harness/doctor.mjs'], proj, { HARNESS_ENGINES: '' });
 const fails = (doc.stdout.match(/Failures: (\d+)/) || [])[1];
 check('doctor on a fresh project: 0 failures', fails === '0' || /No AI tool is allowed yet|No AI engine/.test(doc.stdout) && !/✖(?!.*AI engine)/.test(doc.stdout.replace(/✖.*(no AI engine|No AI engine).*/g, '')), doc.stdout.split('\n').filter((l) => /✖|Failures/.test(l)).join('\n'));
 check('doctor sees an unchanged core', /unchanged since install/.test(doc.stdout), doc.stdout.split('\n').filter((l) => /core/i.test(l)).join('\n'));
