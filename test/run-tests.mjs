@@ -1040,7 +1040,8 @@ await test('doctor: a valid setup reports 0 failures and 0 warnings; profile pla
   const dr = node(d, ['.harness/doctor.mjs']); const out = `${dr.stdout}
 [exit ${dr.status}${dr.signal ? ` signal ${dr.signal}` : ''}${dr.error ? ` error ${dr.error.code}` : ''}] ${String(dr.stderr || '').slice(0, 300)}`; // HARNESS_ENGINES='' (suite env): no engine and no ~/.gemini/bin hint from this machine
   assert(/Failures: 0 · Warnings: 0 · Notes: \d+/.test(out), // notes vary: an AI tool installed on this machine but not allowed in the sandbox is a note
-     out.split('\n').filter((l) => /^  [!✖ℹ]|Failures|^\[exit/.test(l)).join('\n'));
+     // the reporter prints only the first 3 lines of a message: status and totals first, then the ✖ / ! lines, then notes
+     `${out.split('\n').filter((l) => /^\[exit|Failures/.test(l)).join(' | ')}\n${out.split('\n').filter((l) => /^  [!✖]/.test(l)).join('\n')}\n${out.split('\n').filter((l) => /^  ℹ/.test(l)).join(' ')}`);
   assert(/ℹ memory\/profile\.md/.test(out) && /ℹ The background controller is not running/.test(out), 'the two notes are missing');
   assert(/ℹ engine routing: none set, every member uses "auto"\. .*team\.mjs auto-assign/.test(out), 'the engine-routing note is missing');
   fs.writeFileSync(path.join(d, '.harness', 'config.json'), '{ broken');
