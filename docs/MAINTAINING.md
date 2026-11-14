@@ -55,7 +55,8 @@ Run these in the template repository, in order. Nothing goes to `lab` until all 
 3. A real run, only when an engine's command line or models changed, and only with the owner's OK (it spends quota):
    one tiny task in a scratch project (`npm run demo`, then the `hello.txt` task in `docs/ENGINES.md`).
 4. Bump `"version"` in `package.json` when the core changed (every install records it).
-5. Commit on `lab`, then ask the owner before pushing. A normal push only.
+5. Commit on `lab`, then ask the owner before pushing. A normal push only. Pushed from a session worktree? Also update
+   the main folder (`git pull --ff-only` there): new sessions start from it. The session hook warns when it is behind.
 6. **Release**: when the lab version has been used for real and the owner says "release", copy it to the template:
    `git push origin lab:release` (a normal push; never force). Users installing from `#release` and the landing page
    (deployed from `release`) get it from then on. Nothing reaches users before this step.

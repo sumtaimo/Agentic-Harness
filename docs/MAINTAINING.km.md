@@ -55,7 +55,8 @@ backlog និង memory របស់អ្នកត្រូវបានរក�
 3. ការរត់ពិត៖ តែពេល command line ឬ models របស់ engine ផ្លាស់ប្តូរ ហើយតែពេលម្ចាស់យល់ព្រម (វាប្រើ quota)។
    ការងារតូចមួយក្នុង project សាកល្បង (`npm run demo` រួចការងារ `hello.txt` ក្នុង `docs/ENGINES.md`)។
 4. បង្កើន `"version"` ក្នុង `package.json` ពេលកូដស្នូលផ្លាស់ប្តូរ (ការដំឡើងនីមួយៗកត់ត្រាវា)។
-5. Commit លើ `lab` រួចសួរម្ចាស់មុន push។ Push ធម្មតាប៉ុណ្ណោះ។
+5. Commit លើ `lab` រួចសួរម្ចាស់មុន push។ Push ធម្មតាប៉ុណ្ណោះ។ បើ push ពី worktree របស់ session សូមធ្វើបច្ចុប្បន្នភាព folder មេផងដែរ
+   (`git pull --ff-only` នៅទីនោះ)៖ session ថ្មីចាប់ផ្តើមពីវា។ Hook ពេលចាប់ផ្តើម session ព្រមាន បើវានៅក្រោយ។
 6. **ចេញផ្សាយ**៖ ពេលកំណែក្នុង lab ត្រូវបានប្រើពិតរួច ហើយម្ចាស់និយាយថា «release» ចម្លងវាទៅ template៖
    `git push origin lab:release` (push ធម្មតា កុំ force)។ ចាប់ពីពេលនោះ អ្នកប្រើដែលដំឡើងពី `#release` និង landing page
    (ដែល deploy ពី `release`) ទទួលបានវា។ គ្មានអ្វីទៅដល់អ្នកប្រើមុនជំហាននេះទេ។
