@@ -27,7 +27,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { ROOT, HARNESS_DIR, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, memoryContext, recordSession, remember, safeTarget, helpIfAsked, pendingCostReasons, loadApprovals } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
-import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady } from './lib/governance.mjs';
+import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns } from './lib/governance.mjs';
 
 if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must not use the editor workflow.'); process.exit(2); }
 ensureDirs();
@@ -417,7 +417,7 @@ function propose() {
       if (!Array.isArray(t.files) || !t.files.length) throw new Error('no files');
       const files = t.files.map((f) => { const s = safeTarget(f); if (!s) throw new Error(`unsafe path "${f}"`); return s; });
       for (const f of files) {
-        if (!leads.some((l) => withinAll(f, l.scope))) throw new Error(`"${f}" is not inside any lead's scope`);
+        if (!leads.some((l) => leadOwns(l, f, leads))) throw new Error(`"${f}" is not inside any lead's scope`);
         if (matchesAny(f, charter.forbiddenPaths)) throw new Error(`"${f}" is forbidden by the charter`);
         if (charter.allowedPaths.length && !withinAll(f, charter.allowedPaths)) throw new Error(`"${f}" is outside the charter's allowed paths`);
       }

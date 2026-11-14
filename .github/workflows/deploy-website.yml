@@ -4,7 +4,7 @@ name: deploy-website
 # One-time setup: repo Settings → Pages → Build and deployment → Source: "GitHub Actions".
 on:
   push:
-    branches: [main]
+    branches: [release] # the landing page shows the released template, not the lab (main)
     paths:
       - 'website/**'
       - '.github/workflows/deploy-website.yml'

@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, detectVerifyCmd, listProjectFiles, helpIfAsked } from './lib/common.mjs';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, checkCore, detectVerifyCmd, listProjectFiles, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
 
@@ -88,6 +88,23 @@ try {
       const gone = [...wanted].filter((m) => !listed.has(m));
       if (gone.length) warn(`model ID(s) no longer offered by agy: ${gone.join(', ')}. Runs on that tier would fail. Run  agy models  and update profiles.antigravity.models (and quotaFallback) in config.json.`);
       else ok(`all ${wanted.size} configured model IDs exist in agy (${[...wanted].join(', ')})`);
+    }
+  }
+}
+
+// Harness core integrity: in a project, the harness code is the template's. Editing it locally (by a person or an AI)
+// is how projects drift apart and fixes get lost; doctor says so. The template repository itself is where it IS edited.
+{
+  const isTemplate = fs.existsSync(path.join(ROOT, 'install.mjs')) && /"name":\s*"agentic-harness"/.test((() => { try { return fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'); } catch { return ''; } })());
+  console.log('\nHarness core (the template\'s code in .harness/*.mjs)');
+  if (isTemplate) note('this is the template repository itself: the core is maintained here (see docs/MAINTAINING.md)');
+  else {
+    const c = checkCore();
+    if (!c.manifest) note('no .harness/MANIFEST.json (installed before fingerprints existed). Re-install from the template to add it.');
+    else if (!c.changed.length && !c.missing.length && !c.added.length) ok(`unchanged since install (template ${c.manifest.version || '?'}, ${Object.keys(c.manifest.files).length} files)`);
+    else {
+      const list = [...c.changed.map((f) => `${f} (edited)`), ...c.missing.map((f) => `${f} (deleted)`), ...c.added.map((f) => `${f} (new)`)];
+      warn(`harness core differs from the template: ${list.join(', ')}. The core belongs to the template: do not fix the harness inside a project. Report the gap to the template (docs/MAINTAINING.md), then re-install to get the fix: npx github:sumtaimo/Agentic-Harness#release .`);
     }
   }
 }

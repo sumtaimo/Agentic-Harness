@@ -28,20 +28,20 @@ You need **Node.js 18+** and **git**. The harness has no packages to install.
    It resets only those owner files: a blank profile, no taught rules, placeholder objectives, `autonomous: on`
    (add `--autonomous off` to keep it off), no removed engine profiles (Gemini, Orca), and an empty backlog. Nothing else changes, and
    it prints the `git checkout` command to undo it (in a git repo). From any project that already has the harness, the same works
-   with `npx github:sumtaimo/Agentic-Harness --reset`.
+   with `npx github:sumtaimo/Agentic-Harness#release --reset`.
 
 **Option B: add it to an existing (or empty) repo, in one line**
 
 Run this inside your project folder:
 
 ```bash
-npx github:sumtaimo/Agentic-Harness .
+npx github:sumtaimo/Agentic-Harness#release .
 ```
 
 Autonomous mode is **on** by default (it only runs READY tasks you add). To install with it **off**:
 
 ```bash
-npx github:sumtaimo/Agentic-Harness . --autonomous off
+npx github:sumtaimo/Agentic-Harness#release . --autonomous off
 ```
 
 The installer never overwrites your files and is safe to re-run. A new project gets a blank profile, no taught
@@ -135,7 +135,7 @@ Pick one:
 ### Hand it to another team (5 minutes, nothing installed globally)
 This repo is a template any team can drop into **their own project**. Everything is plain files in the project:
 ```bash
-git clone <this repo> agentic-harness
+git clone -b release <this repo> agentic-harness   # release = the tested template; main is the lab
 node agentic-harness/install.mjs /path/to/their/project     # safe to re-run; never overwrites their files
 cd /path/to/their/project && node .harness/doctor.mjs         # checks Node, the AI engine, git, the team, the rules
 ```
@@ -694,5 +694,12 @@ Skills inject targeted rules and allowed tools only when relevant to the task's 
 The harness connects to any CLI-driven AI engine (Claude, Codex, Antigravity, local Ollama models) without vendor lock-in. Optional MCP server presets are pre-configured for GitHub PR/issue inspection, Postgres databases, and web fetching.
 
 ## License
+
+## Maintaining the template
+
+Using the harness in a project and maintaining the harness itself are separate jobs: in a project the harness core is
+read-only (fingerprinted, blocked for Claude Code, checked by doctor), and gaps are reported to the template instead of
+patched locally. How to report a gap, update a project, and the release checklist (`npm test`, `npm run audit`):
+[`docs/MAINTAINING.md`](docs/MAINTAINING.md) ([ខ្មែរ](docs/MAINTAINING.km.md)).
 
 [MIT](LICENSE) © 2026 TAIMO

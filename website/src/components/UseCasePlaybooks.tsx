@@ -10,7 +10,7 @@ type C = { cmd: string; prompt?: string };
 /** Commands stay in English; every sentence comes from the dictionary (step i's title is t.setup[tab][i]). */
 const COMMANDS: Record<Tab, C[][]> = {
   demo: [
-    [{ cmd: `git clone ${REPO_URL}.git` }, { cmd: 'cd Agentic-Harness' }],
+    [{ cmd: `git clone -b release ${REPO_URL}.git` }, { cmd: 'cd Agentic-Harness' }],
     [{ cmd: 'npm run demo' }],
     [{ cmd: '/harness:auto', prompt: '›' }],
   ],
@@ -38,7 +38,7 @@ const COMMANDS: Record<Tab, C[][]> = {
   ],
   upgrade: [
     [{ cmd: 'git status' }],
-    [{ cmd: 'npx --yes github:sumtaimo/Agentic-Harness#main .' }],
+    [{ cmd: 'npx --yes github:sumtaimo/Agentic-Harness#release .' }],
     [{ cmd: 'node .harness/doctor.mjs' }, { cmd: 'node .harness/team.mjs sync-agents' }],
   ],
 };
