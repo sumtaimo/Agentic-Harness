@@ -18,7 +18,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { ensureDirs, loadConfig, detectEngines, HARNESS_DIR } from './lib/common.mjs';
+import { ensureDirs, loadConfig, detectEngines, HARNESS_DIR, memberModels } from './lib/common.mjs';
 import { askEngineConsent } from './lib/consent.mjs';
 import { readCharter, loadRoles, loadTeam, validateTeam, describeMember, syncAgents, planEngineRouting, applyEngineRouting } from './lib/governance.mjs';
 
@@ -34,6 +34,8 @@ const engines = Object.keys(config.profiles || {});
 const { errors, warnings } = validateTeam(team, { roles, charter, plannerMaxWorkers: maxWorkers, engines });
 const LABEL = { antigravity: 'antigravity (agy)' };
 const label = (e) => (e ? LABEL[e] || e : 'auto');
+// Which model each agent gets, by job (same rules as the controller). The default model of a CLI is never chosen silently.
+const mm = (m, cfgTeam = config) => { const r = memberModels(cfgTeam, m); const f = (x) => `${x.model || "CLI default (no model names set!)"} [${x.tier}]`; return { plan: f(r.plan), work: f(r.work), engine: r.engine }; };
 
 if (cmd === 'validate') {
   errors.forEach((e) => console.log(`  ✖ ${e}`));
@@ -55,7 +57,7 @@ if (cmd === 'validate') {
   console.log(`\nRouting (${mode}):\n  planning / research (PO_ARCHITECT, BA_ANALYST) → ${label(routing.plan)}\n  coding (DEV_ENGINEER)                          → ${label(routing.code)}\n  QA / review (QA_AUDITOR)                       → ${label(routing.qa)}`);
   const next = applyEngineRouting(team, routing);
   console.log('');
-  next.members.forEach((m) => console.log(`  ${m.id.padEnd(14)} [${m.role}]  → ${label(m.engine)}${(team.members.find((o) => o.id === m.id) || {}).engine === m.engine ? '' : '   (changed)'}`));
+  next.members.forEach((m) => { const x = mm(m); console.log(`  ${m.id.padEnd(14)} [${m.role}]  → ${label(m.engine)}  plans on ${x.plan}, workers on ${x.work}${(team.members.find((o) => o.id === m.id) || {}).engine === m.engine ? '' : '   (changed)'}`); });
   const changed = JSON.stringify(next) !== JSON.stringify(team);
   if (dry) { console.log('\n--dry-run: team.json was not changed.'); process.exit(0); }
   if (!changed) { console.log('\nteam.json already has this routing; nothing changed.'); process.exit(0); }
@@ -84,6 +86,7 @@ if (cmd === 'validate') {
     const d = describeMember(orch, roles);
     console.log(`L1  ${d.id}  [${d.role}]  engine: ${label(d.engine)}  budget: ${money(d.budget)}`);
     console.log(`      plans and delegates; read-only. Tools: ${tools(d.tools)}`);
+    console.log(`      model: ${mm(orch).plan}`);
   }
   leads.forEach((l, i) => {
     const d = describeMember(l, roles);
@@ -91,6 +94,7 @@ if (cmd === 'validate') {
     console.log(`${last ? '└─' : '├─'} L2  ${d.id}  [${d.role}]  engine: ${label(d.engine)}  budget: ${money(d.budget)}`);
     const pad = last ? '   ' : '│  ';
     console.log(`${pad}   owns: ${d.scope.join(', ')}  |  up to ${d.maxWorkers} worker(s)`);
+    { const x = mm(l); console.log(`${pad}   models (${label(x.engine)}): plans on ${x.plan}; its workers on ${x.work}. A retry after a failed check moves one tier up.`); }
     console.log(`${pad}   └─ L3 workers (created by ${d.id}, role ${d.role}, engine ${label(d.engine)}) tools: ${tools(d.tools)}`);
   });
   console.log(`\nRun a task through it:  node .harness/dispatch.mjs --goal "…" --hierarchy [--max-cost <usd>] --wait`);

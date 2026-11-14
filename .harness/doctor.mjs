@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, detectVerifyCmd, listProjectFiles } from './lib/common.mjs';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, detectVerifyCmd, listProjectFiles } from './lib/common.mjs';
 import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
 
 ensureDirs();
@@ -45,6 +45,7 @@ for (const [name, p] of Object.entries(config.profiles)) {
   }
   if (!probe.checked && !flags.length) { ok(`${name.padEnd(12)} ${probe.binPath} — no command-line flags to check`); continue; }
   if (!probe.checked) { warn(`${name.padEnd(12)} ${probe.binPath} — flags not checked (${probe.error})${probe.compatible ? ' — used anyway (verified profile)' : ' → will NOT be used (unverified profile); fix the CLI or its "args" in config.json'}`); continue; }
+  if (usesCliDefault(p)) warn(`${name.padEnd(12)} has no model names in config.json, so every job runs on the CLI's own default model (no job-fit, may waste quota). Set profiles.${name}.models (fast / medium / high) from '${p.binary} --help' or its model list.`);
   const consent = engineConsent(name);
   const allowed = consent === true ? 'ALLOWED' : consent === false ? 'you chose NOT to allow it' : 'not allowed yet: run  node .harness/engines.mjs';
   if (probe.compatible) (consent === true ? ok : note)(`${name.padEnd(12)} ${probe.binPath} — all ${flags.length} flag(s) found: ${flags.join(' ')} — ${allowed}`);

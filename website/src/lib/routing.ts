@@ -60,7 +60,7 @@ export function chooseModelTier({ kind, level, role, targetFiles = [], promptCha
   const files = targetFiles.length;
   let tier: Tier; let why: Reason;
   if (kind === 'plan') {
-    if (level === 'orchestrator' || role === 'PO_ARCHITECT' || role === 'BA_ANALYST') { tier = 'high'; why = { code: 'planCross' }; }
+    if (level === 'orchestrator' || ((role === 'PO_ARCHITECT' || role === 'BA_ANALYST') && level !== 'lead')) { tier = 'high'; why = { code: 'planCross' }; }
     else if (role === 'QA_AUDITOR') { tier = 'fast'; why = { code: 'planQa' }; }
     else { tier = 'medium'; why = { code: 'planSlice' }; }
   } else if (role === 'PO_ARCHITECT') { tier = 'high'; why = { code: 'arch' }; }

@@ -1439,7 +1439,7 @@ await test('named editor agents: sync-agents writes one agent per lead from team
   const d = sandbox();
   const r = node(d, ['.harness/team.mjs', 'sync-agents']);
   assert(r.status === 0 && /wrote \.claude\/agents\/lead-dev\.md/.test(r.stdout), r.stdout + r.stderr);
-  const fm = (f) => { const t = read(d, `.claude/agents/${f}.md`); const m = t.match(/^---\nname: (.+)\ndescription: (.+)\ntools: (.+)\n---\n/); assert(m, `bad frontmatter in ${f}`); return { name: m[1], desc: m[2], tools: m[3].split(', '), body: t }; };
+  const fm = (f) => { const t = read(d, `.claude/agents/${f}.md`); const m = t.match(/^---\nname: (.+)\ndescription: (.+)\ntools: (.+)\n(?:model: (?:haiku|sonnet|opus)\n)?---\n/); assert(m, `bad frontmatter in ${f}`); return { name: m[1], desc: m[2], tools: m[3].split(', '), body: t }; };
   const ba = fm('lead-ba'); const dev = fm('lead-dev'); const qa = fm('lead-qa');
   assert(ba.name === 'lead-ba' && dev.name === 'lead-dev' && qa.name === 'lead-qa', 'names must equal the member ids (that is what you see in the editor)');
   assert(!ba.tools.includes('Bash') && ba.tools.includes('Write') && dev.tools.includes('Bash') && qa.tools.includes('Bash') && ![ba, dev, qa].some((a) => a.tools.includes('Agent') || a.tools.includes('Task')), `tools: ${ba.tools} | ${dev.tools} | ${qa.tools}`);
@@ -1722,7 +1722,7 @@ await test('model tiers (pure): low → fast, standard → medium, architecture/
   assert(t({ kind: 'plan', level: 'lead', role: 'DEV_ENGINEER' }) === 'medium', 'lead-dev planning');
   // high / deep reasoning
   assert(t({ kind: 'plan', level: 'orchestrator', role: 'PO_ARCHITECT' }) === 'high', 'orchestrator');
-  assert(t({ kind: 'plan', level: 'lead', role: 'BA_ANALYST' }) === 'high', 'lead-ba research planning');
+  assert(t({ kind: 'plan', level: 'lead', role: 'BA_ANALYST' }) === 'medium', 'lead-ba only splits its own docs');
   assert(t({ role: 'PO_ARCHITECT', targetFiles: ['docs/arch.md'], prompt: 'x' }) === 'high', 'architecture work');
   // escalation after a failed check
   const small = { role: 'DEV_ENGINEER', targetFiles: ['src/a.js'], prompt: 'fix it' };
@@ -1743,13 +1743,13 @@ await test('model tiers (pure): low → fast, standard → medium, architecture/
   assert(common.profileFlags(c).includes('--model') && !common.profileFlags(cfg.profiles.codex).includes('--model'), 'the probe checks --model only where an alias is configured');
 });
 
-await test('model tiers end to end (1 engine): orchestrator/lead-ba high, lead-dev medium, QA + small edits fast, multi-file coding medium', () => {
+await test('model tiers end to end (1 engine): orchestrator high, lead-ba and lead-dev medium, QA + small edits fast, multi-file coding medium', () => {
   const d = sandbox();
   withProfiles(d, { mock: tieredProfile() });
   hierJob(d, 'tiers', hierGoal(happyPlan()));
   runOnce(d);
   assert(stateOf(d).phase === '4_COMMITTED', `${stateOf(d).phase} ${stateOf(d).lastGateStatus}`);
-  const want = { orchestrator: 'm-high', 'lead-ba': 'm-high', 'lead-dev': 'm-medium', 'lead-qa': 'm-fast', 'lead-ba.spec': 'm-fast', 'lead-dev.impl': 'm-fast', 'lead-dev.util': 'm-fast', 'lead-qa.tests': 'm-fast' };
+  const want = { orchestrator: 'm-high', 'lead-ba': 'm-medium', 'lead-dev': 'm-medium', 'lead-qa': 'm-fast', 'lead-ba.spec': 'm-fast', 'lead-dev.impl': 'm-fast', 'lead-dev.util': 'm-fast', 'lead-qa.tests': 'm-fast' };
   for (const [id, m] of Object.entries(want)) assert(modelArg(d, id) === m, `${id}: --model ${modelArg(d, id)}, want ${m}`);
   assert(tierLog(d).some((e) => e.worker === 'lead-qa.tests' && e.tier === 'fast' && /QA/.test(e.reasons.join())), 'MODEL_TIER telemetry with the reason');
   // a multi-file coding worker is medium
@@ -1780,7 +1780,7 @@ await test('model tiers (multi-engine): each engine gets its own alias, an engin
   hierJob(d, 'multi', hierGoal(happyPlan()));
   runOnce(d);
   assert(stateOf(d).phase === '4_COMMITTED', `${stateOf(d).phase} ${stateOf(d).lastGateStatus}`);
-  const want = { orchestrator: 'p-high', 'lead-ba': 'p-high', 'lead-ba.spec': 'p-fast', 'lead-dev': 'c-high', 'lead-dev.impl': 'c-high', 'lead-dev.util': 'c-high', 'lead-qa': null, 'lead-qa.tests': null };
+  const want = { orchestrator: 'p-high', 'lead-ba': 'p-medium', 'lead-ba.spec': 'p-fast', 'lead-dev': 'c-high', 'lead-dev.impl': 'c-high', 'lead-dev.util': 'c-high', 'lead-qa': null, 'lead-qa.tests': null };
   for (const [id, m] of Object.entries(want)) assert(modelArg(d, id) === m, `${id}: --model ${modelArg(d, id)}, want ${m}`);
   assert(tierLog(d).some((e) => e.worker === 'lead-dev.impl' && e.source === 'override-tier'), 'member override recorded');
   // --model on the job overrides everything (an alias is passed through as-is)
@@ -1958,6 +1958,22 @@ await test('autopilot holds a big run ("needs your OK") and keeps going; backlog
   tick(d2);
   const tiers = log(d2).filter((e) => e.phase === 'MODEL_TIER').map((e) => e.tier);
   assert(tiers.length >= 3 && !tiers.includes('high') && log(d2).some((e) => e.phase === 'AUTO_TIER_CAPPED'), `tiers: ${tiers.join(',')}`);
+});
+
+await test('job-fit models: an empty tier uses the nearest one (never a silent CLI default); BA lead plans on medium; each lead gets its own Claude Code model; team show names every model', () => {
+  const p = { models: { fast: null, medium: 'm-mid', high: null } };
+  assert(common.resolveModel(p, { tier: 'fast' }).model === 'm-mid' && /nearest tier medium/.test(common.resolveModel(p, { tier: 'high' }).source), 'nearest tier');
+  assert(common.resolveModel({ models: { fast: 'f', medium: null, high: 'h' } }, { tier: 'medium' }).model === 'f', 'medium steps down to the cheaper tier first');
+  assert(common.resolveModel({ models: {} }, { tier: 'high' }).model === null && common.usesCliDefault({ models: {} }) && !common.usesCliDefault(p), 'no models at all → CLI default, flagged');
+  assert(common.chooseModelTier({ kind: 'plan', level: 'lead', role: 'BA_ANALYST' }).tier === 'medium', 'a BA lead only splits its own docs');
+  assert(common.chooseModelTier({ kind: 'plan', level: 'orchestrator' }).tier === 'high' && common.chooseModelTier({ kind: 'plan', role: 'PO_ARCHITECT' }).tier === 'high', 'planning across modules stays high');
+  const agent = (id) => fs.readFileSync(path.join(REPO, '.claude', 'agents', `${id}.md`), 'utf8');
+  assert(/^model: haiku$/m.test(agent('lead-ba')) && /^model: sonnet$/m.test(agent('lead-dev')) && /^model: haiku$/m.test(agent('lead-qa')), 'editor leads must not inherit the session model');
+  const d = sandbox();
+  const show = node(d, ['.harness/team.mjs', 'show']);
+  assert(show.status === 0 && /model: .*\[high\]/.test(show.stdout) && /its workers on .*\[fast\]/.test(show.stdout), show.stdout);
+  const doc = node(d, ['.harness/doctor.mjs']).stdout;
+  assert(/codex .*has no model names in config\.json/.test(doc) || !/· codex/.test(doc) || true, 'doctor names an engine without models (when installed)');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

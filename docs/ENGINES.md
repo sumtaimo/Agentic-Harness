@@ -25,6 +25,26 @@ architecture planning gets `high`, and a failed check escalates one tier. The ti
 - `null` means no `--model` flag, so the CLI uses its own newest default. This is the setting for `codex` today.
 - `agy` has no aliases, so Antigravity uses exact IDs from `agy models`: `fast` = `gemini-3.8-flash-medium`, `medium` (coding) = `gemini-4-argon-medium`, `high` (planning) = `gemini-4-hydrogen-high`. Real runs on all three tiers passed on 2026-11-14 (Flash: create a file; Argon: write add(a, b); Hydrogen: write mul(a, b); each checked by a real command and COMMITTED).
 
+## Every agent gets a model that fits its job
+
+The controller never leaves the model to chance. Per agent it picks a tier from the job, then the model of that tier:
+
+| Agent | Tier | Antigravity | Claude Code |
+|---|---|---|---|
+| orchestrator, PO architect (plan across modules) | high | Gemini 4 Hydrogen | opus |
+| lead-ba, lead-dev (split their own slice) | medium | Gemini 4 Argon | sonnet |
+| lead-qa, docs/QA workers, 1-file small edits | fast | Gemini 3.8 Flash | haiku |
+| coding workers (several files) | medium | Gemini 4 Argon | sonnet |
+| any retry after a failed check | one tier up | | |
+
+- An empty tier uses the nearest configured one, so a CLI default is never used by accident. Only an engine with no
+  model names at all (Codex today) runs on its own default, and `doctor` warns about it.
+- In Claude Code, the named agents get their model too (`model:` in `.claude/agents/lead-*.md`, written by
+  `node .harness/team.mjs sync-agents`): lead-ba and lead-qa use haiku, lead-dev uses sonnet. Without it they would
+  inherit your session model (often opus) for simple docs and tests.
+- See every agent's model: `node .harness/team.mjs show`. The live feed prints the model each agent starts on.
+- Override for one member: `"model"` in `team.json` (an alias or a tier name); for one task: `dispatch --model`.
+
 ## Each AI tool is allowed once
 
 A tool that is already installed and logged in on your machine (`claude`, `agy`, `codex`) is **never used silently**.

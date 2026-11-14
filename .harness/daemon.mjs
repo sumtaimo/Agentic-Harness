@@ -265,7 +265,7 @@ function spawnEngine({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallo
     const env = { ...process.env, HARNESS_WORKER: '1', HARNESS_WORKER_ID: id };
     const child = spawn(isWin ? winQuote(binPath) : binPath, isWin ? args.map(winQuote) : args, { cwd, env, shell: isWin, stdio: ['pipe', 'pipe', 'pipe'] });
     logTelemetry('ENGINE_SPAWN', `Spawned ${profile.name} for ${id}`, { engine: profile.name, binary: binPath, args: args.map((a) => (a === prompt ? '<prompt>' : a)), promptVia: viaStdin ? 'stdin' : 'args', live: live ? (stream ? 'stream-json' : 'raw') : 'off', cwd });
-    if (live && !stream) livePrint(id, `▶ ${profile.name} started (raw output follows)`);
+    if (live && !stream) livePrint(id, `▶ ${profile.name} started on ${pick.model || "the CLI's default model (no model names set)"} [${pick.tier}] (raw output follows)`);
 
     let stdout = ''; let stderr = ''; let settled = false; let pending = '';
     const done = (fn, v) => { if (!settled) { settled = true; clearTimeout(timer); fn(v); } };
