@@ -59,6 +59,18 @@ The agents are *named* on purpose: in Claude Code you see **`lead-dev`**, **`lea
 | Autonomous work lands | in your working folder (you review it) | on the `uat` branch, never `main` |
 | Best for | working with the agents in front of you | unattended runs, CI, terminals |
 
+## Many sessions at once: Session A and its child sessions
+
+Talk to one session only (**Session A**, `/harness:sessions`); it runs up to **4 child sessions**, one task each, in
+their own worktrees, local or cloud. The board is `node .harness/sessions.mjs board`.
+
+- Each task gets a clear name and branch: `FEAT-3 Login page` on `task/feat-3-login-page`.
+- The child reports done through git (`sessions.mjs report <ID> done`), so Session A sees it locally or after a push.
+- **Merging needs your yes.** `sessions.mjs merge <ID>` merges in a temporary worktree and runs the check first; only
+  then does the base branch move. Then that child's worktree and branch are removed automatically.
+- **Nothing unfinished is ever deleted.** A child idle for 24 h, a failed check, or a task never started is shown as
+  **HIGH RISK** on the board and at every session start, until you decide.
+
 ## Quota and consent (both modes)
 
 - **Each AI tool is allowed once per person** (`node .harness/engines.mjs`); headless runs never use a tool you did not allow.

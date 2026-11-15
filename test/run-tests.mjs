@@ -833,6 +833,10 @@ await test('heartbeat: config heartbeatIntervalSeconds wakes the controller agai
   setCharter(d, { requireRealCheck: 'no' }, 'PO_JSON {"tasks":[]}');
   setBacklog(d, []);
   const daemon = spawn(process.execPath, ['.harness/daemon.mjs', '--autonomous'], { cwd: d, env, stdio: 'ignore' });
+  // Add the work only after the controller has started AND run its startup tick (0.5 s after AUTO_START): a fixed
+  // wait raced a slow start on a busy machine, so the task was picked up by the startup tick instead of the heartbeat.
+  const started = () => { try { return log(d).some((e) => e.phase === 'AUTO_START'); } catch { return false; } };
+  assert(await waitFor(started, 20000), 'the controller did not start');
   await new Promise((r) => setTimeout(r, 1500));
   setBacklog(d, [{ id: 'LATE', title: 'added later', status: 'READY', verifyCmd: existsCheck('src/late.js'), subtasks: [{ id: 'w', targetFiles: ['src/late.js'], prompt: 'WRITE src/late.js l' }] }]);
   const ok = await waitFor(() => byId(d, 'LATE')?.status === 'DONE', 15000);
@@ -2152,9 +2156,51 @@ await test('the installer never installs into a copy of the template (clone, wor
   assert(!fs.existsSync(path.join(copy, '.harness')) && fs.readFileSync(path.join(copy, 'AGENTS.md'), 'utf8') === before, 'nothing may be written into a template copy');
 });
 
+await test('session board: Session A runs child tasks (max 4) with clear names; DONE → check → merge → worktree + branch removed; unfinished work is never deleted, only flagged HIGH RISK', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-sessions-'));
+  const main = path.join(base, 'main'); fs.cpSync(sandbox(), main, { recursive: true });
+  fs.writeFileSync(path.join(main, 'package.json'), JSON.stringify({ name: 's', private: true, scripts: { test: 'node -e "process.exit(require(\'fs\').existsSync(\'BROKEN\')?1:0)"' } }));
+  const G = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  G(main, 'init', '-q', '-b', 'lab'); G(main, 'add', '-A'); G(main, 'commit', '-q', '-m', 'one');
+  const gitEnv = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+  const S = (cwd, ...a) => node(cwd, ['.harness/sessions.mjs', ...a], { HARNESS_ROOT: cwd, ...gitEnv });
+  // a child task: clear name, own branch, a brief to start the child session with
+  const n1 = S(main, 'new', 'Login page', '--type', 'feat');
+  assert(n1.status === 0 && /session name: FEAT-1 Login page/.test(n1.stdout) && /branch: +task\/feat-1-login-page \(from lab\)/.test(n1.stdout) && /report FEAT-1 done/.test(n1.stdout), n1.stdout + n1.stderr);
+  const wt = path.join(base, 'child1'); G(main, 'worktree', 'add', '-q', '-b', 'claude/child1', wt, 'lab');
+  assert(S(wt, 'start', 'FEAT-1').status === 0 && G(wt, 'branch', '--show-current') === 'task/feat-1-login-page', 'the child session moves onto the task branch');
+  fs.writeFileSync(path.join(wt, 'login.txt'), 'x'); G(wt, 'add', '-A'); G(wt, 'commit', '-q', '-m', 'login');
+  assert(/FEAT-1 +WORKING/.test(S(main, 'board').stdout), 'working child shown');
+  assert(S(main, 'merge', 'FEAT-1').status === 1, 'no merge before the child reports done');
+  assert(S(wt, 'report', 'FEAT-1', 'done', '--summary', 'login page').status === 0 && /FEAT-1 +DONE/.test(S(main, 'board').stdout), 'done is reported through git');
+  const m = S(main, 'merge', 'FEAT-1');
+  assert(m.status === 0 && /MERGED FEAT-1 into lab/.test(m.stdout) && /worktree removed/.test(m.stdout) && /branch task\/feat-1-login-page deleted/.test(m.stdout), m.stdout + m.stderr);
+  assert(fs.existsSync(path.join(main, 'login.txt')) && !fs.existsSync(wt) && G(main, 'branch', '--list', 'task/*') === '', 'merged into lab; worktree and branch gone');
+  // a failing check never changes the base, keeps the child, and turns it HIGH RISK
+  S(main, 'new', 'Broken fix', '--type', 'bug');
+  const wt2 = path.join(base, 'child2'); G(main, 'worktree', 'add', '-q', '-b', 'claude/child2', wt2, 'lab'); S(wt2, 'start', 'BUG-1');
+  fs.writeFileSync(path.join(wt2, 'BROKEN'), 'x'); G(wt2, 'add', '-A'); G(wt2, 'commit', '-q', '-m', 'breaks'); S(wt2, 'report', 'BUG-1', 'done');
+  const labBefore = G(main, 'rev-parse', 'lab');
+  assert(S(main, 'merge', 'BUG-1').status === 1 && G(main, 'rev-parse', 'lab') === labBefore && fs.existsSync(wt2), 'a failed check changes nothing');
+  assert(/!! BUG-1 +CHECK FAILED/.test(S(main, 'board').stdout), 'failed check is HIGH RISK');
+  // limit: at most 4 open child tasks
+  for (const t of ['a', 'b', 'c']) S(main, 'new', `task ${t}`);
+  const fifth = S(main, 'new', 'one too many');
+  assert(fifth.status === 3 && /LIMIT: 4\/4/.test(fifth.stderr), fifth.stdout + fifth.stderr);
+  // stale: unfinished and idle → HIGH RISK, never removed by cleanup; the session hook tells the AI
+  const cf = path.join(main, '.harness', 'config.json'); const c = json(cf); c.sessions = { staleHours: 0, notStartedHours: 0 }; fs.writeFileSync(cf, JSON.stringify(c, null, 2));
+  const wt3 = path.join(base, 'child3'); G(main, 'worktree', 'add', '-q', '-b', 'claude/child3', wt3, 'lab'); S(wt3, 'start', 'TASK-1');
+  fs.writeFileSync(path.join(wt3, 'half.txt'), 'x'); G(wt3, 'add', '-A'); G(wt3, 'commit', '-q', '-m', 'half done');
+  const board = S(main, 'board').stdout;
+  assert(/!! TASK-1 +STALE/.test(board) && /!! TASK-2 +NOT STARTED/.test(board), board);
+  assert(/Nothing to clean/.test(S(main, 'cleanup').stdout) && fs.existsSync(wt3) && G(main, 'branch', '--list', 'task/task-1-*') !== '', 'unfinished work is never deleted');
+  const hook = node(main, ['.harness/hook-session.mjs'], { HARNESS_ROOT: main });
+  assert(/Session board: 5\/4|Session board: \d\/4 child task\(s\) open/.test(hook.stdout) && /HIGH RISK TASK-1/.test(hook.stdout), hook.stdout);
+});
+
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
   const d = sandbox();
-  for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch']) { // daemon --help once started the controller
+  for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch', 'sessions']) { // daemon --help once started the controller
     const r = node(d, [`.harness/${c}.mjs`, '--help']);
     assert(r.status === 0 && new RegExp(`${c}\\.mjs`).test(r.stdout), `${c} --help: exit ${r.status}\n${r.stdout.slice(0, 200)}${r.stderr.slice(0, 200)}`);
   }

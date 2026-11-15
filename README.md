@@ -695,6 +695,13 @@ The harness connects to any CLI-driven AI engine (Claude, Codex, Antigravity, lo
 
 ## License
 
+## Many sessions at once (Session A + child sessions)
+
+Talk to one session (Session A): `/harness:sessions` runs up to 4 child sessions, one task each, with clear names
+(`FEAT-3 Login page`), follows them up, merges a finished one only after your yes (the check runs first) and then
+removes its worktree and branch. Unfinished or idle children are never deleted: they show as HIGH RISK until you
+decide. Board: `node .harness/sessions.mjs board`. Details: [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
+
 ## Maintaining the template
 
 Using the harness in a project and maintaining the harness itself are separate jobs: in a project the harness core is

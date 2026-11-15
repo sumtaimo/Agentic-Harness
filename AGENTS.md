@@ -277,6 +277,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/roles/` · `skills/` | role personas + tool limits · skill rules |
 | `.harness/team.json` · `team.mjs` | the agent team (orchestrator → leads → workers): scopes, limits, budgets · show / validate / `sync-agents` |
 | `.harness/visible.mjs` | the controller for the editor workflow: brief / assign / verify / rollback / propose / status / report |
+| `.harness/sessions.mjs` · `/harness:sessions` | session board: Session A (role COORDINATOR) runs up to 4 child sessions, one task each; merge only with the owner's yes; merged tasks are cleaned up, unfinished ones flagged HIGH RISK, never deleted |
 | `.claude/agents/lead-*.md` | the named agents (generated from team.json; the user sees them working in the session) |
 | `docs/WORKFLOW.md` | the workflow, the rules, the two modes, what is not guaranteed |
 | `.harness/releases/` | snapshots made before every upload (git-ignored, never edit) |

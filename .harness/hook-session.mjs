@@ -78,6 +78,21 @@ try {
     }
   } catch { /* not a git repo, or git missing: nothing to check */ }
 
+  // Session board (Session A + child sessions): one line, plus every HIGH RISK task, so nothing unfinished goes unnoticed.
+  try {
+    const { execFileSync: run } = await import('node:child_process');
+    const common = run('git', ['rev-parse', '--git-common-dir'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (fs.existsSync(path.resolve(ROOT, common, 'harness-sessions.json'))) {
+      const bj = JSON.parse(run(process.execPath, [path.join(ROOT, '.harness', 'sessions.mjs'), 'board', '--json'], { cwd: ROOT, encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'pipe', 'ignore'] }));
+      const open = bj.tasks.filter((t) => !['MERGED', 'CLEANED'].includes(t.status));
+      if (open.length) {
+        const done = open.filter((t) => t.status === 'DONE').map((t) => t.id);
+        lines.push(`- Session board: ${open.length}/${bj.maxActive} child task(s) open (${open.map((t) => `${t.id} ${t.status}`).join(', ')}).${done.length ? ` Ready to merge after the user's yes: ${done.join(', ')}.` : ''} Coordinate with /harness:sessions.`);
+        for (const t of open.filter((x) => x.risk)) lines.push(`- HIGH RISK ${t.id} "${t.title}": ${t.note}. Tell the user.`);
+      }
+    }
+  } catch { /* no board yet, or not a git repository */ }
+
   const { checkCore, usageTodayLine } = await import('./lib/common.mjs');
   const today = usageTodayLine(cfg);
   if (today) lines.push(`- AI quota used by the harness today: ${today}. Mention it to the user in one short line when you run harness work.`);
@@ -87,6 +102,6 @@ try {
     if (core.changed.length || core.missing.length) lines.push(`- WARNING: the harness core was edited in this project (${[...core.changed, ...core.missing].join(', ')}). Tell the user; re-installing from the template restores it.`);
   }
   if (stopped.length && !open.length) lines.push(`- A previous editor run stopped and needs a human decision: ${stopped[0].id} ("${stopped[0].title}", ${stopped[0].status}). Report it to the user if they have not seen it.`);
-  lines.push('- To run work with visible named agents: use /harness:run <goal>. Autonomous: /harness:auto. Team: /harness:team. Status: /harness:status. Health check: /harness:doctor. Teach a rule: /harness:teach <rule>.');
+  lines.push('- To run work with visible named agents: use /harness:run <goal>. Autonomous: /harness:auto. Team: /harness:team. Status: /harness:status. Health check: /harness:doctor. Teach a rule: /harness:teach <rule>. Several sessions at once (Session A + up to 4 child sessions): /harness:sessions.');
   console.log(lines.join('\n'));
 } catch { /* never block the session */ }
