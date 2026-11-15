@@ -1234,7 +1234,7 @@ await test('team.json: an invalid team stops the task before any agent is called
   const d3 = sandbox();
   const show = node(d3, ['.harness/team.mjs', 'show']);
   assert(show.status === 0 && /L1  orchestrator  \[PO_ARCHITECT\]/.test(show.stdout) && /L2  lead-dev  \[DEV_ENGINEER\]/.test(show.stdout) && /owns: src\/\*\*/.test(show.stdout) && /team is valid/.test(show.stdout), show.stdout);
-  assert(/team\.json valid: orchestrator → 3 lead\(s\)/.test(node(d3, ['.harness/doctor.mjs']).stdout), 'Doctor does not report the valid team');
+  assert(/team\.json valid: orchestrator → 4 lead\(s\)/.test(node(d3, ['.harness/doctor.mjs']).stdout), 'Doctor does not report the valid team');
 });
 
 await test('budget: the task cap stops a hierarchy right after planning when the planners already cost too much — no worker starts; cost is in the dead letter', () => {
@@ -1855,7 +1855,7 @@ await test('editor verify flags what tests cannot prove: UI changes need a visua
   const b = spawnSync(process.execPath, ['.harness/visible.mjs', 'brief', '--goal', 'restyle the page', '--check', check], { cwd: demo, encoding: 'utf8' });
   const id = runIdOf(b);
   assert(b.status === 0 && id && /UI files but the check never opens a browser/.test(b.stdout), b.stdout + b.stderr);
-  assert(spawnSync(process.execPath, ['.harness/visible.mjs', 'assign', id, deleg([{ lead: 'lead-dev', goal: 'style', files: ['src/style.css'] }])], { cwd: demo, encoding: 'utf8' }).status === 0, 'assign');
+  assert(spawnSync(process.execPath, ['.harness/visible.mjs', 'assign', id, deleg([{ lead: 'lead-ux', goal: 'style', files: ['src/style.css'] }])], { cwd: demo, encoding: 'utf8' }).status === 0, 'assign');
   fs.writeFileSync(path.join(demo, 'src', 'style.css'), 'body{margin:0}\n');
   const v = spawnSync(process.execPath, ['.harness/visible.mjs', 'verify', id], { cwd: demo, encoding: 'utf8' });
   assert(v.status === 0, v.stdout);
@@ -2196,6 +2196,18 @@ await test('session board: Session A runs child tasks (max 4) with clear names; 
   assert(/Nothing to clean/.test(S(main, 'cleanup').stdout) && fs.existsSync(wt3) && G(main, 'branch', '--list', 'task/task-1-*') !== '', 'unfinished work is never deleted');
   const hook = node(main, ['.harness/hook-session.mjs'], { HARNESS_ROOT: main });
   assert(/Session board: 5\/4|Session board: \d\/4 child task\(s\) open/.test(hook.stdout) && /HIGH RISK TASK-1/.test(hook.stdout), hook.stdout);
+});
+
+await test('new roles: lead-ux owns only style files (one owner per file stays true); reviewer and security are read-only agents; the leads fit the orchestrator budget', () => {
+  const roles = gov.loadRoles(); const team = json(path.join(REPO, '.harness', 'team.json')); const L = team.members.filter((m) => m.level === 'lead');
+  const owner = (f) => L.filter((l) => gov.leadOwns(l, f, L)).map((l) => l.id).join();
+  assert(owner('src/app.css') === 'lead-ux' && owner('src/ui/theme.scss') === 'lead-ux' && owner('src/app.tsx') === 'lead-dev' && owner('src/app.test.tsx') === 'lead-qa' && owner('docs/x.md') === 'lead-ba', 'one owner per file');
+  for (const r of ['REVIEWER', 'SECURITY', 'COORDINATOR']) assert(roles[r] && (roles[r].writablePaths || []).length === 0 && !(roles[r].allowedTools || []).some((t) => /^(Edit|Write)/.test(t)), `${r} must be read-only`);
+  assert(roles.UX_DESIGNER.writablePaths.every((p) => /\.(css|scss|less)$/.test(p)), 'the UX role writes style files only');
+  for (const a of ['reviewer', 'security']) { const t = fs.readFileSync(path.join(REPO, '.claude', 'agents', `${a}.md`), 'utf8'); assert(/^tools: Read, Glob, Grep, Bash$/m.test(t) && /Read only/.test(t), `${a} agent must have no Edit/Write tool`); }
+  const orch = team.members.find((m) => m.level === 'orchestrator');
+  assert(L.reduce((n, l) => n + l.budget.maxCostUsd, 0) <= orch.budget.maxCostUsd + 1e-9, 'lead budgets must fit the orchestrator cap');
+  assert(/4b\. \*\*Review/.test(fs.readFileSync(path.join(REPO, '.claude', 'commands', 'harness', 'run.md'), 'utf8')), '/harness:run has the review step');
 });
 
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {

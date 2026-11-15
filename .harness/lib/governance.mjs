@@ -310,6 +310,8 @@ export function validateTeam(team, { roles = {}, charter = null, plannerMaxWorke
     if (!r) errors.push(`orchestrator "${orch.id}": unknown role "${orch.role}"`);
     else if ((r.writablePaths || []).length) errors.push(`orchestrator "${orch.id}": role ${r.name} may write files (${r.writablePaths.join(', ')}); the orchestrator must be read-only`);
     for (const c of orch.canDelegateTo || []) if (!leads.some((l) => l.id === c)) errors.push(`orchestrator canDelegateTo lists "${c}", which is not a lead`);
+    // A lead the orchestrator may not delegate to can never receive work: add it to canDelegateTo (or remove the list).
+    if (Array.isArray(orch.canDelegateTo) && orch.canDelegateTo.length) for (const l of leads) if (!orch.canDelegateTo.includes(l.id)) warnings.push(`lead "${l.id}" is not in the orchestrator's canDelegateTo, so it can never receive work`);
   }
   for (const l of leads) {
     if (orch && l.reports_to !== orch.id) errors.push(`lead "${l.id}" must report to the orchestrator "${orch.id}" (reports_to is "${l.reports_to}")`);

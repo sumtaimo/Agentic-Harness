@@ -42,7 +42,9 @@ only point here.
   - **Solo Mode (`npm run run` / `--mode parallel`):** Single user acts as PO/Architect/QA Lead; orchestrator delegates disjoint file ownership to workers so parallel edits never collide.
   - **Team Mode (`--mode team`):** Orchestrator assigns scoped charters to leads (`lead-ba`, `lead-dev`, `lead-qa`):
     - `lead-ba`: specs and acceptance criteria; writes only `docs/**`.
-    - `lead-qa`: tests and verification; writes only `tests/**` and `test/**`.
+    - `lead-qa`: tests and verification; writes only `tests/**`, `test/**` and test files next to the code (`src/**/*.test.*`, `*.spec.*`).
+    - `lead-ux`: UX/UI; writes only style files (`src/**/*.css`, `*.scss`, `*.less`), with the `ui-craft` rules.
+    - `reviewer` and `security`: read-only check agents the orchestrator starts after the controller says PASSED (code changes only); they report findings, never edit.
     - Read-only investigation and QA reports (`.agent-state/`) are written by the orchestrator, not by the leads.
     - `lead-dev` / workers: Scoped implementation strictly inside assigned file paths.
   - **Autopilot Mode (`npm run auto`):** Executes backlog tasks autonomously onto branch `uat` ONLY—never `main` or `prod`.
@@ -237,7 +239,8 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
   Add work: `node .harness/backlog.mjs add "<title>" --goal "<details>" --files "src/x.js" --role DEV_ENGINEER --check "npm test" --status READY`.
   See it: `node .harness/backlog.mjs overview`. Unblock after a human decision: `node .harness/backlog.mjs ready <id>`.
 - Roles (`.harness/roles/*.json`): `PO_ARCHITECT` (plans, read-only), `BA_ANALYST` (owns `docs/**`),
-  `DEV_ENGINEER` (code), `QA_AUDITOR` (tests). A worker's role sets its persona **and** its
+  `DEV_ENGINEER` (code), `QA_AUDITOR` (tests), `UX_DESIGNER` (style files), and read-only `REVIEWER`, `SECURITY`
+  and `COORDINATOR` (Session A for `/harness:sessions`). A worker's role sets its persona **and** its
   engine permissions: with Claude Code it can only edit its own targetFiles.
 - Skills (`.harness/skills/<name>/SKILL.md`, frontmatter `name`, `description`, `roles`,
   `allowedTools`): rules injected into matching workers. A skill can narrow tools, never add;

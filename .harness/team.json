@@ -10,7 +10,8 @@
       "canDelegateTo": [
         "lead-ba",
         "lead-dev",
-        "lead-qa"
+        "lead-qa",
+        "lead-ux"
       ],
       "budget": {
         "maxCostUsd": 2,
@@ -66,6 +67,25 @@
       },
       "skills": [
         "code-craft"
+      ]
+    },
+    {
+      "id": "lead-ux",
+      "level": "lead",
+      "role": "UX_DESIGNER",
+      "reports_to": "orchestrator",
+      "scope": [
+        "src/**/*.css",
+        "src/**/*.scss",
+        "src/**/*.less"
+      ],
+      "maxWorkers": 2,
+      "budget": {
+        "maxCostUsd": 0.3,
+        "maxMinutes": 10
+      },
+      "skills": [
+        "ui-craft"
       ]
     }
   ]

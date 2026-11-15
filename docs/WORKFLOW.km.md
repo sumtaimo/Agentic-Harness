@@ -50,6 +50,7 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 - AI មិនដែល push ឬ merge ទៅ `main` ដោយគ្មានការអនុញ្ញាតពីម្ចាស់ project ទេ។
 - **ឧបករណ៍ AI នីមួយៗត្រូវអនុញ្ញាតម្តង** (`node .harness/engines.mjs`)៖ harness មិនប្រើឧបករណ៍ដែលបាន login ដោយស្ងាត់ៗទេ។
 - **ការងារធំសួរមុន** (របៀប team ឬ parallel, workers ៣+, model កម្រិតខ្ពស់)។ ក្នុង autopilot វាត្រូវផ្អាកជា «ត្រូវការការយល់ព្រមពីអ្នក» ហើយការងារផ្សេងបន្ត។ យល់ព្រមដោយ `node .harness/backlog.mjs approve <id>`។
+- **តួនាទីក្នុងក្រុម**៖ `lead-ba` (spec), `lead-dev` (កូដ), `lead-qa` (តេស្ត), `lead-ux` (UX/UI ឯកសារស្ទីល `*.css`, `*.scss`)។ ឯកសារនីមួយៗមានម្ចាស់តែមួយ។ ក្រោយតេស្តជាប់ `reviewer` និង `security` (អានតែប៉ុណ្ណោះ) ពិនិត្យការកែ ហើយរាយការណ៍ ដោយមិនកែអ្វីទេ។
 - **Session ច្រើនក្នុងពេលតែមួយ**៖ អ្នកនិយាយតែជាមួយ **Session A** (`/harness:sessions`) ហើយវាដំណើរការ session កូន **អតិបរមា ៤** ម្នាក់មួយការងារ (`FEAT-3 Login page` លើ branch ផ្ទាល់ខ្លួន)។ បញ្ចូលចូល base តែពេលអ្នកយល់ព្រម ហើយក្រោយការពិនិត្យជាប់ប៉ុណ្ណោះ រួច worktree និង branch របស់ session កូននោះត្រូវបានលុបដោយស្វ័យប្រវត្តិ។ ការងារមិនទាន់រួចមិនដែលត្រូវលុបទេ វាត្រូវបង្ហាញជា **HIGH RISK** រហូតដល់អ្នកសម្រេច។ មើលតារាង៖ `node .harness/sessions.mjs board`។
 - **កំណត់ប្រចាំថ្ងៃ និងរបាយការណ៍ប្រើប្រាស់**៖ `config.json` → `dailyLimits` និង `node .harness/usage.mjs`។
 

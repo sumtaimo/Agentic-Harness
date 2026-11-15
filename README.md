@@ -695,6 +695,13 @@ The harness connects to any CLI-driven AI engine (Claude, Codex, Antigravity, lo
 
 ## License
 
+## Roles on the team
+
+Orchestrator (plans) → leads: `lead-ba` (specs, `docs/`), `lead-dev` (code, `src/`), `lead-qa` (tests, also
+`src/**/*.test.*`), `lead-ux` (UX/UI style files `*.css`, `*.scss`). Every file has exactly one owner. After the
+check passes, the read-only `reviewer` (and `security` for input, auth, files, network or dependencies) review the
+change and report findings; they never edit.
+
 ## Many sessions at once (Session A + child sessions)
 
 Talk to one session (Session A): `/harness:sessions` runs up to 4 child sessions, one task each, with clear names
