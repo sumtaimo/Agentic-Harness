@@ -283,23 +283,32 @@ function spawnEngine(opts, tried = new Set()) {
   return spawnEngineOnce(opts).catch((e) => {
     tried.add(e.engineName);
     tried.add(`${e.engineName}:${e.modelUsed || ''}`);
-    const fb = e.quotaLimit && !opts.noQuotaFallback ? (config.quotaFallback || {})[e.engineName] : null;
-    if (!fb || !fb.engine) throw e;
-    const model = fb.models?.[e.tierUsed] || null;
-    const sameEngine = fb.engine === e.engineName;
-    if (sameEngine ? (!model || model === e.modelUsed || tried.has(`${fb.engine}:${model}`)) : tried.has(fb.engine)) throw e;
-    const u = engineUsable(config, fb.engine);
+    if (!e.quotaLimit || opts.noQuotaFallback) throw e;
+    const fb = (config.quotaFallback || {})[e.engineName] || null;
+    let targetEngine = fb?.engine || null;
+    let model = fb?.models?.[e.tierUsed] || null;
+    let sameEngine = targetEngine === e.engineName;
+    const canUseConfigured = targetEngine && (sameEngine ? (model && model !== e.modelUsed && !tried.has(`${targetEngine}:${model}`)) : !tried.has(targetEngine));
+    if (!canUseConfigured) {
+      const nativeModel = !e.dailyCap ? resolveModel(config.profiles?.[e.engineName], { tier: e.tierUsed }).model : null;
+      if (nativeModel && nativeModel !== e.modelUsed && !tried.has(`${e.engineName}:${nativeModel}`)) {
+        targetEngine = e.engineName;
+        model = nativeModel;
+        sameEngine = true;
+      } else throw e;
+    }
+    const u = engineUsable(config, targetEngine);
     if (!u.ok) {
-      logTelemetry('QUOTA_FALLBACK_UNAVAILABLE', `${opts.id}: ${e.engineName} hit its usage limit, and ${fb.engine} cannot take over: ${u.why}`, { worker: opts.id });
+      logTelemetry('QUOTA_FALLBACK_UNAVAILABLE', `${opts.id}: ${e.engineName} hit its usage limit, and ${targetEngine} cannot take over: ${u.why}`, { worker: opts.id });
       throw e;
     }
     const keepOverride = opts.model && MODEL_TIERS.includes(String(opts.model).toLowerCase()) ? opts.model : null;
     const nextModel = model || (sameEngine ? opts.model : keepOverride) || null;
     const nextTier = e.tierUsed ? { tier: e.tierUsed, reasons: [...(opts.tier?.reasons || []), `quota fallback from ${e.engineName}`] } : opts.tier;
-    logTelemetry('QUOTA_FALLBACK', `${opts.id}: ${e.engineName} hit its usage limit → retrying on ${fb.engine}${nextModel ? ` (${nextModel})` : ''}`, { worker: opts.id, from: e.engineName, to: fb.engine, tier: e.tierUsed, model: nextModel });
-    if (liveOn()) livePrint(opts.id, `⇄ ${e.engineName} usage limit → continuing on ${fb.engine}${nextModel ? ` (${nextModel})` : ''}`);
-    writeState({ history: pushHistory(`⇄ ${e.engineName} limit → ${fb.engine} for ${opts.id}`) });
-    return spawnEngine({ ...opts, engine: fb.engine, tier: nextTier, model: nextModel }, tried);
+    logTelemetry('QUOTA_FALLBACK', `${opts.id}: ${e.engineName} hit its usage limit → retrying on ${targetEngine}${nextModel ? ` (${nextModel})` : ''}`, { worker: opts.id, from: e.engineName, to: targetEngine, tier: e.tierUsed, model: nextModel });
+    if (liveOn()) livePrint(opts.id, `⇄ ${e.engineName} usage limit → continuing on ${targetEngine}${nextModel ? ` (${nextModel})` : ''}`);
+    writeState({ history: pushHistory(`⇄ ${e.engineName} limit → ${targetEngine} for ${opts.id}`) });
+    return spawnEngine({ ...opts, engine: targetEngine, tier: nextTier, model: nextModel }, tried);
   });
 }
 
@@ -317,7 +326,7 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
     const over = dailyLimitReached(profile.name);
     if (over) {
       logTelemetry('DAILY_LIMIT', `${id}: ${profile.name} reached its daily cap (${over}); not started`, { worker: id, engine: profile.name });
-      return reject(Object.assign(new Error(`${id} (${profile.name}): daily cap reached (${over}). It resets tomorrow (UTC); raise "dailyLimits" in config.json only if you accept the use.`), { fatal: true, engineName: profile.name, tierUsed: pick.tier, modelUsed: pick.model, quotaLimit: true }));
+      return reject(Object.assign(new Error(`${id} (${profile.name}): daily cap reached (${over}). It resets tomorrow (UTC); raise "dailyLimits" in config.json only if you accept the use.`), { fatal: true, engineName: profile.name, tierUsed: pick.tier, modelUsed: pick.model, quotaLimit: true, dailyCap: true }));
     }
     const startedAt = Date.now();
     logTelemetry('MODEL_TIER', `${id}: ${pick.tier} tier → ${pick.model || `${profile.name} default (no --model)`}${pick.source === 'auto' ? '' : ` (${pick.source})`}`, { worker: id, engine: profile.name, tier: pick.tier, model: pick.model, source: pick.source, reasons: t.reasons });
