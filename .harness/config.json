@@ -105,7 +105,7 @@
     },
     "antigravity": {
       "verified": true,
-      "note": "VERIFIED on Windows 11 / Node 24 with agy 1.5.8 (2026-11-14): a full headless run passed ('agy -p <prompt>' created the scoped file, the real check passed, job COMMITTED), including a 3,049-character goal. '-p' is an alias for '--print' and needs a prompt value; '-p \"\"' with the prompt on stdin FAILS ('error: empty prompt'), so the prompt is passed as an argument. Because agy.exe is a native executable (not a .cmd shim), the controller spawns it with shell: false so Windows cmd.exe never truncates multi-line prompts or drops '--model'. agy.exe is installed in %LOCALAPPDATA%\\agy\\bin or ~/.gemini/bin: add that folder to PATH or doctor reports it as not installed. No auto-approve flag on purpose (agy has --dangerously-skip-permissions and --mode); scoped file edits worked without it.",
+      "note": "VERIFIED on Windows 11 / Node 24 with agy 1.5.8 (2026-11-14; re-verified 2026-11-16): a full headless run passed ('agy -p <prompt>' created the scoped file, the real check passed, job COMMITTED on Cycle 1), including a 3,049-character goal. '-p' is an alias for '--print' and needs a prompt value; '-p \"\"' with the prompt on stdin FAILS ('error: empty prompt'), so the prompt is passed as an argument. Because agy.exe is a native executable (not a .cmd shim), the controller spawns it with shell: false so Windows cmd.exe never truncates multi-line prompts or drops '--model'. agy.exe is installed in %LOCALAPPDATA%\\agy\\bin or ~/.gemini/bin: add that folder to PATH or doctor reports it as not installed. No auto-approve flag on purpose (agy has --dangerously-skip-permissions and --mode); scoped file edits worked without it.",
       "binary": "agy",
       "args": [
         "-p",
@@ -163,7 +163,7 @@
         "medium": "claude-sonnet-5-5-medium",
         "high": "claude-opus-5-5-high"
       },
-      "note": "When this engine stops on its usage limit (or its daily cap), the same agent retries ONCE on the named engine, on the model of the same tier. Only if you allowed that engine (node .harness/engines.mjs). A retry never switches again, so there are no loops. Remove an entry to turn it off."
+      "note": "When this engine stops on its usage limit (or its daily cap), the same agent retries on the named partner engine on the model of the same tier. If that partner model is itself out of quota (and not at a local daily cap), it steps down once to the partner engine's own native tier model so two empty models never loop. Only if you allowed that engine (node .harness/engines.mjs). Remove an entry to turn it off."
     },
     "codex": {
       "engine": "antigravity",

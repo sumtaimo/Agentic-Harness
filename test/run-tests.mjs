@@ -2069,6 +2069,43 @@ await test('quota fallback chain: A → B when A is out; if B is out too it stop
   assert(shipped.claude?.engine === 'antigravity' && shipped.codex?.engine === 'antigravity' && shipped.antigravity?.engine === 'claude', JSON.stringify(shipped));
 });
 
+await test('quota fallback step-down: primary 5-hour limit → partner fallback model out of quota → steps down once to partner native tier model (skipped on dailyCap)', () => {
+  const d = sandbox();
+  const limA = path.join(d, 'lim-a.mjs');
+  fs.writeFileSync(limA, "process.stdin.resume();process.stdin.on('end',()=>{process.stdout.write(JSON.stringify({type:'result',is_error:true,result:\"You've hit your 5-hour limit\"}));process.exit(1);});");
+  const partner = path.join(d, 'partner.mjs');
+  fs.writeFileSync(partner, `import { pathToFileURL } from 'node:url';
+if (process.argv.includes('MODEL=fb-fast')) {
+  process.stdin.resume();
+  process.stdin.on('end', () => { process.stderr.write('error: Individual quota reached (RESOURCE_EXHAUSTED)\\n'); process.exit(3); });
+} else {
+  await import(pathToFileURL(${JSON.stringify(MOCK)}).href);
+}`);
+  const baseMock = json(path.join(d, '.harness', 'config.json')).profiles.mock;
+  withProfiles(d, {
+    a: { verified: true, binary: process.execPath, args: [limA], promptVia: 'stdin', allowedTools: [], modelArgs: ['MODEL={model}'], models: { fast: 'a-fast', medium: 'a-mid', high: 'a-high' } },
+    b: { ...baseMock, args: [partner, 'ALLOWED={allowedTools}', 'DENIED={disallowedTools}'], modelArgs: ['MODEL={model}'], models: { fast: 'b-native-fast', medium: 'b-native-mid', high: 'b-native-high' } }
+  });
+  const f = path.join(d, '.harness', 'config.json'); const c = json(f);
+  c.quotaFallback = {
+    a: { engine: 'b', models: { fast: 'fb-fast', medium: 'fb-mid', high: 'fb-high' } },
+    b: { engine: 'a', models: { fast: 'a-fast', medium: 'a-mid', high: 'a-high' } }
+  };
+  fs.writeFileSync(f, JSON.stringify(c, null, 2));
+  drop(d, { id: 'sd1', title: 'step-down', engine: 'a', verifyCmd: existsCheck('ok.txt'), subtasks: [{ id: 'w', engine: 'a', targetFiles: ['ok.txt'], prompt: 'WRITE ok.txt yes' }] });
+  runOnce(d);
+  assert(stateOf(d).phase === '4_COMMITTED' && fs.existsSync(path.join(d, 'ok.txt')), `step-down must commit: ${stateOf(d).lastGateStatus}`);
+  assert(modelArg(d, 'w') === 'b-native-fast', `must step down to b native tier model: ${modelArg(d, 'w')}`);
+  const usage = log(d).filter((e) => e.phase === 'AGENT_USAGE');
+  assert(usage.map((e) => `${e.engine}:${e.model}:${e.ok}`).join() === 'a:a-fast:false,b:fb-fast:false,b:b-native-fast:true', JSON.stringify(usage));
+  // If b hits its own dailyCap instead of a CLI quota error, it must NOT step down onto b again.
+  c.dailyLimits = { b: { calls: 2 } };
+  fs.writeFileSync(f, JSON.stringify(c, null, 2));
+  drop(d, { id: 'sd2', title: 'cap-no-step-down', engine: 'a', verifyCmd: PASS, subtasks: [{ id: 'w2', engine: 'a', targetFiles: ['no.txt'], prompt: 'WRITE no.txt no' }] });
+  runOnce(d);
+  assert(stateOf(d).phase === 'REJECTED' && log(d).some((e) => e.phase === 'DAILY_LIMIT' && e.engine === 'b'), `dailyCap on partner must not step down: ${stateOf(d).lastGateStatus}`);
+});
+
 await test('one owner per file: a file-type scope (src/**/*.test.*) wins over a folder scope (src/**); the shipped team gives colocated tests to QA', () => {
   const leads = [{ id: 'dev', scope: ['src/**'] }, { id: 'qa', scope: ['tests/**', 'src/**/*.test.*'] }];
   const owners = (f) => leads.filter((l) => gov.leadOwns(l, f, leads)).map((l) => l.id).join();

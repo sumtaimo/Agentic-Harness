@@ -52,11 +52,16 @@ Each tier maps to one model per engine in `.harness/config.json`; `node .harness
 
 ## Saving quota: reroute, daily caps, usage report
 
-- **Out of quota → another tool.** When a tool stops on its usage limit (or its daily cap), the same agent retries once
+- **Out of quota → another tool.** When a tool stops on its usage limit (or its daily cap), the same agent retries
   on another tool you allowed, on the same tier: claude → agy (Antigravity's Claude models), codex → agy, agy → claude.
-  It switches at most once, so two empty tools never loop. The live feed shows `⇄ codex usage limit → continuing on
-  antigravity`; the log has `QUOTA_FALLBACK`. Tested on 2026-11-14 with a real Codex usage limit: agy finished the task.
-  Set in `config.json` → `quotaFallback`; remove an entry to turn it off.
+  If the partner's mapped model is itself out of quota (and the partner has not hit a local daily cap), the controller
+  steps down once to the partner engine's own native tier model; it never switches back to an already-tried engine, so
+  two empty tools never loop. The live feed shows `⇄ <engine> usage limit → continuing on <target>`; the log has
+  `QUOTA_FALLBACK`. Tested on 2026-11-14 with a real Codex usage limit (`agy` finished the task), and re-verified on
+  2026-11-16 on Windows 11 / Node 24 (`claude` 2.1.323 + `agy` 1.5.8) with a real Claude 5-hour usage limit AND a real
+  Antigravity partner-model quota limit: `claude` → `antigravity` partner model → stepped down automatically to
+  `antigravity`'s native tier model and finished (`COMMITTED`) on Cycle 1. Set in `config.json` → `quotaFallback`; remove
+  an entry to turn it off.
 - **Daily caps.** `config.json` → `dailyLimits`, per engine: `calls`, `tokens` (engines that report them, e.g. Claude)
   and `usd`. The template ships with **antigravity: 80 calls/day** and **claude: $5 or 60 calls/day** (whichever comes
   first); change or remove them there. When a cap is reached the agent is not started (`DAILY_LIMIT`);
@@ -135,14 +140,14 @@ succeeds. Today `claude` and `antigravity` are `"verified": true`.
 | Profile | Configured now | Status |
 |---|---|---|
 | `claude` | binary `claude`, `-p`, prompt on stdin | verified |
-| `antigravity` | binary `agy`, args `-p {prompt}` (prompt as argument), no auto-approve | verified on Windows 11 / Node 24 with `agy` 1.5.8 (2026-11-14): a scoped file task ran, the real check passed and the job was COMMITTED, also with a 3,049-character goal; all three model tiers passed real runs |
+| `antigravity` | binary `agy`, args `-p {prompt}` (prompt as argument), no auto-approve | verified on Windows 11 / Node 24 with `agy` 1.5.8 (2026-11-14; re-verified 2026-11-16): a scoped file task ran on Cycle 1 (`shell: false`, multi-line prompt and `--model` preserved), the real check passed and the job was COMMITTED, also with a 3,049-character goal; all three model tiers and live quota-fallback step-down passed real runs |
 | `codex` | binary `codex`, args `exec --sandbox workspace-write -`, prompt on stdin, `--model` + reasoning effort | partly verified with codex-cli 0.169.0 (2026-11-14): flags, model and effort accepted (`approval: never`, `sandbox: workspace-write`); a full task has not completed yet, so not marked verified |
 
 Notes for Antigravity:
 
-- `agy.exe` lives in `~/.gemini/bin`, which is not on PATH by default. Add that folder to PATH, or doctor reports `agy` as not installed.
+- `agy.exe` lives in `%LOCALAPPDATA%\agy\bin` or `~/.gemini/bin`, which may not be on PATH by default. Add that folder to PATH, or doctor reports `agy` as not installed.
 - `-p` is an alias of `--print`. `agy` does NOT read the prompt from stdin when `-p` is empty (`error: empty prompt`), so the prompt is passed as an argument.
-- Windows limit: a command line is at most 32,767 characters (8,191 through `cmd.exe`, which `.cmd` shims use). 3,049 characters worked; a much longer prompt can still fail.
+- Because `agy.exe` is a native `.exe` (not a `.cmd` shim), the controller spawns it with `shell: false` on Windows so `cmd.exe` never truncates multi-line prompts or drops `--model`. Windows `CreateProcess` still has a 32,767-character command-line limit (8,191 through `cmd.exe`, which `.cmd` shims use); 3,049 characters worked, while a much longer prompt can still fail.
 - `agy` has no auto-approve flag in the profile on purpose (it has `--dangerously-skip-permissions` and `--mode`). Scoped file edits worked without it.
 
 To fix a profile: run `<binary> --help`, propose the change to the owner, then edit

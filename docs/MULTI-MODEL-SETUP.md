@@ -28,7 +28,7 @@ and do not put API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) in this project.
 | Engine | Install (see the tool's own docs) | Log in once |
 |---|---|---|
 | `claude` | Claude Code | run `claude` in a terminal and log in with your subscription |
-| `antigravity` | Antigravity; its terminal command is `agy` (`agy.exe` in `~/.gemini/bin`; add it to PATH) | log in through the Antigravity app with your Google account |
+| `antigravity` | Antigravity; its terminal command is `agy` (`agy.exe` in `%LOCALAPPDATA%\agy\bin` or `~/.gemini/bin`; add it to PATH) | log in through the Antigravity app with your Google account |
 | `codex` | OpenAI Codex CLI | run `codex` (or `codex login`) and sign in |
 
 Install only the tools you have a subscription for. **One engine is enough**: the harness then gives that
@@ -39,7 +39,7 @@ engine every role.
 Run these yourself in a terminal, one at a time. Each one is read-only.
 
 1. **Is it on your PATH?** Windows: `where claude`. macOS/Linux: `which claude`. Do the same for `agy` and `codex`.
-   **Put `agy` on your PATH (once).** `agy.exe` is installed in `~/.gemini/bin`, which is not on PATH by default.
+   **Put `agy` on your PATH (once).** `agy.exe` is installed in `%LOCALAPPDATA%\agy\bin` (or `~/.gemini/bin`), which may not be on PATH by default.
    Windows (PowerShell, adds it for your user only), then open a NEW terminal:
    ```powershell
    [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ";$HOME\.gemini\bin", 'User')
