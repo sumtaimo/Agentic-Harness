@@ -50,7 +50,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import readline from 'node:readline/promises';
 import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable, detectEngines, compatibleModelFor, aiUsageSince, usageLine, usageTodayLine, quotaWarnings, formatQuotaWarning, MODEL_TIERS } from './lib/common.mjs';
 import { askEngineConsent } from './lib/consent.mjs';
@@ -173,6 +173,14 @@ if (cwdArg !== undefined) {
     process.exit(1);
   }
   workRoot = realWork;
+  // --cwd is for finishing a task inside ITS worktree: only a worktree of this same git repository is accepted. Any other
+  // folder (Documents, another project) would let file-editing agents run where this project's rules do not apply.
+  const gitCommon = (dir) => { try { return fs.realpathSync.native(path.resolve(dir, execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim())).toLowerCase(); } catch { return null; } };
+  const here = gitCommon(ROOT); const there = gitCommon(workRoot);
+  if (!isSameDir(workRoot, ROOT) && (!here || !there || here !== there)) {
+    console.error(`Refusing --cwd ${workRoot}: it is not a git worktree of this project. --cwd only accepts a worktree of the same repository (see: git worktree list).`);
+    process.exit(1);
+  }
 }
 const hasExternalCwd = !isSameDir(workRoot, ROOT);
 if (hasExternalCwd && branch) {

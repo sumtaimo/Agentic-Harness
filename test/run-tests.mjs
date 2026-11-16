@@ -2261,6 +2261,50 @@ await test('new roles: lead-ux owns only style files (one owner per file stays t
   assert(/4b\. \*\*Review/.test(fs.readFileSync(path.join(REPO, '.claude', 'commands', 'harness', 'run.md'), 'utf8')), '/harness:run has the review step');
 });
 
+await test('dashboard security: a request with a foreign Host (DNS rebinding) is refused 403; 127.0.0.1 and localhost work; the page carries a strict CSP and cannot be framed', async () => {
+  const d = sandbox();
+  const srv = await startUiProcess(d);
+  try {
+    const http = await import('node:http');
+    const port = new URL(srv.url).port;
+    const get = (hostHeader, p = '/api/status') => new Promise((resolve, reject) => {
+      const rq = http.request({ host: '127.0.0.1', port, path: p, method: 'GET', headers: hostHeader === null ? {} : { Host: hostHeader } }, (rs) => { let b = ''; rs.on('data', (c) => { b += c; }); rs.on('end', () => resolve({ status: rs.statusCode, headers: rs.headers, body: b })); });
+      rq.on('error', reject); rq.end();
+    });
+    for (const evil of ['evil.example.com', `evil.example.com:${port}`, '127.0.0.1.evil.com', `127.0.0.1:${Number(port) + 1}`, 'localhost']) {
+      const r = await get(evil);
+      assert(r.status === 403 && !/"root"/.test(r.body), `Host "${evil}" must be refused (got ${r.status})`);
+    }
+    // no Host header at all (HTTP/1.0): also refused. Node adds a Host by itself, so this one goes over a raw socket
+    const net = await import('node:net');
+    const raw = await new Promise((resolve, reject) => { const c = net.connect(Number(port), '127.0.0.1', () => c.write('GET /api/status HTTP/1.0\r\n\r\n')); let b = ''; c.on('data', (x) => { b += x; }); c.on('end', () => resolve(b)); c.on('error', reject); });
+    assert(/^HTTP\/1\.[01] 403/.test(raw) && !/"root"/.test(raw), `a request without Host must be refused: ${raw.slice(0, 60)}`);
+    for (const ok of [`127.0.0.1:${port}`, `localhost:${port}`, `LOCALHOST:${port}`]) assert((await get(ok)).status === 200, `Host ${ok} must work`);
+    const page = await get(`127.0.0.1:${port}`, '/');
+    assert(page.status === 200 && /default-src 'none'/.test(page.headers['content-security-policy'] || '') && /connect-src 'self'/.test(page.headers['content-security-policy']) && page.headers['x-frame-options'] === 'DENY', JSON.stringify(page.headers));
+  } finally { srv.stop ? await srv.stop() : srv.child?.kill(); }
+});
+
+await test('checkpoint never commits secrets: .env, keys and credentials stay un-committed in the worktree (and are reported); normal files and .env.example are committed', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-cpsecret-'));
+  const main = path.join(base, 'main'); fs.cpSync(sandbox(), main, { recursive: true });
+  const G = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  G(main, 'init', '-q', '-b', 'lab'); G(main, 'add', '-A'); G(main, 'commit', '-q', '-m', 'one');
+  const S = (cwd, ...a) => node(cwd, ['.harness/sessions.mjs', ...a], { HARNESS_ROOT: cwd, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' });
+  assert(S(main, 'new', 'Secret test', '--type', 'task').status === 0, 'new');
+  const wt = path.join(base, 'wt'); G(main, 'worktree', 'add', '-q', '-b', 'claude/cps', wt, 'lab'); assert(S(wt, 'start', 'TASK-1').status === 0, 'start');
+  fs.mkdirSync(path.join(wt, 'config'), { recursive: true }); fs.mkdirSync(path.join(wt, 'src'), { recursive: true });
+  const secrets = ['.env.local', 'config/server.pem', 'credentials.json'];
+  for (const f of secrets) fs.writeFileSync(path.join(wt, f), 'TOP-SECRET\n');
+  fs.writeFileSync(path.join(wt, '.env.example'), 'KEY=\n'); fs.writeFileSync(path.join(wt, 'src', 'app.js'), 'export const x = 1;\n');
+  const cp = S(main, 'checkpoint', 'TASK-1');
+  assert(cp.status === 0 && /committed 2 WIP file\(s\)/.test(cp.stdout) && /HELD BACK/.test(cp.stdout), cp.stdout + cp.stderr);
+  const inCommit = G(wt, 'show', '--name-only', '--format=', 'HEAD').split('\n');
+  assert(inCommit.includes('src/app.js') && inCommit.includes('.env.example') && !secrets.some((f) => inCommit.includes(f)), `the WIP commit must hold no secret: ${inCommit.join(', ')}`);
+  assert(secrets.every((f) => fs.existsSync(path.join(wt, f)) && fs.readFileSync(path.join(wt, f), 'utf8') === 'TOP-SECRET\n'), 'the held-back files must stay untouched in the worktree');
+  assert(/\.env\.local/.test(JSON.stringify(JSON.parse(S(main, 'board', '--json').stdout).tasks[0].lastCheckpoint.heldBack)), 'the board records what was held back');
+});
+
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
   const d = sandbox();
   for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch', 'sessions', 'start', 'hook-session', 'ui']) { // daemon --help once started the controller
@@ -2627,7 +2671,7 @@ await test('hook-session.mjs --brief: prints 4-8 concise lines in idle and busy 
 
 await test('v1.0.13 packaging: VS Code tasks + backlogId input, npm start & ui scripts, and install.mjs merges & fingerprints start.mjs and ui.mjs', () => {
   const pkg = json(path.join(REPO, 'package.json'));
-  assert(pkg.version === '1.0.13' && pkg.scripts.start === 'node .harness/start.mjs' && pkg.scripts.ui === 'node .harness/ui.mjs', JSON.stringify(pkg.scripts));
+  assert(/^\d+\.\d+\.\d+$/.test(pkg.version) && pkg.scripts.start === 'node .harness/start.mjs' && pkg.scripts.ui === 'node .harness/ui.mjs', JSON.stringify(pkg.scripts));
   const tasksCfg = json(path.join(REPO, '.vscode', 'tasks.json'));
   const expectedLabels = [
     'Harness: Start Menu (interactive)',
@@ -2650,7 +2694,7 @@ await test('v1.0.13 packaging: VS Code tasks + backlogId input, npm start & ui s
   const inst = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj], { encoding: 'utf8' });
   assert(inst.status === 0 && /node \.harness\/start\.mjs/.test(inst.stdout), inst.stdout + inst.stderr);
   const manifest = json(path.join(proj, '.harness', 'MANIFEST.json'));
-  assert(manifest.version === '1.0.13' && Boolean(manifest.files['.harness/start.mjs']) && Boolean(manifest.files['.harness/ui.mjs']), 'start.mjs/ui.mjs not fingerprinted in MANIFEST');
+  assert(manifest.version === pkg.version && Boolean(manifest.files['.harness/start.mjs']) && Boolean(manifest.files['.harness/ui.mjs']), 'start.mjs/ui.mjs not fingerprinted in MANIFEST');
   const merged = json(path.join(proj, '.vscode', 'tasks.json'));
   assert(merged.tasks.some((t) => t.label === 'My Custom Build'), 'custom task lost');
   assert(!merged.tasks.some((t) => t.label === 'Harness: old stale task'), 'old Harness task not replaced');
@@ -2792,6 +2836,12 @@ await test('dispatch.mjs --cwd: runs single-worker, --auto-plan, useGitWorktrees
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', path.join(main, 'package.json'), '--goal', 'x']).status === 1, 'file path rejected for --cwd');
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', path.join(main, '.harness'), '--goal', 'x']).status === 1, '.harness rejected for --cwd');
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', path.join(main, '.git'), '--goal', 'x']).status === 1, '.git rejected for --cwd');
+  // a folder that exists but is not a worktree of THIS repository (another project, Documents...) is refused
+  const stranger = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-stranger-')); G(stranger, 'init', '-q', '-b', 'lab');
+  const rs = node(main, ['.harness/dispatch.mjs', '--cwd', stranger, '--goal', 'x']);
+  assert(rs.status === 1 && /not a git worktree of this project/.test(rs.stderr), `--cwd outside the project must be refused: ${rs.stderr}`);
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-plain-'));
+  assert(node(main, ['.harness/dispatch.mjs', '--cwd', plain, '--goal', 'x']).status === 1, 'a plain folder is refused too');
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--branch', 'uat', '--goal', 'x']).status === 1, '--cwd + --branch rejected');
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--resume-visible', '--goal', 'x']).status === 1, '--cwd + --resume-visible rejected');
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--goal', 'x'], { HARNESS_WORKER: '1' }).status === 2, 'worker --cwd rejected');

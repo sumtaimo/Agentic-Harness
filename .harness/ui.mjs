@@ -715,8 +715,23 @@ function sendJson(res, statusCode, payload, headOnly = false, extraHeaders = {})
   res.end(headOnly ? undefined : body);
 }
 
+/**
+ * Only the dashboard's own address may talk to it. A web page you visit can point its own domain at 127.0.0.1
+ * ("DNS rebinding") and then read this local server; its requests carry THAT domain in the Host header, so any Host
+ * other than 127.0.0.1 / localhost / [::1] on this server's port is refused.
+ */
+export function hostAllowed(hostHeader, port) {
+  const h = String(hostHeader || '').toLowerCase().trim();
+  if (!h || !port) return false;
+  return [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`].includes(h);
+}
+
 export function createUiHandler() {
   return (req, res) => {
+    if (!hostAllowed(req.headers && req.headers.host, req.socket && req.socket.localPort)) {
+      sendJson(res, 403, { error: 'Forbidden: this dashboard only answers requests addressed to 127.0.0.1 or localhost' });
+      return;
+    }
     const method = String(req.method || 'GET').toUpperCase();
     if (method !== 'GET' && method !== 'HEAD') {
       sendJson(res, 405, { error: 'Read-only dashboard: only GET and HEAD requests are allowed' }, false, { Allow: 'GET, HEAD' });
@@ -736,7 +751,12 @@ export function createUiHandler() {
         'Content-Type': 'text/html; charset=utf-8',
         'Content-Length': Buffer.byteLength(DASHBOARD_HTML),
         'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff'
+        'X-Content-Type-Options': 'nosniff',
+        // The page loads nothing from outside, may not be framed, and may only call its own address.
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+        'X-Frame-Options': 'DENY',
+        'Cross-Origin-Resource-Policy': 'same-origin',
+        'Referrer-Policy': 'no-referrer'
       });
       res.end(headOnly ? undefined : DASHBOARD_HTML);
       return;

@@ -191,18 +191,25 @@ function createWipCheckpoint(b, t, wt, msg) {
     ? []
     : ['-c', 'user.name=Agentic Harness', '-c', 'user.email=harness@localhost'];
   git(['add', '-A'], wt.path);
+  // A WIP commit must never carry secrets: a cloud session pushes this branch, and --no-verify below skips any
+  // secret-scanning hook. Files that look like secrets (and are not git-ignored) are un-staged and stay in the worktree.
+  const heldBack = (gitOk(['diff', '--cached', '--name-only', '-z'], wt.path) || '').split('\0').filter((f) => f && SECRET_FILE.test(f.replace(/\\/g, '/')));
+  if (heldBack.length) git(['reset', '-q', 'HEAD', '--', ...heldBack], wt.path);
   const staged = gitOk(['diff', '--cached', '--name-only'], wt.path);
   if (!staged) {
     const tip = gitOk(['rev-parse', '--verify', '-q', `refs/heads/${t.branch}`], wt.path) || null;
-    return { committed: false, tip, files: [] };
+    return { committed: false, tip, files: [], heldBack };
   }
   git([...identity, 'commit', '--no-verify', '-q', '-m', `${t.id}: wip - ${msg}`, '-m', `Harness-Wip: ${t.id}`], wt.path);
   const tip = git(['rev-parse', 'HEAD'], wt.path);
-  const files = dirty.map((d) => d.file);
-  t.lastCheckpoint = { at: new Date().toISOString(), tip, message: msg, files };
+  const files = dirty.map((d) => d.file).filter((f) => !heldBack.includes(f));
+  t.lastCheckpoint = { at: new Date().toISOString(), tip, message: msg, files, ...(heldBack.length ? { heldBack } : {}) };
   save(b);
-  return { committed: true, tip, files };
+  return { committed: true, tip, files, heldBack };
 }
+
+/** File names that look like secrets: never put in an automatic WIP commit (.env.example and the like are fine). */
+const SECRET_FILE = /(^|\/)(\.env(\.(?!example$|sample$|template$|dist$)[^/]*)?|[^/]*\.(pem|key|p12|pfx|keystore|jks)|id_(rsa|dsa|ecdsa|ed25519)|credentials(\.[^/]*)?|secrets?(\.[^/]*)?|\.npmrc|\.netrc|\.pypirc)$/i;
 
 function brief(t) {
   return [
@@ -414,8 +421,10 @@ switch (cmd) {
     const cp = createWipCheckpoint(b, t, wt, msg);
     if (!cp.committed) {
       console.log(`CHECKPOINT ${t.id}: worktree is already clean at ${wt.path}${cp.tip ? ` (tip ${cp.tip.slice(0, 7)})` : ''}.`);
+      if (cp.heldBack?.length) console.log(`  HELD BACK (looks like a secret, not committed, still in the worktree): ${cp.heldBack.join(', ')}`);
     } else {
       console.log(`CHECKPOINT ${t.id}: committed ${cp.files.length} WIP file(s) on ${t.branch} @ ${cp.tip.slice(0, 7)} in ${wt.path}`);
+      if (cp.heldBack?.length) console.log(`  HELD BACK (looks like a secret, not committed, still in the worktree): ${cp.heldBack.join(', ')}`);
       if (hasRemote()) console.log(`  Only in a cloud session: git push -u origin ${t.branch}`);
     }
     break;
