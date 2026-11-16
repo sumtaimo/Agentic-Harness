@@ -79,9 +79,20 @@ function watchedRuleFiles() {
   return out;
 }
 
-function snapshot() {
-  const { files: projectFiles, total } = listProjectFiles(ROOT, MAX_FILES);
-  if (total > MAX_FILES) die(`This project has ${total} files; the editor workflow can verify up to ${MAX_FILES}. Use the headless controller (node .harness/dispatch.mjs) for larger projects.`);
+function dirtyGitFiles() {
+  const r = spawnSync('git', ['status', '--porcelain', '-uall'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  if (r.status !== 0 || !r.stdout) return [];
+  return r.stdout.split('\n').map((l) => l.slice(3).split(' -> ').pop().trim()).filter((f) => f && !f.startsWith('.harness/'));
+}
+
+function snapshot(scope = []) {
+  let { files: projectFiles, total } = listProjectFiles(ROOT, MAX_FILES);
+  if (total > MAX_FILES && scope.length) {
+    const scoped = listProjectFiles(ROOT, total).files.filter((f) => inside(f, scope) || matchesAny(f, scope));
+    const merged = [...new Set([...scoped, ...dirtyGitFiles()])];
+    if (merged.length <= MAX_FILES) { projectFiles = merged; total = merged.length; }
+  }
+  if (total > MAX_FILES) die(`This project has ${total} files; the editor workflow can verify up to ${MAX_FILES} (pass --files to scope a smaller folder, or use node .harness/dispatch.mjs for larger runs).`);
   const files = [...new Set([...projectFiles, ...watchedRuleFiles()])];
   const map = {}; let bytes = 0;
   for (const f of files) {
@@ -152,14 +163,16 @@ function reportText(run, v) {
   L.push(`HARNESS REPORT — run ${run.id} — ${head}${visual ? ' — NEEDS A VISUAL REVIEW' : ''}`, '', `Task:    ${run.title}`, `Source:  ${run.source === 'backlog' ? `backlog item ${run.backlogId}` : 'goal given by the human'}${run.autonomous ? ' (autonomous mode)' : ''}`,
     `Flow:    controller → orchestrator (editor session) → ${run.assignments.map((a) => a.lead).join(', ')} → controller verify → this report`, '');
   L.push('What each agent did:');
+  const leads = run.leads || [];
   for (const a of run.assignments) {
-    const mine = v.changes.filter((f) => inside(f.replace(/^[+~-] /, ''), a.files));
+    const lead = leads.find((l) => l.id === a.lead);
+    const mine = v.changes.filter((f) => { const p = f.replace(/^[+~-] /, ''); return inside(p, a.files) && (!lead || !leads.length || leadOwns(lead, p, leads)); });
     L.push(`  • ${a.lead}: ${mine.length ? mine.join(', ') : 'no file changes'}${v.reports?.[a.lead] ? `\n      says: ${v.reports[a.lead]}` : ''}`);
   }
   L.push('', `Check:   ${run.check.cmd}  (${run.check.source})`, `         → ${v.checkResult}`);
   if (v.testsChangedAfterFail?.length) L.push(`  ⚠ After the last failed check, ${v.testsChangedAfterFail.length} test file(s) were changed (${v.testsChangedAfterFail.slice(0, 4).join(', ')}${v.testsChangedAfterFail.length > 4 ? ', …' : ''}).`,
     '    Look at that diff: the tests must have been FIXED, not weakened until they passed.');
-  if (v.testsDeleted?.length) L.push(`  ⚠ ${v.testsDeleted.length} test file(s) that existed before this run were DELETED (${v.testsDeleted.slice(0, 4).join(', ')}${v.testsDeleted.length > 4 ? ', …' : ''}). Make sure that was intended.`);
+  if (v.testsDeleted?.length) L.push(`  ⚠ ${v.testsDeleted.length} test file(s) that existed before this run were DELETED (${v.testsDeleted.slice(0, 4).join(', ')}${v.testsDeleted.slice(0, 4).length < v.testsDeleted.length ? ', …' : ''}). Make sure that was intended.`);
   if (v.skipped) L.push(`  ⚠ ${v.skipped} test(s) were SKIPPED. A skipped test proves nothing: find out why (for example a missing browser) before trusting this result.`);
   if (visual) L.push('', `Visual review needed: ${v.uiFiles.length} UI file(s) changed (${v.uiFiles.slice(0, 6).join(', ')}${v.uiFiles.length > 6 ? ', …' : ''}).`,
     `  Passing tests do not prove a page looks right${v.browserCheck ? '' : ', and this check never opened a browser (a broken page script would still pass)'}.`,
@@ -221,7 +234,8 @@ function brief() {
   if (!check.real && (auto || charter.requireRealCheck) && auto) die('This project has no real check (add a "test" script to package.json or a "verifyCmd" to the task). Autonomous work needs one (charter requireRealCheck).', 1);
 
   const id = `V-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 5)}`;
-  const snap = snapshot();
+  const scopeGlobs = userAllowed.length ? userAllowed : charter.allowedPaths;
+  const snap = snapshot(scopeGlobs);
   const rollbackAvailable = snap.bytes <= MAX_BASELINE_BYTES;
   const baseDirRel = path.join('.harness', 'visible', id, 'baseline');
   // secrets (.env*) are compared by hash only: they are never copied into the baseline
@@ -339,11 +353,18 @@ function verify() {
   if (!['DELEGATED', 'FAILED'].includes(run.status)) die(`Run ${run.id} is ${run.status}; it can only be verified after assign (DELEGATED) or after a failed verify.`);
   let reports = {}; try { reports = flag('--reports') ? JSON.parse(flag('--reports')) : {}; } catch { /* ignore a malformed summary */ }
   run.cycles += 1;
-  const cur = snapshot().map;
+  const scopeGlobs = run.userAllowed?.length ? run.userAllowed : (run.charter?.allowedPaths || []);
+  const snap = () => snapshot(scopeGlobs).map;
+  const cur = snap();
   const d = diffSnapshots(run.baseline.files, cur);
   const violations = []; const violating = [];
+  const leads = run.leads || [];
   for (const f of d.all) {
-    const owner = run.assignments.find((a) => inside(f, a.files));
+    const owner = run.assignments.find((a) => {
+      if (!inside(f, a.files)) return false;
+      const lead = leads.find((l) => l.id === a.lead);
+      return !lead || !leads.length || leadOwns(lead, f, leads);
+    });
     if (!owner) { violations.push(`${f}: not inside any lead's assigned files`); violating.push(f); continue; }
     if (matchesAny(f, run.charter.forbiddenPaths)) { violations.push(`${f}: forbidden by the charter`); violating.push(f); continue; }
     if (run.autonomous && run.charter.allowedPaths.length && !matchesAny(f, run.charter.allowedPaths)) { violations.push(`${f}: outside the charter's allowed paths`); violating.push(f); }
@@ -354,11 +375,11 @@ function verify() {
   let check = { ok: false, text: 'not run (fix the violations first)' };
   let checkCreated = [];
   if (!violations.length) {
-    const before = snapshot().map;
+    const before = snap();
     check = runCheck(run);
     // files the check itself wrote (a build output such as dist/) that git does not ignore: they would be committed
     // by accident, and the next verify would count them as out-of-scope changes
-    checkCreated = Object.keys(snapshot().map).filter((f) => !(f in before));
+    checkCreated = Object.keys(snap()).filter((f) => !(f in before));
   }
   const uiFiles = d.all.filter((f) => !violating.includes(f) && UI_FILE.test(f));
   // Quality signals a passing check cannot give by itself:
@@ -370,10 +391,10 @@ function verify() {
   const maxCycles = config.maxCycles ?? 3;
   const halted = !passed && run.cycles >= maxCycles;
   let autoRolledBack = false;
-  if (halted) { const r = restoreFiles(run, diffSnapshots(run.baseline.files, snapshot().map).all); autoRolledBack = r.failed.length === 0 && run.baseline.rollbackAvailable; }
+  if (halted) { const r = restoreFiles(run, diffSnapshots(run.baseline.files, snap()).all); autoRolledBack = r.failed.length === 0 && run.baseline.rollbackAvailable; }
   run.status = passed ? 'PASSED' : halted ? 'HALTED_HITL_REQUIRED' : 'FAILED';
   run.lastVerify = { at: new Date().toISOString(), passed, violations, reverted, check: check.text };
-  if (passed || halted) delete run.cycleSnapshot; else run.cycleSnapshot = snapshot().map; // what the project looked like when this check failed
+  if (passed || halted) delete run.cycleSnapshot; else run.cycleSnapshot = snap(); // what the project looked like when this check failed
   run.lastVerify.skipped = check.skipped || 0; run.lastVerify.needsVisualReview = passed && uiFiles.length > 0;
   const v = { status: run.status, changes, violations, reverted, revertFailed, checkResult: check.text, reports, autoRolledBack, skipped: check.skipped || 0, uiFiles, checkCreated, browserCheck: BROWSER_CHECK.test(run.check.cmd), testsChangedAfterFail, testsDeleted };
   const text = reportText(run, v);
@@ -401,7 +422,8 @@ function verify() {
 
 function rollback() {
   const run = loadRun(positional[0]);
-  const d = diffSnapshots(run.baseline.files, snapshot().map);
+  const scopeGlobs = run.userAllowed?.length ? run.userAllowed : (run.charter?.allowedPaths || []);
+  const d = diffSnapshots(run.baseline.files, snapshot(scopeGlobs).map);
   const r = restoreFiles(run, d.all);
   if (r.failed.length || !run.baseline.rollbackAvailable) die(`Could not restore everything (${run.baseline.rollbackAvailable ? `${r.failed.length} file(s) failed` : 'no baseline copy was kept: the project was too large'}). Use git to undo: git status / git checkout -- <file>.`);
   run.status = 'ROLLED_BACK'; run.rolledBackAt = new Date().toISOString(); saveRun(run);

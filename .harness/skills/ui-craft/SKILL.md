@@ -2,7 +2,7 @@
 name: ui-craft
 description: Makes UI changes consistent, accessible and token-based, so the product looks like one system.
 roles: ["UX_DESIGNER"]
-allowedTools: ["Read", "Edit", "Write"]
+allowedTools: ["Read", "Edit", "Write", "Bash(git status)"]
 keywords: ["ui", "ux", "style", "css", "design", "layout", "theme", "responsive", "accessibility"]
 autoApply: false
 ---

@@ -265,7 +265,7 @@ export function HarnessMachine({ labels, bare = false, className = '' }: { label
     { at: [-25, 46, 30], text: labels.orchestrator, side: 'l', dy: -14 },
     { at: [49, 12, 24.2], text: 'lead-ba', side: 'r', dy: -22 },
     { at: [24, 46, 18], text: 'lead-dev', side: 'l', dy: 6 },
-    { at: [56, 80, 14], text: 'lead-qa', side: 'l', dy: 14 },
+    { at: [56, 80, 14], text: 'lead-qa · lead-ux', side: 'l', dy: 14 },
     { at: [89, 20, 49.2], text: labels.gate, side: 'r', dy: -12 },
     { at: [150, 48, 2], text: labels.report, side: 'r', dy: 2 },
     { at: [110, 92, 4], text: labels.rules, side: 'r', dy: 16 },
@@ -290,7 +290,7 @@ export function HarnessMachine({ labels, bare = false, className = '' }: { label
   const [bx, by] = proj([76, 0, -7.2]);
   const [gx2, gy2] = proj([89.5, 93, 46.2]);
   return (
-    <svg viewBox={vb.map((v) => v.toFixed(1)).join(' ')} className={`h-auto w-full ${className}`} role="img" aria-label={`${labels.orchestrator} → lead-ba · lead-dev · lead-qa → ${labels.gate} → ${labels.report}`}
+    <svg viewBox={vb.map((v) => v.toFixed(1)).join(' ')} className={`h-auto w-full ${className}`} role="img" aria-label={`${labels.orchestrator} → lead-ba · lead-dev · lead-qa · lead-ux → ${labels.gate} → ${labels.report}`}
       strokeLinejoin="round" strokeLinecap="round" style={{ ['--ax' as string]: `${ax.toFixed(1)}px`, ['--ay' as string]: `${ay.toFixed(1)}px`, ['--bx' as string]: `${bx.toFixed(1)}px`, ['--by' as string]: `${by.toFixed(1)}px` }}>
       {TOWER.map((s, i) => <Solid key={`t${i}`} s={s} />)}
       {PLINTH.map((s, i) => <Solid key={`p${i}`} s={s} />)}

@@ -2199,9 +2199,15 @@ await test('session board: Session A runs child tasks (max 4) with clear names; 
 });
 
 await test('new roles: lead-ux owns only style files (one owner per file stays true); reviewer and security are read-only agents; the leads fit the orchestrator budget', () => {
-  const roles = gov.loadRoles(); const team = json(path.join(REPO, '.harness', 'team.json')); const L = team.members.filter((m) => m.level === 'lead');
+  const roles = gov.loadRoles(); const skills = gov.loadSkills(); const team = json(path.join(REPO, '.harness', 'team.json')); const L = team.members.filter((m) => m.level === 'lead');
   const owner = (f) => L.filter((l) => gov.leadOwns(l, f, L)).map((l) => l.id).join();
   assert(owner('src/app.css') === 'lead-ux' && owner('src/ui/theme.scss') === 'lead-ux' && owner('src/app.tsx') === 'lead-dev' && owner('src/app.test.tsx') === 'lead-qa' && owner('docs/x.md') === 'lead-ba', 'one owner per file');
+  assert(gov.ROLE_JOB.UX_DESIGNER === 'code' && gov.ROLE_JOB.REVIEWER === 'qa' && gov.ROLE_JOB.SECURITY === 'qa' && gov.ROLE_JOB.COORDINATOR === 'plan', 'ROLE_JOB covers all 8 roles');
+  const uxTools = gov.computeAllowedTools(roles.UX_DESIGNER, [skills['ui-craft']], ['src/a.css']);
+  assert(uxTools.includes('Bash(git status)'), `ui-craft must preserve Bash(git status) for UX_DESIGNER, got: ${uxTools}`);
+  assert(gov.isFileTypeGlob('src/tokens.css') === true && gov.isFileTypeGlob('src/') === false && gov.isFileTypeGlob('src/**') === false, 'exact file paths count as file-type globs');
+  const del = gov.validateDelegation({ assignments: [{ lead: 'lead-dev', files: ['src/'], goal: 'code' }, { lead: 'lead-ux', files: ['src/app.css'], goal: 'style' }] }, { leads: L, delegable: new Set(L.map((l) => l.id)) });
+  assert(del.assignments.length === 2, 'folder lead-dev + file-type lead-ux must not collide');
   for (const r of ['REVIEWER', 'SECURITY', 'COORDINATOR']) assert(roles[r] && (roles[r].writablePaths || []).length === 0 && !(roles[r].allowedTools || []).some((t) => /^(Edit|Write)/.test(t)), `${r} must be read-only`);
   assert(roles.UX_DESIGNER.writablePaths.every((p) => /\.(css|scss|less)$/.test(p)), 'the UX role writes style files only');
   for (const a of ['reviewer', 'security']) { const t = fs.readFileSync(path.join(REPO, '.claude', 'agents', `${a}.md`), 'utf8'); assert(/^tools: Read, Glob, Grep, Bash$/m.test(t) && /Read only/.test(t), `${a} agent must have no Edit/Write tool`); }

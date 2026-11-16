@@ -46,8 +46,10 @@ export function matchesAny(p, globs = []) {
  * src/button.test.tsx belongs to the QA lead, src/button.tsx to the dev lead, and every file still has ONE owner.
  */
 export function isFileTypeGlob(g) {
-  const last = String(g).replace(/\\/g, '/').split('/').pop();
-  return last !== '**' && last !== '*' && last.includes('*');
+  const s = String(g).trim().replace(/\\/g, '/');
+  if (!s || s.endsWith('/')) return false;
+  const last = s.split('/').pop();
+  return Boolean(last) && last !== '**' && last !== '*' && (last.includes('*') || last.includes('.'));
 }
 
 /** Does this lead own file f, given all leads (file-type scopes of other leads take precedence over folder scopes)? */
@@ -358,7 +360,7 @@ export function describeMember(m, roles) {
 // ───────────────────────────── engine routing (team.mjs auto-assign) ─────────────────────────────
 
 /** Which job each role does, for engine routing. Roles not listed here count as coding. */
-export const ROLE_JOB = { PO_ARCHITECT: 'plan', BA_ANALYST: 'plan', DEV_ENGINEER: 'code', QA_AUDITOR: 'qa' };
+export const ROLE_JOB = { PO_ARCHITECT: 'plan', COORDINATOR: 'plan', BA_ANALYST: 'plan', DEV_ENGINEER: 'code', UX_DESIGNER: 'code', QA_AUDITOR: 'qa', REVIEWER: 'qa', SECURITY: 'qa' };
 
 /**
  * Pick an engine for each job from the engines that are actually usable. Pure: no probing, no files.
@@ -412,7 +414,14 @@ export function validateDelegation(plan, { leads, delegable, userAllowed = [] })
       if (!leadOwns(lead, f, leads)) throw new Error(`file "${f}" is outside lead "${lead.id}"'s scope (${lead.scope.join(', ')})${withinAll(f, lead.scope) ? '; a more specific scope of another lead owns it (e.g. test files belong to the QA lead)' : ''}.`);
       if (userAllowed.length && !inside(strip(f), userAllowed)) throw new Error(`file "${f}" is outside the files the user allowed (${userAllowed.join(', ')}).`);
       for (const [other, by] of claimed) {
-        if (by !== lead.id && (strip(f) === strip(other) || strip(f).startsWith(`${strip(other)}/`) || strip(other).startsWith(`${strip(f)}/`))) throw new Error(`Swarm Lock Collision: "${f}" (${lead.id}) overlaps "${other}" (${by}).`);
+        if (by !== lead.id && (strip(f) === strip(other) || strip(f).startsWith(`${strip(other)}/`) || strip(other).startsWith(`${strip(f)}/`))) {
+          if (f.endsWith('/') !== other.endsWith('/')) {
+            const file = f.endsWith('/') ? other : f;
+            const dirLead = leads.find((l) => l.id === (f.endsWith('/') ? lead.id : by));
+            if (dirLead && !leadOwns(dirLead, file, leads)) continue;
+          }
+          throw new Error(`Swarm Lock Collision: "${f}" (${lead.id}) overlaps "${other}" (${by}).`);
+        }
       }
       claimed.push([f, lead.id]);
     }

@@ -142,7 +142,7 @@ The rules, in short (the controller enforces them; do not try to get around them
 1. `node .harness/visible.mjs brief …` first: it gives you the task, the check, the team and each lead's scope.
 2. You only **plan and delegate**: give every file to exactly one lead, inside that lead's scope, and put the exact shared names/formats in
    the interface contract. `visible.mjs assign <run> '<json>'` validates it before anything starts (3 bad tries escalate to the user).
-3. Start **all** assigned named agents (`lead-ba`, `lead-dev`, `lead-qa`; subagent_type = the lead's id) **in one message** so they run in
+3. Start **all** assigned named agents (`lead-ba`, `lead-dev`, `lead-qa`, `lead-ux`; subagent_type = the lead's id) **in one message** so they run in
    parallel and the user sees them work. Use the prompts `assign` prints. **Never do their work or edit project files yourself.**
 4. When they report, run `visible.mjs verify <run> --reports '{…}'`. The controller reverts every change outside the assignments, runs the
    real check and writes the report. Send failures back to the responsible lead (3 cycles at most).
@@ -152,6 +152,8 @@ Details and limits: `docs/WORKFLOW.md`. The named agents are generated from `.ha
 
 If you are one of the named agents (`lead-…`): change only the files in your assignment, follow the interface contract, check your work with
 `npm test` or `node --test` only, and finish with a short honest report.
+
+In **Antigravity, Cursor, or VS Code** (where `/harness:run` is not a built-in slash command): for any multi-file or multi-role task, follow the same controller protocol (`node .harness/visible.mjs brief` → `assign` → spawn parallel Lead/Worker subagents with disjoint file scopes using your editor's subagent tool → `verify`), or run the headless controller below when subagents are unavailable.
 
 The sections below describe the headless controller (background / terminal / unattended runs).
 

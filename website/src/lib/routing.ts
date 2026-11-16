@@ -43,8 +43,8 @@ export function planEngineRouting(available: Engine[]): Routing | null {
   return { plan, code, qa };
 }
 
-export type Role = 'PO_ARCHITECT' | 'BA_ANALYST' | 'DEV_ENGINEER' | 'QA_AUDITOR';
-export const ROLE_JOB: Record<Role, Job> = { PO_ARCHITECT: 'plan', BA_ANALYST: 'plan', DEV_ENGINEER: 'code', QA_AUDITOR: 'qa' };
+export type Role = 'PO_ARCHITECT' | 'COORDINATOR' | 'BA_ANALYST' | 'DEV_ENGINEER' | 'UX_DESIGNER' | 'QA_AUDITOR' | 'REVIEWER' | 'SECURITY';
+export const ROLE_JOB: Record<Role, Job> = { PO_ARCHITECT: 'plan', COORDINATOR: 'plan', BA_ANALYST: 'plan', DEV_ENGINEER: 'code', UX_DESIGNER: 'code', QA_AUDITOR: 'qa', REVIEWER: 'qa', SECURITY: 'qa' };
 
 const DOC_FILE = /\.(md|mdx|markdown|txt|rst|adoc)$/i;
 

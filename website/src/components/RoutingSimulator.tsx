@@ -9,16 +9,18 @@ import { fmt, type Dict } from '../data/i18n';
 
 interface RowDef { who: string; role: Role; input: TierInput }
 
-// Row i's description is t.models.rows[i]. Rows 0-3 plan, rows 4-7 are example workers.
+// Row i's description is t.models.rows[i]. Rows 0-4 plan, rows 5-9 are example workers.
 const ROWS: RowDef[] = [
   { who: 'orchestrator', role: 'PO_ARCHITECT', input: { kind: 'plan', level: 'orchestrator', role: 'PO_ARCHITECT' } },
   { who: 'lead-ba', role: 'BA_ANALYST', input: { kind: 'plan', level: 'lead', role: 'BA_ANALYST' } },
   { who: 'lead-dev', role: 'DEV_ENGINEER', input: { kind: 'plan', level: 'lead', role: 'DEV_ENGINEER' } },
   { who: 'lead-qa', role: 'QA_AUDITOR', input: { kind: 'plan', level: 'lead', role: 'QA_AUDITOR' } },
+  { who: 'lead-ux', role: 'UX_DESIGNER', input: { kind: 'plan', level: 'lead', role: 'UX_DESIGNER' } },
   { who: 'ba worker', role: 'BA_ANALYST', input: { kind: 'work', role: 'BA_ANALYST', targetFiles: ['docs/feature.md'], promptChars: 400 } },
   { who: 'dev worker', role: 'DEV_ENGINEER', input: { kind: 'work', role: 'DEV_ENGINEER', targetFiles: ['src/util.js'], promptChars: 300 } },
   { who: 'dev worker', role: 'DEV_ENGINEER', input: { kind: 'work', role: 'DEV_ENGINEER', targetFiles: ['src/api.js', 'src/db.js', 'src/routes.js'], promptChars: 1800 } },
   { who: 'qa worker', role: 'QA_AUDITOR', input: { kind: 'work', role: 'QA_AUDITOR', targetFiles: ['tests/api.test.js'], promptChars: 500 } },
+  { who: 'ux worker', role: 'UX_DESIGNER', input: { kind: 'work', role: 'UX_DESIGNER', targetFiles: ['src/styles.css', 'src/theme.css'], promptChars: 900 } },
 ];
 
 function reasonText(r: Reason, t: Dict): string {
@@ -81,7 +83,7 @@ export function RoutingSimulator({ n }: { n: number }) {
                   const { tier, reasons } = chooseModelTier({ ...r.input, cycle: worker ? cycle : 1 });
                   const model = modelFor(engine, tier);
                   return (
-                    <tr key={i} className={`border-b border-line last:border-0 ${i === 4 ? 'border-t border-t-line-strong' : ''}`}>
+                    <tr key={i} className={`border-b border-line last:border-0 ${i === 5 ? 'border-t border-t-line-strong' : ''}`}>
                       <td className="py-2.5 pr-3 align-top">
                         <div className="font-mono text-[12.5px] text-fg">{r.who}</div>
                         <div className="text-[12px] text-faint">{s.rows[i]}</div>
