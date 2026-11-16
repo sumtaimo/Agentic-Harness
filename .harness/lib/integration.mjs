@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { isSecretFile } from './common.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -91,11 +92,12 @@ export async function ensureWorkerWorktree({ wtPath, branch, baseSha, root, link
 export async function commitScoped({ wtPath, targets, inScope, message, root, ignore = [] }) {
   const raw = await gitRaw(['status', '--porcelain', '-uall', '-z'], wtPath);
   const entries = raw.split('\0').filter(Boolean);
-  const kept = []; const discarded = [];
+  const kept = []; const discarded = []; const secrets = [];
   for (let i = 0; i < entries.length; i++) {
     const status = entries[i].slice(0, 2); const file = entries[i].slice(3);
     if (status.startsWith('R')) i++;
     if (file.startsWith('.harness/') || ignore.some((n) => file === n || file.startsWith(`${n}/`))) continue;
+    if (isSecretFile(file)) { secrets.push(file); continue; }
     (inScope(file, targets) ? kept : discarded).push(file);
   }
   let sha = null;
@@ -104,10 +106,10 @@ export async function commitScoped({ wtPath, targets, inScope, message, root, ig
     await git([...(await identityArgs(root)), 'commit', '--no-verify', '-q', '-m', message], wtPath);
     sha = await git(['rev-parse', 'HEAD'], wtPath);
   }
-  // Drop out-of-scope edits so they can never reach the integration branch.
+  // Drop out-of-scope edits and any scratch secret files so they can never reach the integration branch.
   await git(['reset', '-q', '--hard', 'HEAD'], wtPath);
   await git(['clean', '-q', '-fd', ...ignore.flatMap((n) => ['-e', n])], wtPath);
-  return { kept, discarded, sha };
+  return { kept, discarded, secrets, sha };
 }
 
 /** (Re)build the candidate: integration worktree detached at the branch tip, then merge workers. */

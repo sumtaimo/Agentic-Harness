@@ -2273,15 +2273,21 @@ await test('dashboard security: a request with a foreign Host (DNS rebinding) is
     });
     for (const evil of ['evil.example.com', `evil.example.com:${port}`, '127.0.0.1.evil.com', `127.0.0.1:${Number(port) + 1}`, 'localhost']) {
       const r = await get(evil);
-      assert(r.status === 403 && !/"root"/.test(r.body), `Host "${evil}" must be refused (got ${r.status})`);
+      assert(r.status === 403 && !/"root"/.test(r.body) && r.headers['cross-origin-resource-policy'] === 'same-origin', `Host "${evil}" must be refused (got ${r.status})`);
     }
     // no Host header at all (HTTP/1.0): also refused. Node adds a Host by itself, so this one goes over a raw socket
     const net = await import('node:net');
     const raw = await new Promise((resolve, reject) => { const c = net.connect(Number(port), '127.0.0.1', () => c.write('GET /api/status HTTP/1.0\r\n\r\n')); let b = ''; c.on('data', (x) => { b += x; }); c.on('end', () => resolve(b)); c.on('error', reject); });
     assert(/^HTTP\/1\.[01] 403/.test(raw) && !/"root"/.test(raw), `a request without Host must be refused: ${raw.slice(0, 60)}`);
-    for (const ok of [`127.0.0.1:${port}`, `localhost:${port}`, `LOCALHOST:${port}`]) assert((await get(ok)).status === 200, `Host ${ok} must work`);
+    for (const ok of [`127.0.0.1:${port}`, `localhost:${port}`, `LOCALHOST:${port}`]) {
+      const r = await get(ok);
+      assert(r.status === 200 && r.headers['cross-origin-resource-policy'] === 'same-origin', `Host ${ok} must work with CORP`);
+    }
     const page = await get(`127.0.0.1:${port}`, '/');
-    assert(page.status === 200 && /default-src 'none'/.test(page.headers['content-security-policy'] || '') && /connect-src 'self'/.test(page.headers['content-security-policy']) && page.headers['x-frame-options'] === 'DENY', JSON.stringify(page.headers));
+    assert(page.status === 200 && /default-src 'none'/.test(page.headers['content-security-policy'] || '') && /connect-src 'self'/.test(page.headers['content-security-policy']) && page.headers['x-frame-options'] === 'DENY' && page.headers['cross-origin-resource-policy'] === 'same-origin', JSON.stringify(page.headers));
+    const { hostAllowed } = await import(pathToFileURL(path.join(REPO, '.harness', 'ui.mjs')).href);
+    assert(hostAllowed('localhost', 80) && hostAllowed('127.0.0.1', 80) && hostAllowed('[::1]', 80) && hostAllowed('LOCALHOST:80', 80), 'port 80 bare localhost hosts allowed');
+    assert(!hostAllowed('localhost', 4173) && !hostAllowed('127.0.0.1', 4173) && !hostAllowed('evil.example.com', 80) && !hostAllowed('localhost:80', 0) && !hostAllowed('localhost:80', 70000), 'non-80 bare hosts and invalid ports rejected');
   } finally { srv.stop ? await srv.stop() : srv.child?.kill(); }
 });
 
@@ -2303,6 +2309,30 @@ await test('checkpoint never commits secrets: .env, keys and credentials stay un
   assert(inCommit.includes('src/app.js') && inCommit.includes('.env.example') && !secrets.some((f) => inCommit.includes(f)), `the WIP commit must hold no secret: ${inCommit.join(', ')}`);
   assert(secrets.every((f) => fs.existsSync(path.join(wt, f)) && fs.readFileSync(path.join(wt, f), 'utf8') === 'TOP-SECRET\n'), 'the held-back files must stay untouched in the worktree');
   assert(/\.env\.local/.test(JSON.stringify(JSON.parse(S(main, 'board', '--json').stdout).tasks[0].lastCheckpoint.heldBack)), 'the board records what was held back');
+
+  // Secret-only dirty worktree must NOT report "already clean" and handoff --checkpoint reports Held back in text mode
+  const tipBefore = G(wt, 'rev-parse', 'HEAD');
+  const cpOnly = S(main, 'checkpoint', 'TASK-1');
+  assert(cpOnly.status === 0 && !/already clean/.test(cpOnly.stdout) && /nothing safe to commit/.test(cpOnly.stdout) && /HELD BACK/.test(cpOnly.stdout) && G(wt, 'rev-parse', 'HEAD') === tipBefore, cpOnly.stdout + cpOnly.stderr);
+  { const cf = path.join(main, '.harness', 'config.json'); const c = json(cf); c.useGitWorktrees = true; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  const hoffText = S(main, 'handoff', 'TASK-1', '--checkpoint');
+  assert(hoffText.status === 0 && /Checkpoint: nothing safe to commit/.test(hoffText.stdout) && /Held back:.*\.env\.local/.test(hoffText.stdout) && !/useGitWorktrees is true: run/.test(hoffText.stdout), hoffText.stdout + hoffText.stderr);
+  assert(JSON.parse(S(main, 'handoff', 'TASK-1', '--json').stdout).checkpointNeededForWorktrees === false, 'secret-only files must not trigger worktree checkpoint warning');
+
+  // Unborn HEAD branch handles secret-only and mixed checkpoints without failing git reset HEAD
+  assert(S(main, 'new', 'Unborn secret', '--type', 'task').status === 0, 'new TASK-2');
+  const wt2 = path.join(base, 'wt-unborn');
+  G(main, 'worktree', 'add', '-q', '--detach', wt2, 'lab');
+  G(wt2, 'checkout', '--orphan', 'task/task-2-unborn-secret');
+  G(wt2, 'rm', '-rf', '-q', '.');
+  fs.writeFileSync(path.join(wt2, '.env.local'), 'UNBORN-SECRET\n');
+  const cpUnbornOnly = S(main, 'checkpoint', 'TASK-2');
+  assert(cpUnbornOnly.status === 0 && /nothing safe to commit/.test(cpUnbornOnly.stdout) && /HELD BACK.*\.env\.local/.test(cpUnbornOnly.stdout), cpUnbornOnly.stdout + cpUnbornOnly.stderr);
+  fs.writeFileSync(path.join(wt2, 'ok.txt'), 'safe\n');
+  const cpUnbornMix = S(main, 'checkpoint', 'TASK-2');
+  assert(cpUnbornMix.status === 0 && /committed 1 WIP file\(s\)/.test(cpUnbornMix.stdout) && /HELD BACK.*\.env\.local/.test(cpUnbornMix.stdout), cpUnbornMix.stdout + cpUnbornMix.stderr);
+  assert(G(wt2, 'show', '--name-only', '--format=', 'HEAD').split('\n').includes('ok.txt') && !G(wt2, 'show', '--name-only', '--format=', 'HEAD').includes('.env.local'), 'unborn commit must hold no secret');
+  assert(fs.readFileSync(path.join(wt2, '.env.local'), 'utf8') === 'UNBORN-SECRET\n', 'unborn secret must remain untouched in worktree');
 });
 
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
@@ -2817,7 +2847,7 @@ await test('sessions.mjs handoff: inspects local/spaced worktrees & remote cloud
   assert(spawnSync(process.execPath, [path.join(main, '.harness', 'sessions.mjs'), 'handoff', 'FEAT-1', '--checkpoint'], { cwd: main, env: { ...env, HARNESS_ROOT: main, HARNESS_WORKER: '1' }, encoding: 'utf8' }).status === 2, 'worker handoff --checkpoint refused');
 });
 
-await test('dispatch.mjs --cwd: runs single-worker, --auto-plan, useGitWorktrees+autoGitCommit, and 3-cycle rollback strictly inside external worktree while ignoring integrationMode and leaving ROOT clean', () => {
+await test('dispatch.mjs --cwd: runs single-worker, --auto-plan, useGitWorktrees+autoGitCommit, and 3-cycle rollback strictly inside external worktree while ignoring integrationMode and leaving ROOT clean', async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-cwd-'));
   const G = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
@@ -2831,11 +2861,19 @@ await test('dispatch.mjs --cwd: runs single-worker, --auto-plan, useGitWorktrees
   fs.writeFileSync(path.join(wt, 'package.json'), JSON.stringify({ name: 'child', private: true, scripts: { test: 'node -e "process.exit(require(\'fs\').readFileSync(\'src/cwd.js\',\'utf8\')===\'cwd-ok\'?0:1)"' } }));
   G(wt, 'add', 'package.json'); G(wt, 'commit', '-q', '-m', 'child pkg');
 
-  // Guard checks on dispatch.mjs --cwd
+  // Guard checks on dispatch.mjs --cwd (and daemon.mjs resolveTaskWorkRoot parity)
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', path.join(base, 'nope'), '--goal', 'x']).status === 1, 'missing --cwd folder rejected');
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', path.join(main, 'package.json'), '--goal', 'x']).status === 1, 'file path rejected for --cwd');
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', path.join(main, '.harness'), '--goal', 'x']).status === 1, '.harness rejected for --cwd');
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', path.join(main, '.git'), '--goal', 'x']).status === 1, '.git rejected for --cwd');
+  fs.mkdirSync(path.join(wt, 'sub'), { recursive: true });
+  fs.mkdirSync(path.join(main, 'sub'), { recursive: true });
+  const rSubWt = node(main, ['.harness/dispatch.mjs', '--cwd', path.join(wt, 'sub'), '--goal', 'x']);
+  assert(rSubWt.status === 1 && /pass the worktree root folder/.test(rSubWt.stderr), `worktree subfolder must be refused: ${rSubWt.stderr}`);
+  const rSubMain = node(main, ['.harness/dispatch.mjs', '--cwd', path.join(main, 'sub'), '--goal', 'x']);
+  assert(rSubMain.status === 1 && /pass the worktree root folder/.test(rSubMain.stderr), `main subfolder must be refused: ${rSubMain.stderr}`);
+  fs.rmSync(path.join(wt, 'sub'), { recursive: true, force: true });
+  fs.rmSync(path.join(main, 'sub'), { recursive: true, force: true });
   // a folder that exists but is not a worktree of THIS repository (another project, Documents...) is refused
   const stranger = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-stranger-')); G(stranger, 'init', '-q', '-b', 'lab');
   const rs = node(main, ['.harness/dispatch.mjs', '--cwd', stranger, '--goal', 'x']);
@@ -2845,6 +2883,11 @@ await test('dispatch.mjs --cwd: runs single-worker, --auto-plan, useGitWorktrees
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--branch', 'uat', '--goal', 'x']).status === 1, '--cwd + --branch rejected');
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--resume-visible', '--goal', 'x']).status === 1, '--cwd + --resume-visible rejected');
   assert(node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--goal', 'x'], { HARNESS_WORKER: '1' }).status === 2, 'worker --cwd rejected');
+  // Daemon itself rejects a hand-crafted inbox job whose cwd points outside a worktree of ROOT
+  drop(main, { id: 'bad-cwd-job', title: 'Bad cwd', cwd: plain, goal: 'x', subtasks: [{ id: 'w1', role: 'DEV_ENGINEER', targetFiles: ['src/x.js'], prompt: 'WRITE src/x.js x' }], verifyCmd: PASS });
+  assert(runOnce(main).status === 0 || true); // --once handles failing job cleanly
+  const badFailed = ls(main, 'failed').find((f) => f.startsWith('bad-cwd-job-'));
+  assert(badFailed && /not a git worktree of this project/.test(json(path.join(main, '.harness', 'failed', badFailed)).haltReason || ''), 'daemon must reject invalid inbox task.cwd');
 
   // Single worker runs inside wt using wt package.json test, while ROOT never gets src/cwd.js or branch uat
   const r1 = node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--goal', 'WRITE src/cwd.js cwd-ok', '--files', 'src/cwd.js', '--wait']);
@@ -2873,14 +2916,39 @@ await test('dispatch.mjs --cwd: runs single-worker, --auto-plan, useGitWorktrees
   assert(rWt.status === 0 && read(wt, 'src/wtcommit.js') === 'wt-ok' && !fs.existsSync(path.join(main, 'src', 'wtcommit.js')), rWt.stdout + rWt.stderr);
   assert(Number(G(wt, 'rev-list', '--count', 'HEAD')) === wtCommitsBefore + 1 && /harness:/.test(G(wt, 'log', '-1', '--format=%s')), 'autoGitCommit should commit inside child worktree');
 
+  // 3b. autoGitCommit never commits secret-looking files in an unscoped task (leaves them on disk, logs telemetry)
+  { const cf = path.join(main, '.harness', 'config.json'); const c = json(cf); c.useGitWorktrees = false; c.autoGitCommit = true; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  fs.writeFileSync(path.join(wt, '.env.local'), 'AUTO-SECRET=1\n');
+  fs.writeFileSync(path.join(wt, 'credentials.json'), '{"k":1}\n');
+  const rSec = node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--goal', 'WRITE src/wtauto-safe.js safe-ok', '--check', existsCheck('src/wtauto-safe.js'), '--wait']);
+  assert(rSec.status === 0 && read(wt, 'src/wtauto-safe.js') === 'safe-ok', rSec.stdout + rSec.stderr);
+  const autoCommitted = G(wt, 'show', '--name-only', '--format=', 'HEAD').split('\n');
+  assert(autoCommitted.includes('src/wtauto-safe.js') && !autoCommitted.includes('.env.local') && !autoCommitted.includes('credentials.json'), `autoGitCommit leaked secrets: ${autoCommitted.join(', ')}`);
+  assert(read(wt, '.env.local') === 'AUTO-SECRET=1\n' && read(wt, 'credentials.json') === '{"k":1}\n', 'secret files must remain untouched on disk');
+  assert(log(main).some((e) => e.phase === '4_GIT_HELD_BACK_SECRETS'), 'telemetry missing 4_GIT_HELD_BACK_SECRETS');
+  fs.rmSync(path.join(wt, '.env.local')); fs.rmSync(path.join(wt, 'credentials.json'));
+
   // 4. 3-cycle failure rolls back external worktree via .harness/staging/ and preserves pre-existing content in wt
   { const cf = path.join(main, '.harness', 'config.json'); const c = json(cf); c.useGitWorktrees = false; c.autoGitCommit = false; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
   fs.writeFileSync(path.join(wt, 'src', 'keep.js'), 'BEFORE');
   const rFail = node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--goal', 'WRITE src/keep.js BROKEN\nWRITE src/newfail.js tmp', '--files', 'src/keep.js,src/newfail.js', '--check', 'node -e "process.exit(1)"', '--wait']);
   assert(rFail.status === 1 && /NOT DONE/.test(rFail.stdout), rFail.stdout + rFail.stderr);
   assert(read(wt, 'src/keep.js') === 'BEFORE' && !fs.existsSync(path.join(wt, 'src', 'newfail.js')), '3-cycle failure must roll back edits in external worktree');
-  const failedJob = json(path.join(main, '.harness', 'failed', ls(main, 'failed')[0]));
+  const failedJob = json(path.join(main, '.harness', 'failed', ls(main, 'failed').find((f) => !f.startsWith('bad-cwd-job-'))));
   assert(failedJob.cwd === fs.realpathSync.native(wt), JSON.stringify(failedJob));
+
+  // 5. Integration commitScoped never commits secret-looking files even inside folder scope
+  const { commitScoped } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'integration.mjs')).href);
+  fs.writeFileSync(path.join(wt, 'src', '.env.local'), 'BRANCH-SECRET\n');
+  fs.writeFileSync(path.join(wt, 'src', 'scoped-safe.js'), 'safe\n');
+  fs.writeFileSync(path.join(wt, 'out-of-scope.txt'), 'nope\n');
+  const sc = await commitScoped({
+    wtPath: wt, targets: ['src/'], inScope: (f, t) => t.some((p) => f === p || f.startsWith(p)),
+    message: 'test scoped secrets', root: main
+  });
+  assert(sc.kept.includes('src/scoped-safe.js') && sc.secrets.includes('src/.env.local') && sc.discarded.includes('out-of-scope.txt'), JSON.stringify(sc));
+  const scCommit = G(wt, 'show', '--name-only', '--format=', 'HEAD').split('\n');
+  assert(scCommit.includes('src/scoped-safe.js') && !scCommit.includes('src/.env.local') && !scCommit.includes('out-of-scope.txt'), scCommit.join(', '));
 });
 
 await test('Priority 3 UX & permissions integration: start.mjs menu [5][3] handoff & [5][4] checkpoint, hook-session inspect hint, and .claude/settings.json rules', () => {

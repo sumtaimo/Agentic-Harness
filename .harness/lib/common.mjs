@@ -608,6 +608,55 @@ export function normalizeTarget(p) {
   return s.endsWith('/') ? `${base}/` : base;
 }
 
+/** File names that look like secrets: never put in an automatic commit (.env.example and the like are fine). */
+export const SECRET_FILE_RE = /(^|\/)(\.env(\.(?!example$|sample$|template$|dist$)[^/]*)?|[^/]*\.(pem|key|p12|pfx|keystore|jks)|id_(rsa|dsa|ecdsa|ed25519)|credentials(\.[^/]*)?|secrets?(\.[^/]*)?|\.npmrc|\.netrc|\.pypirc)$/i;
+export const isSecretFile = (file) => SECRET_FILE_RE.test(String(file || '').replace(/\\/g, '/'));
+
+export function realNorm(p) {
+  let r;
+  try { r = fs.realpathSync.native(p); } catch { r = path.resolve(p); }
+  return process.platform === 'win32' ? r.toLowerCase() : r;
+}
+export const isSameDir = (a, b) => realNorm(a) === realNorm(b);
+
+/** Validate an external --cwd / task.cwd folder: must exist as a directory outside .git/.harness and be a git worktree root of this same repository. */
+export function validateExternalWorkRoot(dir, root = ROOT, label = '--cwd') {
+  const fatalErr = (msg) => Object.assign(new Error(msg), { fatal: true });
+  const resolved = path.resolve(root, String(dir));
+  let st;
+  try { st = fs.statSync(resolved); } catch {
+    throw fatalErr(`${label} path is not a folder: ${resolved}`);
+  }
+  if (!st.isDirectory()) throw fatalErr(`${label} path is not a folder: ${resolved}`);
+  let realWork = resolved;
+  try { realWork = fs.realpathSync.native(resolved); } catch { /* resolved directory exists */ }
+  const blockedSeg = /(?:^|\/)\.(git|harness)(?:\/|$)/;
+  if (blockedSeg.test(resolved.replace(/\\/g, '/')) || blockedSeg.test(realWork.replace(/\\/g, '/'))) {
+    throw fatalErr(`Refusing ${label} inside .git or .harness: ${realWork}`);
+  }
+  if (!isSameDir(realWork, root)) {
+    const gitCommon = (d) => {
+      try {
+        const raw = execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: d, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+        return realNorm(path.resolve(d, raw));
+      } catch { return null; }
+    };
+    const gitTop = (d) => {
+      try {
+        return realNorm(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: d, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+      } catch { return null; }
+    };
+    const here = gitCommon(root); const there = gitCommon(realWork); const top = gitTop(realWork);
+    if (!here || !there || !isSameDir(here, there)) {
+      throw fatalErr(`Refusing ${label} ${realWork}: it is not a git worktree of this project. ${label} only accepts a worktree of the same repository (see: git worktree list).`);
+    }
+    if (!top || top !== realNorm(realWork)) {
+      throw fatalErr(`Refusing ${label} ${realWork}: pass the worktree root folder${top ? ` (${top})` : ''}, not a subfolder inside it.`);
+    }
+  }
+  return realWork;
+}
+
 // ───────────────────────────── Memory store ─────────────────────────────
 // Memory is plain Markdown so BOTH the harness and any editor AI can read/edit it.
 //   profile.md       — who the user is and how they like to work

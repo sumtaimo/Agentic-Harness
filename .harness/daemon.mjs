@@ -31,7 +31,7 @@ import { promisify } from 'node:util';
 import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd,
-  listProjectFiles, safeTarget, normalizeTarget,
+  listProjectFiles, safeTarget, normalizeTarget, isSecretFile, isSameDir, validateExternalWorkRoot,
   winQuote, winCommandLine, needsWinShell, MODEL_TIERS, chooseModelTier, resolveModel, compatibleModelFor, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
 } from './lib/common.mjs';
 helpIfAsked(import.meta.url); // "--help" prints the usage; it must never start the controller
@@ -65,28 +65,9 @@ let draining = false;
 let state = {};
 let lastFinished = null; // { autonomous, backlogId, title, ok } of the last job
 
-const realNorm = (p) => {
-  let r;
-  try { r = fs.realpathSync.native(p); } catch { r = path.resolve(p); }
-  return process.platform === 'win32' ? r.toLowerCase() : r;
-};
-const isSameDir = (a, b) => realNorm(a) === realNorm(b);
-
 function resolveTaskWorkRoot(task) {
   if (!task?.cwd) return ROOT;
-  const resolved = path.resolve(ROOT, String(task.cwd));
-  let st;
-  try { st = fs.statSync(resolved); } catch {
-    throw fatal(`Task cwd folder does not exist: ${resolved}`);
-  }
-  if (!st.isDirectory()) throw fatal(`Task cwd path is not a folder: ${resolved}`);
-  let realWork = resolved;
-  try { realWork = fs.realpathSync.native(resolved); } catch { /* resolved exists */ }
-  const blockedSeg = /(?:^|\/)\.(git|harness)(?:\/|$)/;
-  if (blockedSeg.test(resolved.replace(/\\/g, '/')) || blockedSeg.test(realWork.replace(/\\/g, '/'))) {
-    throw fatal(`Refusing task cwd inside .git or .harness: ${realWork}`);
-  }
-  return realWork;
+  return validateExternalWorkRoot(path.resolve(ROOT, String(task.cwd)), ROOT, 'task cwd');
 }
 
 // ───────────────────────────── state + telemetry ─────────────────────────────
@@ -1092,6 +1073,7 @@ async function runExecutorSwarm(plan, gitCtx = null) {
           message: `harness(${plan.taskId}): ${sub.resolvedRole ? `${sub.resolvedRole} ` : ''}${sub.id}\n\n${String(sub.prompt).slice(0, 400)}`
         });
         if (c.discarded.length) logTelemetry('2_SCOPE_VIOLATION', `Worker ${sub.id} changed files outside its scope; discarded before commit`, { worker: sub.id, blocked: c.discarded });
+        if (c.secrets?.length) logTelemetry('GIT_HELD_BACK_SECRETS', `Worker ${sub.id} touched secret-like file(s); held back before commit: ${c.secrets.join(', ')}`, { worker: sub.id, secrets: c.secrets });
         logTelemetry('GIT_WORKER_COMMIT', `${sub.id}: ${c.sha ? `committed ${c.kept.length} file(s) @ ${c.sha.slice(0, 8)}` : 'no in-scope changes'}`, { worker: sub.id, kept: c.kept, sha: c.sha });
         result.git = c;
       }
@@ -1163,6 +1145,13 @@ async function runCommitter(plan, task, taskFile, gitCtx = null, { archive = tru
     const scope = plan.subtasks.flatMap((s) => s.targetFiles);
     try {
       await execFileAsync('git', ['add', '-A', '--', ...(scope.length ? scope : ['.']), ':(exclude).harness'], { cwd: workRoot });
+      const { stdout: stagedZ } = await execFileAsync('git', ['diff', '--cached', '--name-only', '-z'], { cwd: workRoot });
+      const heldBack = (stagedZ || '').split('\0').filter((f) => f && isSecretFile(f));
+      if (heldBack.length) {
+        const hasHead = await execFileAsync('git', ['rev-parse', '--verify', '-q', 'HEAD'], { cwd: workRoot }).then(() => true, () => false);
+        await execFileAsync('git', hasHead ? ['reset', '-q', 'HEAD', '--', ...heldBack] : ['rm', '-r', '--cached', '-q', '--ignore-unmatch', '--', ...heldBack], { cwd: workRoot });
+        logTelemetry('4_GIT_HELD_BACK_SECRETS', `Held back secret-like file(s) from auto-commit: ${heldBack.join(', ')}`, { files: heldBack });
+      }
       const { stdout } = await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd: workRoot });
       if (stdout.trim()) {
         const hasEmail = await execFileAsync('git', ['config', 'user.email'], { cwd: workRoot }).then((r) => Boolean(r.stdout.trim()), () => false);
@@ -1170,6 +1159,7 @@ async function runCommitter(plan, task, taskFile, gitCtx = null, { archive = tru
         await execFileAsync('git', [...idArgs, 'commit', '-m', `harness: ${plan.title}`, '-m', `Task ${plan.taskId}; verified by: ${plan.verifyCmd}`], { cwd: workRoot });
         gitNote = ' + git commit';
       }
+      if (heldBack.length) gitNote += ` (${heldBack.length} secret file(s) held back)`;
     } catch (e) { logTelemetry('4_GIT_COMMIT_FAILED', e.message); gitNote = ' (git commit failed — see log)'; }
   }
   writeState({ phase: '4_COMMITTED', lastGateStatus: `COMMITTED: ${plan.taskId} verified & archived${gitNote}.` });

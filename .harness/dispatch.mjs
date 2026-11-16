@@ -50,9 +50,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import readline from 'node:readline/promises';
-import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable, detectEngines, compatibleModelFor, aiUsageSince, usageLine, usageTodayLine, quotaWarnings, formatQuotaWarning, MODEL_TIERS } from './lib/common.mjs';
+import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable, detectEngines, compatibleModelFor, aiUsageSince, usageLine, usageTodayLine, quotaWarnings, formatQuotaWarning, MODEL_TIERS, isSameDir, validateExternalWorkRoot } from './lib/common.mjs';
 import { askEngineConsent } from './lib/consent.mjs';
 import { loadTeam } from './lib/governance.mjs';
 import { RESUMABLE_STATUSES, VISIBLE_TERMINAL, editorDisplayName, listVisibleRuns, readVisibleRun, writeVisibleRun, inspectVisibleRun } from './lib/handoff.mjs';
@@ -61,13 +61,6 @@ if (process.env.HARNESS_WORKER === '1') {
   console.error('Refusing to dispatch from inside a harness worker (prevents agents spawning agents in a loop).');
   process.exit(2);
 }
-
-const realNorm = (p) => {
-  let r;
-  try { r = fs.realpathSync.native(p); } catch { r = path.resolve(p); }
-  return process.platform === 'win32' ? r.toLowerCase() : r;
-};
-const isSameDir = (a, b) => realNorm(a) === realNorm(b);
 
 const args = process.argv.slice(2);
 if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
@@ -155,30 +148,10 @@ if (engine && !config.profiles[engine]) {
 
 let workRoot = ROOT;
 if (cwdArg !== undefined) {
-  const resolved = path.resolve(cwdArg);
-  let st;
-  try { st = fs.statSync(resolved); } catch {
-    console.error(`--cwd folder does not exist: ${resolved}`);
-    process.exit(1);
-  }
-  if (!st.isDirectory()) {
-    console.error(`--cwd path is not a folder: ${resolved}`);
-    process.exit(1);
-  }
-  let realWork = resolved;
-  try { realWork = fs.realpathSync.native(resolved); } catch { /* resolved directory exists */ }
-  const blockedSeg = /(?:^|\/)\.(git|harness)(?:\/|$)/;
-  if (blockedSeg.test(resolved.replace(/\\/g, '/')) || blockedSeg.test(realWork.replace(/\\/g, '/'))) {
-    console.error(`Refusing --cwd inside .git or .harness: ${realWork}`);
-    process.exit(1);
-  }
-  workRoot = realWork;
-  // --cwd is for finishing a task inside ITS worktree: only a worktree of this same git repository is accepted. Any other
-  // folder (Documents, another project) would let file-editing agents run where this project's rules do not apply.
-  const gitCommon = (dir) => { try { return fs.realpathSync.native(path.resolve(dir, execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim())).toLowerCase(); } catch { return null; } };
-  const here = gitCommon(ROOT); const there = gitCommon(workRoot);
-  if (!isSameDir(workRoot, ROOT) && (!here || !there || here !== there)) {
-    console.error(`Refusing --cwd ${workRoot}: it is not a git worktree of this project. --cwd only accepts a worktree of the same repository (see: git worktree list).`);
+  try {
+    workRoot = validateExternalWorkRoot(path.resolve(cwdArg), ROOT, '--cwd');
+  } catch (err) {
+    console.error(err.message);
     process.exit(1);
   }
 }

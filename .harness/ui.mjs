@@ -710,6 +710,7 @@ function sendJson(res, statusCode, payload, headOnly = false, extraHeaders = {})
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
+    'Cross-Origin-Resource-Policy': 'same-origin',
     ...extraHeaders
   });
   res.end(headOnly ? undefined : body);
@@ -722,8 +723,11 @@ function sendJson(res, statusCode, payload, headOnly = false, extraHeaders = {})
  */
 export function hostAllowed(hostHeader, port) {
   const h = String(hostHeader || '').toLowerCase().trim();
-  if (!h || !port) return false;
-  return [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`].includes(h);
+  const p = Number(port);
+  if (!h || !Number.isInteger(p) || p <= 0 || p > 65535) return false;
+  const allowed = [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`];
+  if (p === 80) allowed.push('127.0.0.1', 'localhost', '[::1]');
+  return allowed.includes(h);
 }
 
 export function createUiHandler() {

@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { ROOT, loadConfig, readJsonSafe, atomicWriteJson, detectVerifyCmd, helpIfAsked } from './lib/common.mjs';
+import { ROOT, loadConfig, readJsonSafe, atomicWriteJson, detectVerifyCmd, helpIfAsked, isSecretFile } from './lib/common.mjs';
 import { usableEngines } from './lib/handoff.mjs';
 helpIfAsked(import.meta.url);
 
@@ -193,8 +193,11 @@ function createWipCheckpoint(b, t, wt, msg) {
   git(['add', '-A'], wt.path);
   // A WIP commit must never carry secrets: a cloud session pushes this branch, and --no-verify below skips any
   // secret-scanning hook. Files that look like secrets (and are not git-ignored) are un-staged and stay in the worktree.
-  const heldBack = (gitOk(['diff', '--cached', '--name-only', '-z'], wt.path) || '').split('\0').filter((f) => f && SECRET_FILE.test(f.replace(/\\/g, '/')));
-  if (heldBack.length) git(['reset', '-q', 'HEAD', '--', ...heldBack], wt.path);
+  const heldBack = (gitOk(['diff', '--cached', '--name-only', '-z'], wt.path) || '').split('\0').filter((f) => f && isSecretFile(f));
+  if (heldBack.length) {
+    if (gitOk(['rev-parse', '--verify', '-q', 'HEAD'], wt.path)) git(['reset', '-q', 'HEAD', '--', ...heldBack], wt.path);
+    else git(['rm', '-r', '--cached', '-q', '--ignore-unmatch', '--', ...heldBack], wt.path);
+  }
   const staged = gitOk(['diff', '--cached', '--name-only'], wt.path);
   if (!staged) {
     const tip = gitOk(['rev-parse', '--verify', '-q', `refs/heads/${t.branch}`], wt.path) || null;
@@ -207,9 +210,6 @@ function createWipCheckpoint(b, t, wt, msg) {
   save(b);
   return { committed: true, tip, files, heldBack };
 }
-
-/** File names that look like secrets: never put in an automatic WIP commit (.env.example and the like are fine). */
-const SECRET_FILE = /(^|\/)(\.env(\.(?!example$|sample$|template$|dist$)[^/]*)?|[^/]*\.(pem|key|p12|pfx|keystore|jks)|id_(rsa|dsa|ecdsa|ed25519)|credentials(\.[^/]*)?|secrets?(\.[^/]*)?|\.npmrc|\.netrc|\.pypirc)$/i;
 
 function brief(t) {
   return [
@@ -243,7 +243,7 @@ function inspectSessionHandoff(t, { checkpointResult = null } = {}) {
   })();
   const readyHeadlessEngines = usableEngines(config);
   const suggestedEngine = readyHeadlessEngines[0] || null;
-  const checkpointNeededForWorktrees = Boolean(wt && uncommitted.length > 0 && config.useGitWorktrees);
+  const checkpointNeededForWorktrees = Boolean(wt && uncommitted.some((u) => !isSecretFile(u.file)) && config.useGitWorktrees);
   const engArg = suggestedEngine ? ` --engine ${suggestedEngine}` : '';
   const resumeCmd = (isOpen(t) && wt)
     ? `node .harness/dispatch.mjs --cwd ${quoteShell(wt.path)} --goal "Finish ${t.id} (${t.title}) on branch ${t.branch}"${engArg} --wait`
@@ -263,7 +263,7 @@ function inspectSessionHandoff(t, { checkpointResult = null } = {}) {
     uncommitted.length
       ? `Uncommitted files in worktree (${uncommitted.length}): ${uncommitted.slice(0, 15).map((u) => `${u.status} ${u.file}`).join(', ')}${uncommitted.length > 15 ? ', …' : ''}`
       : 'Uncommitted files in worktree: clean',
-    ...(t.lastCheckpoint ? [`Last WIP checkpoint: ${t.lastCheckpoint.tip.slice(0, 7)} (${t.lastCheckpoint.at}) — ${t.lastCheckpoint.message}`] : []),
+    ...(t.lastCheckpoint ? [`Last WIP checkpoint: ${t.lastCheckpoint.tip ? t.lastCheckpoint.tip.slice(0, 7) : 'none'} (${t.lastCheckpoint.at}) — ${t.lastCheckpoint.message}`] : []),
     ...(t.checkFailed ? ['', `Last merge/check failure (${t.checkFailed.at}): ${t.checkFailed.reason}`] : []),
     '',
     'How to finish cleanly:',
@@ -313,7 +313,14 @@ function formatSessionHandoffText(d) {
     `Worktree: ${d.worktree || 'none locally (remote/cloud or not started)'}`,
     `Status:   ${d.note}`,
     `Check:    ${d.check.cmd}  (${d.check.source})`,
-    ...(d.checkpointResult?.committed ? [`Checkpoint: committed ${d.checkpointResult.files.length} WIP file(s) @ ${d.checkpointResult.tip.slice(0, 7)}`] : []),
+    ...(d.checkpointResult?.committed
+      ? [`Checkpoint: committed ${d.checkpointResult.files.length} WIP file(s) @ ${d.checkpointResult.tip.slice(0, 7)}`]
+      : d.checkpointResult?.heldBack?.length
+        ? ['Checkpoint: nothing safe to commit — only secret-looking file(s) changed']
+        : []),
+    ...(d.checkpointResult?.heldBack?.length
+      ? [`Held back:  ${d.checkpointResult.heldBack.join(', ')} (looks like a secret, not committed, still in the worktree)`]
+      : []),
     ...(d.lastCheckFailure ? [`Last fail: ${d.lastCheckFailure.reason} (${d.lastCheckFailure.at})`] : [])
   ];
 
@@ -420,8 +427,12 @@ switch (cmd) {
     const msg = String(flag('--message', '--msg') || '').trim() || 'checkpoint';
     const cp = createWipCheckpoint(b, t, wt, msg);
     if (!cp.committed) {
-      console.log(`CHECKPOINT ${t.id}: worktree is already clean at ${wt.path}${cp.tip ? ` (tip ${cp.tip.slice(0, 7)})` : ''}.`);
-      if (cp.heldBack?.length) console.log(`  HELD BACK (looks like a secret, not committed, still in the worktree): ${cp.heldBack.join(', ')}`);
+      if (cp.heldBack?.length) {
+        console.log(`CHECKPOINT ${t.id}: nothing safe to commit at ${wt.path}${cp.tip ? ` (tip ${cp.tip.slice(0, 7)})` : ''} — only secret-looking file(s) changed.`);
+        console.log(`  HELD BACK (looks like a secret, not committed, still in the worktree): ${cp.heldBack.join(', ')}`);
+      } else {
+        console.log(`CHECKPOINT ${t.id}: worktree is already clean at ${wt.path}${cp.tip ? ` (tip ${cp.tip.slice(0, 7)})` : ''}.`);
+      }
     } else {
       console.log(`CHECKPOINT ${t.id}: committed ${cp.files.length} WIP file(s) on ${t.branch} @ ${cp.tip.slice(0, 7)} in ${wt.path}`);
       if (cp.heldBack?.length) console.log(`  HELD BACK (looks like a secret, not committed, still in the worktree): ${cp.heldBack.join(', ')}`);
