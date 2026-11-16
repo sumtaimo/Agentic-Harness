@@ -306,7 +306,7 @@ The template ships a project config for Claude Code (VS Code extension, terminal
 
 `.claude/settings.json` adds permission rules and the hook:
 - **Allowed without asking:** only the harness scripts (`status`, `doctor`, `watch`, `dispatch`, `daemon` plain/`--status`/`--tick`,
-  read-only `backlog`/`memory` commands, `backlog add`, `memory remember`). Never a whole interpreter (`node`, `git`, `npm`).
+  `visible` `brief`/`assign`/`verify`/`handoff`/`propose`/`status`/`report`, read-only `backlog`/`memory` commands, `backlog add`, `memory remember`). Never a whole interpreter (`node`, `git`, `npm`).
 - **Always asks:** `daemon --autonomous`, `backlog import/ready/block`, `memory forget`, editing `charter.md` or `config.json`, `git push`.
 - **Denied:** editing `.harness/releases/**`, force-pushing.
 - **Hook:** at the start of every session the AI is told the harness state (controller running? backlog? autonomy? `uat`?).
@@ -540,6 +540,8 @@ node .harness/watch.mjs --job <id>       # live feed of every agent action until
 node test/run-tests.mjs                  # end-to-end tests with a mock engine (no AI account needed, free)
 npm run test:live                        # REAL Claude agents end to end, 6 scenarios (manual task, autonomous uat run, headless team, the editor workflow with named agents, autonomous editor mode, editor config); ~$2.5, needs `claude` logged in
 node .harness/visible.mjs status          # runs of the editor workflow
+node .harness/visible.mjs handoff         # inspect an unfinished run and get a prompt/command to continue it
+node .harness/dispatch.mjs --resume-visible --wait   # finish an unfinished editor run headlessly (keeps partial edits)
 node .harness/team.mjs show|validate     # the agent team and its guardrails
 ```
 

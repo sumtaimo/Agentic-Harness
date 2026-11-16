@@ -49,6 +49,7 @@ import {
   isRepoWithCommits, branchSha, ensureBranch, protectedShas, ensureWorkerWorktree, commitScoped,
   buildCandidate, advanceBranch, removeWorktree, deleteBranch, safeRef
 } from './lib/integration.mjs';
+import { syncVisibleRunAfterDaemon } from './lib/handoff.mjs';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -1117,7 +1118,7 @@ async function runVerifier(plan) {
 
 // ───────────────────────────── Node 4: committer ─────────────────────────────
 
-async function runCommitter(plan, task, taskFile, gitCtx = null) {
+async function runCommitter(plan, task, taskFile, gitCtx = null, { archive = true } = {}) {
   let gitNote = '';
   if (gitCtx) { // the verified candidate becomes the new integration branch tip
     const how = await advanceBranch({ branch: gitCtx.branch, newSha: gitCtx.candidate, expectedOld: gitCtx.tipAtCandidate, root: ROOT });
@@ -1138,11 +1139,13 @@ async function runCommitter(plan, task, taskFile, gitCtx = null) {
   }
   writeState({ phase: '4_COMMITTED', lastGateStatus: `COMMITTED: ${plan.taskId} verified & archived${gitNote}.` });
   logTelemetry('4_COMMITTER', 'Task passed all gates and committed', { taskId: plan.taskId, engine: plan.engine, verifyCmd: plan.verifyCmd });
-  archiveTask(taskFile, task, DIRS.completed, {
+  const extra = {
     result: 'COMMITTED', plan: plan.subtasks, verifyCmd: plan.verifyCmd, completedAt: new Date().toISOString(),
     ...(plan.team ? { team: plan.team } : {}), costUsd: Math.round(taskCost.usd * 10000) / 10000, costByAgent: taskCost.agents,
     ...(gitCtx ? { git: { branch: gitCtx.branch, from: gitCtx.tipAtCandidate, to: gitCtx.candidate, workerBranches: Object.values(gitCtx.workers).map((w) => w.branch) } } : {})
-  });
+  };
+  if (archive) archiveTask(taskFile, task, DIRS.completed, extra);
+  return extra;
 }
 
 /** Move a job out of the inbox to completed/ or failed/ as <id>-<timestamp>.json (+ .trace.txt for failures). */
@@ -1182,7 +1185,7 @@ async function executeSquareCycle(taskFile) {
   }
 
   const errors = [];
-  let plan = null; let outputs = []; let cycle = 1; let lastErrorTrace = null; let haltReason = null; let backup = null;
+  let plan = null; let outputs = []; let cycle = 1; let lastErrorTrace = task.initialError || null; let haltReason = null; let backup = null;
   const integration = integrationFor(task); let gitCtx = null; let gitResult = null;
   const title = task.title || path.basename(taskFile);
   resetCost();
@@ -1207,11 +1210,13 @@ async function executeSquareCycle(taskFile) {
       enforceBudget(task, `cycle ${cycle} workers`);
       const verification = await runVerifier(plan);
       if (verification.passed) {
-        await runCommitter(plan, task, taskFile, gitCtx);
+        const archiveExtra = await runCommitter(plan, task, taskFile, gitCtx, { archive: false });
         gitResult = await finishIntegration(gitCtx, true);
         discardBackup(backup);
         finishSession(task, plan, 'COMMITTED', cycle, errors, outputs, null, gitResult);
         if (task.backlogId) updateBacklogItem(task.backlogId, { status: 'DONE', completedAt: new Date().toISOString(), result: 'COMMITTED', cyclesUsed: cycle, ...(gitResult ? { integratedInto: `${gitResult.branch}@${gitResult.mergedSha.slice(0, 8)}` } : {}) });
+        try { if (task.visibleRunId) syncVisibleRunAfterDaemon(task, plan, { passed: true, cycle, outputs, gitResult, startedAt: taskStartedIso }); } catch (e) { logTelemetry('VISIBLE_SYNC_FAILED', e.message); }
+        archiveTask(taskFile, task, DIRS.completed, archiveExtra);
         lastFinished.ok = true;
         writeState({ history: pushHistory(`✔ COMMITTED  ${title} (cycle ${cycle}/${MAX_CYCLES})`), currentTaskFile: null });
         return true;
@@ -1235,6 +1240,7 @@ async function executeSquareCycle(taskFile) {
   try { rollback = restoreScope(backup); } catch (e) { rollback = `FAILED: ${e.message} — backup kept in .harness/staging/`; logTelemetry('ROLLBACK_FAILED', e.message); }
   try { gitResult = await finishIntegration(gitCtx, false); } catch (e) { logTelemetry('GIT_CLEANUP_FAILED', e.message); }
   if (gitResult) rollback = `${gitCtx.branch} unchanged (candidate discarded)${gitResult.keptBranches ? `; worker branches kept for review: ${gitResult.workerBranches.join(', ')}` : ''}`;
+  try { if (task.visibleRunId) syncVisibleRunAfterDaemon(task, plan, { passed: false, phase, cycle: usedCycles, errors, outputs, reason, rollback, gitResult, startedAt: taskStartedIso }); } catch (e) { logTelemetry('VISIBLE_SYNC_FAILED', e.message); }
   const dest = archiveTask(taskFile, task, DIRS.failed, {
     result: phase, haltReason: reason, haltedAt: new Date().toISOString(), cyclesUsed: usedCycles, rollback, errors, git: gitResult,
     costUsd: Math.round(taskCost.usd * 10000) / 10000, costByAgent: taskCost.agents

@@ -22,6 +22,11 @@
  *   node .harness/dispatch.mjs --goal "Build a login feature with spec, code and tests" --hierarchy [--max-cost 1.5] [--wait]
  *   (--max-cost: the controller stops the task if the agents spend more than this many dollars)
  *
+ * Resume an unfinished editor-workflow run (/harness:run, visible.mjs) in the headless controller:
+ *   node .harness/dispatch.mjs --resume-visible [RUN_ID] [--engine antigravity] [--wait]
+ *   (omitting RUN_ID picks the open/latest unfinished visible run; keeps partial edits on disk, carries
+ *    over assignments/contract/acceptance criteria/last verify error, and updates .harness/visible/<RUN_ID>/ when finished)
+ *
  * --mode normal    one direct worker, no planner (fastest, fewest tokens)  — npm run run -- --goal "…"
  * --mode parallel  AI planner splits into parallel workers (same as --auto-plan)
  * --mode team      orchestrator → leads → workers (same as --hierarchy)
@@ -44,8 +49,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline/promises';
-import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable, aiUsageSince, usageLine, usageTodayLine } from './lib/common.mjs';
+import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable, aiUsageSince, usageLine, usageTodayLine, MODEL_TIERS } from './lib/common.mjs';
 import { askEngineConsent } from './lib/consent.mjs';
+import { loadTeam } from './lib/governance.mjs';
+import { RESUMABLE_STATUSES, VISIBLE_TERMINAL, editorDisplayName, listVisibleRuns, readVisibleRun, writeVisibleRun, inspectVisibleRun } from './lib/handoff.mjs';
 
 if (process.env.HARNESS_WORKER === '1') {
   console.error('Refusing to dispatch from inside a harness worker (prevents agents spawning agents in a loop).');
@@ -71,6 +78,8 @@ let branch;
 let hierarchy = false;
 let maxCost;
 let yes = process.env.HARNESS_YES === '1';
+let resumeVisible;
+let explicitMode = false;
 const subtasks = [];
 
 for (let i = 0; i < args.length; i++) {
@@ -84,12 +93,15 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--wait') { wait = true; }
   else if (a === '--yes' || a === '-y') { yes = true; }
   else if (a === '--branch' && v !== undefined) { branch = args[++i].trim() || undefined; }
-  else if (a === '--hierarchy') { hierarchy = true; }
+  else if (a === '--hierarchy') { hierarchy = true; explicitMode = true; }
+  else if (a === '--resume-visible') { resumeVisible = (v !== undefined && !v.startsWith('-')) ? args[++i].trim() : 'LATEST'; }
+  else if (a.startsWith('--resume-visible=')) { resumeVisible = a.slice('--resume-visible='.length).trim() || 'LATEST'; }
   else if (a === '--mode' && v !== undefined) {
     const m = args[++i].trim().toLowerCase();
+    explicitMode = true;
     if (m === 'normal' || m === 'direct' || m === 'run') { autoPlan = false; hierarchy = false; }
     else if (m === 'parallel') { autoPlan = true; hierarchy = false; }
-    else if (m === 'team' || m === 'hierarchy') { hierarchy = true; }
+    else if (m === 'team' || m === 'hierarchy') { hierarchy = true; autoPlan = false; }
     else if (m === 'auto' || m === 'autopilot') {
       console.error('Autopilot works from the backlog, not from one goal. Add the task with:\n  node .harness/backlog.mjs add "<title>" --status READY\nthen start autopilot with:  npm run auto');
       process.exit(1);
@@ -101,9 +113,11 @@ for (let i = 0; i < args.length; i++) {
   }
   else if (a === '--auto-plan') {
     autoPlan = true;
+    explicitMode = true;
     if (/^(yes|no|true|false|on|off)$/i.test(v || '')) autoPlan = /^(yes|true|on)$/i.test(args[++i]);
   }
   else if (a === '--worker' && v !== undefined) {
+    explicitMode = true;
     const [id, filesCsv, ...promptParts] = args[++i].split(':');
     subtasks.push({
       id: id || `worker-${subtasks.length + 1}`,
@@ -117,6 +131,99 @@ if (engine && !config.profiles[engine]) {
   console.error(`Unknown engine '${engine}'. Choose one of: auto, ${Object.keys(config.profiles).join(', ')}`);
   process.exit(1);
 }
+
+let resumedRun = null;
+let resumedInfo = null;
+let backlogId;
+let acceptanceCriteria;
+let interfaceContract;
+let initialError;
+if (resumeVisible) {
+  if (resumeVisible === 'LATEST') {
+    const open = listVisibleRuns().filter((r) => !VISIBLE_TERMINAL.has(r.status));
+    resumedRun = open[open.length - 1] || null;
+    if (!resumedRun) {
+      console.error('No unfinished editor-workflow run to resume. See: node .harness/visible.mjs status');
+      process.exit(1);
+    }
+  } else {
+    resumedRun = readVisibleRun(resumeVisible);
+    if (!resumedRun) {
+      console.error(`No such visible run: ${resumeVisible}. See: node .harness/visible.mjs status`);
+      process.exit(1);
+    }
+  }
+  if (!RESUMABLE_STATUSES.has(resumedRun.status)) {
+    console.error(`Visible run ${resumedRun.id} is ${resumedRun.status} and cannot be resumed (resumable: ${[...RESUMABLE_STATUSES].join(', ')}).`);
+    process.exit(1);
+  }
+  resumedInfo = inspectVisibleRun(resumedRun, config);
+  if (resumedInfo.forbiddenEdits.length) {
+    console.error(`Refusing to resume ${resumedRun.id}: forbidden path(s) were modified on disk (${resumedInfo.forbiddenEdits.join(', ')}). Inspect or restore them first.`);
+    process.exit(1);
+  }
+  if (resumedInfo.outOfScope.length) {
+    console.warn(`Warning: ${resumedRun.id} has uncommitted out-of-scope change(s) on disk (${resumedInfo.outOfScope.join(', ')}); headless workers will stay inside their assigned files.`);
+  }
+  if (branch && resumedInfo.diff.all.length) {
+    console.log(`Note: --branch ${branch} runs workers from '${branch}' history; ${resumedInfo.diff.all.length} uncommitted partial edit(s) in your working folder will not appear in branch worktrees.`);
+  }
+  if (!title) title = `Resume ${resumedRun.id}: ${resumedRun.title}`.slice(0, 120);
+  if (!goal) goal = resumedRun.goal;
+  if (!verifyCmd && resumedRun.check?.cmd) verifyCmd = resumedRun.check.cmd;
+  if (!files.length && resumedRun.userAllowed?.length) files = [...resumedRun.userAllowed];
+  if (resumedRun.backlogId) backlogId = resumedRun.backlogId;
+  if (resumedRun.acceptanceCriteria?.length) acceptanceCriteria = [...resumedRun.acceptanceCriteria];
+  if (resumedRun.interfaceContract) interfaceContract = resumedRun.interfaceContract;
+  if (resumedRun.lastVerify && !resumedRun.lastVerify.passed) {
+    const errBits = [];
+    if (resumedRun.lastVerify.violations?.length) errBits.push(...resumedRun.lastVerify.violations);
+    if (resumedRun.lastVerify.check) errBits.push(resumedRun.lastVerify.check);
+    if (errBits.length) initialError = errBits.join('\n').slice(0, 6000);
+  }
+  const teamDef = loadTeam();
+  if (resumedRun.assignments?.length > 0 && subtasks.length === 0 && !hierarchy && !explicitMode) {
+    autoPlan = false;
+    const members = teamDef?.members || [];
+    for (const a of resumedRun.assignments) {
+      const leadDef = members.find((m) => m.id === a.lead);
+      const infoLead = resumedInfo.byLead.find((x) => x.lead === a.lead);
+      const promptLines = [
+        `Resuming editor run ${resumedRun.id} (started in ${editorDisplayName(resumedRun.editor || 'claude-code')}).`,
+        infoLead?.changed.length
+          ? `Partial work already on disk in your scope (${infoLead.changed.join(', ')}): inspect it first and keep valid work.`
+          : 'No edits recorded in your scope yet; implement the assignment below.',
+        infoLead?.missingFiles.length ? `Files expected in your scope that do not exist yet: ${infoLead.missingFiles.join(', ')}.` : '',
+        a.goal
+      ].filter(Boolean).join('\n');
+      const rawEffEngine = engine || leadDef?.engine;
+      const effEngine = (!rawEffEngine || rawEffEngine === 'auto')
+        ? (config.activeProfile && config.activeProfile !== 'auto' ? config.activeProfile : (config.autoOrder || [])[0])
+        : rawEffEngine;
+      const keepLeadModel = leadDef?.model && (
+        MODEL_TIERS.includes(String(leadDef.model).toLowerCase()) ||
+        (leadDef.engine && leadDef.engine !== 'auto' && effEngine === leadDef.engine) ||
+        Object.values(config.profiles?.[effEngine]?.models || {}).includes(leadDef.model)
+      );
+      subtasks.push({
+        id: a.lead,
+        lead: a.lead,
+        ...(leadDef?.role ? { role: leadDef.role } : {}),
+        ...(leadDef?.skills?.length ? { skills: leadDef.skills } : {}),
+        targetFiles: [...a.files],
+        goal: resumedRun.goal,
+        ...(leadDef?.engine ? { engine: leadDef.engine } : {}),
+        ...(keepLeadModel ? { model: leadDef.model } : {}),
+        ...(leadDef?.budget?.maxCostUsd !== undefined ? { maxCostUsd: leadDef.budget.maxCostUsd } : {}),
+        prompt: promptLines
+      });
+    }
+  } else if ((!resumedRun.assignments || resumedRun.assignments.length === 0) && subtasks.length === 0 && !hierarchy && !explicitMode) {
+    if (teamDef) { hierarchy = true; autoPlan = false; }
+    else autoPlan = true;
+  }
+}
+
 if (!title) title = goal ? goal.slice(0, 80) : 'Dispatched Swarm Task';
 if (!goal && subtasks.length === 0) goal = title;
 
@@ -129,7 +236,7 @@ else {
 }
 
 for (const s of subtasks) if (engine) s.engine = engine;
-const usePlanner = autoPlan && subtasks.length === 0;
+const usePlanner = autoPlan && subtasks.length === 0 && !hierarchy;
 
 // ── AI tools: a tool that is installed and logged in is never used silently; the person allows it once ──
 {
@@ -186,6 +293,11 @@ const job = {
   ...(branch ? { integrationBranch: branch } : {}),
   createdAt: new Date().toISOString(),
   ...(maxCost !== undefined ? { maxCostUsd: maxCost } : {}),
+  ...(resumedRun ? { visibleRunId: resumedRun.id } : {}),
+  ...(backlogId ? { backlogId } : {}),
+  ...(acceptanceCriteria ? { acceptanceCriteria } : {}),
+  ...(interfaceContract ? { interfaceContract } : {}),
+  ...(initialError ? { initialError } : {}),
   ...(hierarchy && subtasks.length === 0
     ? { hierarchy: true, goal, targetFiles: files }
     : usePlanner
@@ -201,6 +313,11 @@ ensureDirs();
 const inboxPath = path.join(DIRS.inbox, `${job.id}.json`);
 fs.writeFileSync(`${inboxPath}.tmp`, JSON.stringify(job, null, 2)); // atomic hand-off:
 fs.renameSync(`${inboxPath}.tmp`, inboxPath);                       // the daemon never sees half a file
+if (resumedRun) {
+  resumedRun.pendingJobId = job.id;
+  writeVisibleRun(resumedRun);
+  console.log(`Resuming visible run ${resumedRun.id} (origin: ${editorDisplayName(resumedRun.editor || 'claude-code')}, status: ${resumedRun.status})`);
+}
 console.log(`Dispatched [${(engine || config.activeProfile).toUpperCase()}] job ${job.id} (${job.hierarchy ? 'orchestrator → leads → workers, per team.json' : usePlanner ? 'AI planner will choose the workers' : `${job.subtasks.length} worker[s]`}) -> ${path.relative(ROOT, inboxPath)}`);
 console.log(`Check: ${checkLine}`);
 // One short line so the person always sees that this spends their AI quota (no AI call: read from the log).

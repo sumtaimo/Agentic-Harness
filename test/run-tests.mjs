@@ -997,7 +997,7 @@ await test('.claude/settings.json: valid, minimal allow-list, risky things ask o
   const TEST_CMDS = ['Bash(npm test:*)', 'Bash(node --test:*)']; // the only two non-harness commands: the agents run them to check their own work
   assert(allow.length > 0 && allow.every((r) => /^Bash\(node \.harness\/[a-z-]+\.mjs[ :)]/.test(r) || TEST_CMDS.includes(r)), `allow must only contain harness scripts and the two test commands: ${allow.filter((r) => !/^Bash\(node \.harness\//.test(r) && !TEST_CMDS.includes(r))}`);
   for (const r of TEST_CMDS) assert(allow.includes(r), `${r} must be allowed so the named agents can check their own work without a prompt`);
-  for (const sub of ['brief', 'assign', 'verify', 'propose', 'status', 'report']) assert(allow.includes(`Bash(node .harness/visible.mjs ${sub}:*)`), `the editor workflow command "visible.mjs ${sub}" must be allowed`);
+  for (const sub of ['brief', 'assign', 'verify', 'handoff', 'propose', 'status', 'report']) assert(allow.includes(`Bash(node .harness/visible.mjs ${sub}:*)`), `the editor workflow command "visible.mjs ${sub}" must be allowed`);
   assert(!allow.some((r) => /visible\.mjs rollback/.test(r)) && ask.includes('Bash(node .harness/visible.mjs rollback:*)') && ask.includes('Edit(.harness/team.json)'), 'rollback and editing team.json must always ask');
   for (const r of [...allow, ...ask, ...deny]) assert(!/^Write\(/.test(r), `Write() rules are ignored by Claude Code; use Edit(): ${r}`);
   assert(!allow.some((r) => /^Bash\((node|git|npm|npx|rm|sh|bash|python)(:\*)?\)$/.test(r) || /^Bash\(\*/.test(r)), 'allow list is too broad (a whole interpreter or shell is allowed)');
@@ -2267,6 +2267,180 @@ await test('every harness command answers --help with its usage and exit 0 (the 
     const r = node(d, [`.harness/${c}.mjs`, '--help']);
     assert(r.status === 0 && new RegExp(`${c}\\.mjs`).test(r.stdout), `${c} --help: exit ${r.status}\n${r.stdout.slice(0, 200)}${r.stderr.slice(0, 200)}`);
   }
+});
+
+// ───────────── v3.2: cross-editor handoff (--editor, visible.mjs handoff, dispatch --resume-visible) ─────────────
+
+await test('cross-editor handoff: "visible.mjs handoff" inspects baseline vs partial edits, missing files, out-of-scope violations, lastVerify errors, ready engines and builds continuation prompt (--prompt / --json); refused for workers', () => {
+  const d = sandbox();
+  const empty = vis(d, 'handoff');
+  assert(empty.status === 1 && /No editor-workflow runs found yet/.test(empty.stderr), empty.stdout + empty.stderr);
+
+  withProfiles(d, {
+    antigravity: tieredProfile({ fast: 'ag-fast', medium: 'ag-med', high: 'ag-high' }),
+    claude: tieredProfile({ fast: 'cl-fast', medium: 'cl-med', high: 'cl-high' })
+  });
+  { const cf = path.join(d, '.harness', 'config.json'); const c = json(cf); c.autoOrder = ['claude', 'antigravity']; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  agentsWrite(d, [['src/a.js', 'INIT']]);
+  setBacklog(d, [{ id: 'H0', title: 'handoff task', status: 'READY', goal: 'Build A', acceptanceCriteria: ['AC-h0'], interfaceContract: 'fn() -> ok', verifyCmd: TRIO_CHECK }]);
+  const b = vis(d, 'brief', '--item', 'H0', '--files', 'docs/a.md,src/a.js,tests/a.test.js');
+  const id = runIdOf(b);
+  assert(b.status === 0 && id, b.stdout + b.stderr);
+
+  const briefHandoff = vis(d, 'handoff');
+  assert(briefHandoff.status === 0 && new RegExp(`HANDOFF — run ${id} \\(BRIEFED\\)`).test(briefHandoff.stdout) && /visible\.mjs assign/.test(briefHandoff.stdout), briefHandoff.stdout);
+
+  assert(vis(d, 'assign', id, deleg(trio())).status === 0, 'assign failed');
+  agentsWrite(d, [['docs/a.md', 'spec'], ['src/a.js', 'partial'], ['notes.txt', 'stray']]);
+  const fv = vis(d, 'verify', id); // fails due to out-of-scope notes.txt and missing tests/a.test.js
+  assert(fv.status === 1 && runJson(d, id).status === 'FAILED', fv.stdout);
+  agentsWrite(d, [['notes.txt', 'rogue-after']]); // leave a live out-of-scope change on disk for handoff inspection
+
+  const text = vis(d, 'handoff');
+  assert(text.status === 0 && new RegExp(`HANDOFF — run ${id} \\(FAILED\\)`).test(text.stdout), text.stdout + text.stderr);
+  assert(/Origin:\s+Claude Code editor session/.test(text.stdout) && /\+ docs\/a\.md/.test(text.stdout) && /~ src\/a\.js/.test(text.stdout) && /missing: tests\/a\.test\.js/.test(text.stdout), text.stdout);
+  assert(/Out-of-scope changes: notes\.txt/.test(text.stdout) && /Last verify failure:/.test(text.stdout) && /notes\.txt/.test(text.stdout), text.stdout);
+  assert(/Headless engines ready on this machine: .*antigravity/.test(text.stdout) && new RegExp(`--resume-visible ${id} --engine antigravity --wait`).test(text.stdout), text.stdout);
+
+  const pr = vis(d, 'handoff', id, '--prompt');
+  assert(pr.status === 0 && !/HANDOFF — run/.test(pr.stdout) && new RegExp(`\\[HARNESS RUN HANDOFF: ${id}`).test(pr.stdout) && /AC-h0/.test(pr.stdout) && /fn\(\) -> ok/.test(pr.stdout), pr.stdout);
+
+  const jr = vis(d, 'handoff', id, '--json');
+  assert(jr.status === 0, jr.stderr);
+  const j = JSON.parse(jr.stdout);
+  assert(j.run.id === id && j.run.status === 'FAILED' && j.run.editor === 'claude-code' && j.resumable === true, JSON.stringify(j.run));
+  assert(j.byLead.find((l) => l.lead === 'lead-ba').changed.join() === '+ docs/a.md', 'ba changed');
+  assert(j.byLead.find((l) => l.lead === 'lead-dev').changed.join() === '~ src/a.js', 'dev changed');
+  assert(j.byLead.find((l) => l.lead === 'lead-qa').missingFiles.join() === 'tests/a.test.js', 'qa missing');
+  assert(j.outOfScope.includes('notes.txt') && j.readyHeadlessEngines.includes('antigravity') && j.readyHeadlessEngines.includes('claude') && j.suggestedEngine === 'antigravity', JSON.stringify(j));
+  assert(node(d, ['.harness/visible.mjs', 'handoff'], { HARNESS_WORKER: '1' }).status === 2, 'worker must be refused');
+
+  // An Antigravity editor origin suggests claude instead of antigravity when both are ready
+  const d2 = sandbox();
+  withProfiles(d2, {
+    antigravity: tieredProfile({ fast: 'ag-fast', medium: 'ag-med', high: 'ag-high' }),
+    claude: tieredProfile({ fast: 'cl-fast', medium: 'cl-med', high: 'cl-high' })
+  });
+  { const cf = path.join(d2, '.harness', 'config.json'); const c = json(cf); c.autoOrder = ['antigravity', 'claude']; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  const id2 = runIdOf(vis(d2, 'brief', '--goal', 'g', '--check', PASS, '--editor', 'antigravity'));
+  const j2 = JSON.parse(vis(d2, 'handoff', id2, '--json').stdout);
+  assert(j2.run.editor === 'antigravity' && j2.suggestedEngine === 'claude' && /ORIGIN: Antigravity/.test(j2.prompt), JSON.stringify(j2));
+});
+
+await test('multi-editor attribution & quota isolation: --editor tracks usage separately from headless engines without colliding on dailyLimits; status, report and session notes record origin', () => {
+  const d = sandbox();
+  assert(vis(d, 'brief', '--goal', 'bad', '--check', PASS, '--editor', 'bad editor!').status === 1, 'invalid --editor characters must be rejected');
+  assert(vis(d, 'brief', '--goal', 'empty', '--check', PASS, '--editor').status === 1, 'missing --editor value must be rejected');
+  assert(vis(d, 'brief', '--goal', 'eq', '--check', PASS, '--editor=').status === 1, 'empty --editor= must be rejected');
+
+  withProfiles(d, { antigravity: tieredProfile({ fast: 'ag-fast', medium: 'ag-med', high: 'ag-high' }) });
+  const b1 = vis(d, 'brief', '--goal', 'agy editor run', '--check', TRIO_CHECK, '--editor', 'antigravity');
+  const id1 = runIdOf(b1);
+  assert(b1.status === 0 && id1 && /Editor: Antigravity/.test(b1.stdout), b1.stdout + b1.stderr);
+  const a1 = vis(d, 'assign', id1, deleg(trio()));
+  assert(a1.status === 0 && /^AI: 3 Antigravity agent\(s\) for this run · today: .*antigravity-editor 3 call\(s\)/m.test(a1.stdout), a1.stdout + a1.stderr);
+  assert(log(d).filter((e) => e.phase === 'AGENT_USAGE' && e.engine === 'antigravity-editor' && e.model === null).length === 3, 'antigravity-editor calls must be logged cleanly without claude model aliases');
+  assert(!log(d).some((e) => e.phase === 'AGENT_USAGE' && e.engine === 'antigravity'), 'editor usage must not collide with headless antigravity');
+  assert(/\[Antigravity\]/.test(vis(d, 'status').stdout), 'status must show non-default editor');
+
+  agentsWrite(d, trioFiles());
+  const v1 = vis(d, 'verify', id1);
+  assert(v1.status === 0 && /orchestrator \(Antigravity editor session\) →/.test(v1.stdout), v1.stdout);
+  const sess1 = fs.readdirSync(path.join(d, '.harness', 'memory', 'sessions')).map((f) => read(d, `.harness/memory/sessions/${f}`)).join('');
+  assert(/Engine: Antigravity editor agents/.test(sess1), sess1);
+
+  // assign --editor=cursor overrides editor attribution for that delegation
+  const b2 = vis(d, 'brief', '--goal', 'cursor switch', '--check', TRIO_CHECK);
+  const id2 = runIdOf(b2);
+  const a2 = vis(d, 'assign', id2, deleg(trio()), '--editor=cursor');
+  assert(a2.status === 0 && runJson(d, id2).editor === 'cursor' && /AI: 3 Cursor agent\(s\)/.test(a2.stdout), a2.stdout + a2.stderr);
+  assert(log(d).filter((e) => e.phase === 'AGENT_USAGE' && e.engine === 'cursor').length === 3, 'cursor calls logged');
+  assert(vis(d, 'rollback', id2).status === 0, 'rollback cursor run');
+
+  // dailyLimits for antigravity-editor stops editor assign (exit 7) while headless antigravity limit stays independent
+  const cf = path.join(d, '.harness', 'config.json');
+  const cfg = json(cf);
+  cfg.dailyLimits = { 'antigravity-editor': { calls: 4 }, antigravity: { calls: 1 } };
+  fs.writeFileSync(cf, JSON.stringify(cfg, null, 2));
+
+  const hl = node(d, ['.harness/dispatch.mjs', '--goal', 'WRITE src/hl.js ok', '--files', 'src/hl.js', '--engine', 'antigravity', '--check', existsCheck('src/hl.js'), '--wait']);
+  assert(hl.status === 0 && /COMMITTED/.test(hl.stdout), `headless antigravity should ignore antigravity-editor count:\n${hl.stdout}${hl.stderr}`);
+
+  const b3 = vis(d, 'brief', '--goal', 'over editor cap', '--check', TRIO_CHECK, '--editor', 'antigravity');
+  const id3 = runIdOf(b3);
+  const a3 = vis(d, 'assign', id3, deleg(trio()));
+  assert(a3.status === 7 && /DAILY_LIMIT: Antigravity session agents used 3\/4/.test(a3.stderr) && runJson(d, id3).status === 'BRIEFED', `exit ${a3.status}: ${a3.stdout}${a3.stderr}`);
+  assert(vis(d, 'rollback', id3).status === 0, 'cleanup over-cap run');
+});
+
+await test('headless resume (dispatch.mjs --resume-visible): preserves partial work, feeds lastVerify on cycle 1, guards cross-engine model aliases, syncs visible/backlog/baseline on pass & fail, keeps full rollback on failure, and handles BRIEFED hierarchy + guards', () => {
+  // 1. Resume FAILED run with partial edits, failed verify error, backlog item, and cross-engine model override
+  const d = sandbox();
+  withProfiles(d, {
+    antigravity: tieredProfile({ fast: 'ag-fast', medium: 'ag-med', high: 'ag-high' }),
+    claude: tieredProfile({ fast: 'cl-fast', medium: 'cl-med', high: 'cl-high' })
+  });
+  const tm = teamOf(d);
+  const devMember = tm.members.find((m) => m.id === 'lead-dev');
+  devMember.engine = 'claude';
+  devMember.model = 'cl-med';
+  fs.writeFileSync(path.join(d, '.harness', 'team.json'), JSON.stringify(tm, null, 2));
+
+  const check1 = `node -e "const f=require('fs');process.exit(f.existsSync('docs/a.md')&&f.readFileSync('docs/a.md','utf8')==='spec-v1'&&f.existsSync('src/a.js')&&f.readFileSync('src/a.js','utf8')==='fixed'&&f.existsSync('tests/a.test.js')&&f.readFileSync('tests/a.test.js','utf8')==='tests-ok'?0:1)"`;
+  setBacklog(d, [{ id: 'R1', title: 'resume feature', status: 'READY', goal: 'Finish A', acceptanceCriteria: ['AC-resume'], interfaceContract: 'greet(name) -> string', verifyCmd: check1 }]);
+  const id = runIdOf(vis(d, 'brief', '--item', 'R1'));
+  assert(vis(d, 'assign', id, deleg([
+    { lead: 'lead-ba', goal: 'keep existing spec', files: ['docs/a.md'] },
+    { lead: 'lead-dev', goal: 'FIX src/a.js fixed', files: ['src/a.js'] },
+    { lead: 'lead-qa', goal: 'WRITE tests/a.test.js tests-ok', files: ['tests/a.test.js'] }
+  ])).status === 0, 'assign failed');
+  agentsWrite(d, [['docs/a.md', 'spec-v1'], ['src/a.js', 'broken']]);
+  assert(vis(d, 'verify', id).status === 1 && runJson(d, id).status === 'FAILED', 'expected failed first verify');
+
+  const hk = node(d, ['.harness/hook-session.mjs']);
+  assert(new RegExp(`UNFINISHED editor run ${id}`).test(hk.stdout) && new RegExp(`visible\\.mjs handoff ${id}`).test(hk.stdout) && new RegExp(`--resume-visible ${id}`).test(hk.stdout), hk.stdout);
+
+  const r1 = node(d, ['.harness/dispatch.mjs', '--resume-visible', id, '--engine', 'antigravity', '--wait']);
+  assert(r1.status === 0 && new RegExp(`Resuming visible run ${id}`).test(r1.stdout) && /RESULT: COMMITTED ✔/.test(r1.stdout), r1.stdout + r1.stderr);
+  assert(read(d, 'docs/a.md') === 'spec-v1' && read(d, 'src/a.js') === 'fixed' && read(d, 'tests/a.test.js') === 'tests-ok', 'partial work lost or fix missing');
+  const devPrompt = promptOf(d, 'lead-dev');
+  for (const want of ['[SHARED INTERFACE CONTRACT', 'CONTRACT-X', 'greet(name) -> string', '[ACCEPTANCE CRITERIA]', 'AC-resume', '[PREVIOUS VERIFIER ERROR TO FIX]', 'ROLE: DEV_ENGINEER', '[INJECTED SKILL CONTRACTS', '[SCOPED TARGET FILES: src/a.js]', 'Partial work already on disk']) {
+    assert(devPrompt.includes(want), `lead-dev resume prompt missing "${want}"`);
+  }
+  assert(modelArg(d, 'lead-dev') === 'ag-fast', `cross-engine override leaked claude model alias: ${modelArg(d, 'lead-dev')}`);
+  const runAfter = runJson(d, id);
+  assert(runAfter.status === 'PASSED' && !('pendingJobId' in runAfter) && runAfter.resumedJobId && runAfter.resumedCycles === 1 && runAfter.lastVerify.passed === true && runAfter.lastVerify.resumedByEngine === 'ANTIGRAVITY', JSON.stringify(runAfter));
+  assert(!fs.existsSync(path.join(d, '.harness', 'visible', id, 'baseline')), 'baseline not removed after resumed pass');
+  assert(/completed via headless resume/.test(read(d, `.harness/visible/${id}/report.md`)), 'report.md not synced');
+  assert(byId(d, 'R1').status === 'DONE', `backlog R1 is ${byId(d, 'R1').status}`);
+  assert(vis(d, 'brief', '--goal', 'next run after resume', '--check', PASS).status === 0, 'new brief must succeed after resumed pass');
+
+  // 2. Failed headless resume restores only failed headless edits, preserves pre-handoff edits & baseline for full rollback
+  const d2 = sandbox();
+  agentsWrite(d2, [['src/pre.js', 'ORIGINAL']]);
+  const id2 = runIdOf(vis(d2, 'brief', '--goal', 'fail resume test', '--check', FAIL_VERIFY));
+  assert(vis(d2, 'assign', id2, deleg([{ lead: 'lead-dev', goal: 'WRITE src/pre.js BY_HEADLESS\nWRITE src/new.js CREATED', files: ['src/'] }])).status === 0, 'assign d2');
+  agentsWrite(d2, [['src/pre.js', 'EDITOR_PARTIAL']]);
+  const r2 = node(d2, ['.harness/dispatch.mjs', '--resume-visible', id2, '--wait']);
+  assert(r2.status === 1 && /RESULT: NOT DONE/.test(r2.stdout), r2.stdout + r2.stderr);
+  assert(read(d2, 'src/pre.js') === 'EDITOR_PARTIAL' && !fs.existsSync(path.join(d2, 'src', 'new.js')), 'pre-handoff partial edit must be preserved when headless fails');
+  const run2 = runJson(d2, id2);
+  assert(run2.status === 'FAILED' && !('pendingJobId' in run2) && fs.existsSync(path.join(d2, '.harness', 'visible', id2, 'baseline')) && /HEADLESS RESUME HALTED_HITL_REQUIRED/.test(read(d2, `.harness/visible/${id2}/report.md`)), JSON.stringify(run2));
+  assert(vis(d2, 'rollback', id2).status === 0 && read(d2, 'src/pre.js') === 'ORIGINAL', 'full visible rollback must still restore all the way to pre-brief state');
+
+  // 3. BRIEFED run without ID auto-selects latest open run and uses hierarchy; terminal & forbidden guards block resume
+  const d3 = sandbox();
+  const hGoal = hierGoal({ assignments: [{ lead: 'lead-dev', files: ['src/h.js'], goal: leadJson([{ id: 'w', targetFiles: ['src/h.js'], prompt: 'WRITE src/h.js hier-ok' }]) }] });
+  const id3 = runIdOf(vis(d3, 'brief', '--goal', hGoal, '--check', existsCheck('src/h.js')));
+  const r3 = node(d3, ['.harness/dispatch.mjs', '--resume-visible', '--wait']);
+  assert(r3.status === 0 && read(d3, 'src/h.js') === 'hier-ok' && runJson(d3, id3).status === 'PASSED', r3.stdout + r3.stderr);
+  assert(node(d3, ['.harness/dispatch.mjs', '--resume-visible', id3]).status === 1, 'terminal PASSED run cannot be resumed');
+
+  const d4 = sandbox();
+  const id4 = runIdOf(vis(d4, 'brief', '--goal', 'forbidden check', '--check', PASS));
+  agentsWrite(d4, [['.env', 'SECRET=edited']]);
+  const r4 = node(d4, ['.harness/dispatch.mjs', '--resume-visible', id4]);
+  assert(r4.status === 1 && /forbidden path\(s\).*\.env/.test(r4.stderr), r4.stdout + r4.stderr);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

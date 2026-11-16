@@ -34,6 +34,7 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 - **ជំហានទី៣៖** agent ដូចជា `lead-ba`, `lead-dev`, `lead-qa` ធ្វើការ ហើយអ្នកអាចមើលឃើញពួកវាធ្វើការ។
 - **ជំហានទី៤ `verify`៖** controller ស្តារការកែប្រែណាដែលនៅក្រៅការចាត់តាំង ហើយរត់ check ពិតប្រាកដ។
 - **ជំហានទី៥៖** orchestrator រាយការណ៍ជូនអ្នក។ វានិយាយថា "PASSED" លុះត្រាតែ controller និយាយដូច្នោះ។
+- **បន្តការងារពេល session ឈប់ឬអស់ quota៖** បើ session editor ឈប់កណ្តាលទី ប្រើ `node .harness/visible.mjs handoff` ដើម្បីមើលការងារដែលបានកែរួច និងយក prompt បន្តទៅ editor ផ្សេង ឬប្រើ `node .harness/dispatch.mjs --resume-visible --wait` ដើម្បីឱ្យ terminal/engine ផ្សេងបន្តបញ្ចប់ការងារនោះដោយរក្សាការកែប្រែដើមទុក (ប្រើ `--editor <name>` លើ `visible.mjs brief` / `assign` ពេលចាប់ផ្តើមពី editor ផ្សេងក្រៅពី Claude Code)។
 
 ## ៥. ការជ្រើសរើស engine
 

@@ -9,47 +9,53 @@
  * that every changed file belongs to an assigned lead, reverts anything outside, runs the real check, and writes
  * the report for the human. The orchestrator and the agents only do the thinking and the work.
  *
- *   node .harness/visible.mjs brief  --goal "<what to build>" [--files "src/,docs/"] [--check "<cmd>"]
- *   node .harness/visible.mjs brief  --next [--auto-session <id>]     take the highest-priority READY backlog item
- *   node .harness/visible.mjs assign <run> '<delegation json>'        validate the delegation, print each agent's prompt
+ *   node .harness/visible.mjs brief  --goal "<what to build>" [--files "src/,docs/"] [--check "<cmd>"] [--editor <name>]
+ *   node .harness/visible.mjs brief  --next [--auto-session <id>] [--editor <name>]   take the highest-priority READY backlog item
+ *   node .harness/visible.mjs assign <run> '<delegation json>' [--editor <name>]       validate delegation, print each agent's prompt
  *   node .harness/visible.mjs verify <run> [--reports '<json {lead: "one-line report"}>']
+ *   node .harness/visible.mjs handoff [run] [--prompt] [--json]      inspect an unfinished run & print a continuation prompt/command
  *   node .harness/visible.mjs rollback <run>                          restore every file to how it was before the run
  *   node .harness/visible.mjs propose <auto-session> '<tasks json>'   (autonomous mode) add READY tasks to the backlog
  *   node .harness/visible.mjs status | report <run>
  *
  * Exit codes: 0 ok · 1 error/rejected · 2 escalated to the human · 3 auto budget used · 4 paused (unfinished/failed run)
- *             5 charter objectives not filled · 6 nothing READY
+ *             5 charter objectives not filled · 6 nothing READY · 7 daily usage cap reached
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { ROOT, HARNESS_DIR, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, memoryContext, recordSession, remember, safeTarget, helpIfAsked, pendingCostReasons, loadApprovals, aiUsageSince, usageTodayLine } from './lib/common.mjs';
+import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, memoryContext, recordSession, remember, safeTarget, helpIfAsked, pendingCostReasons, aiUsageSince, usageTodayLine } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor } from './lib/governance.mjs';
+import { VISIBLE_DIR, VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
 
 if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must not use the editor workflow.'); process.exit(2); }
 ensureDirs();
 
-const VIS = path.join(HARNESS_DIR, 'visible');
-const TERMINAL = new Set(['PASSED', 'HALTED_HITL_REQUIRED', 'ROLLED_BACK', 'ESCALATED']);
-const MAX_FILES = 20000;
+const VIS = VISIBLE_DIR;
+const TERMINAL = VISIBLE_TERMINAL;
+const MAX_FILES = MAX_VISIBLE_FILES;
 const MAX_BASELINE_BYTES = 25 * 1024 * 1024;
 const PLACEHOLDER = /\(describe your product goals here/;
 
 const config = loadConfig();
 const argv = process.argv.slice(2);
 const [cmd = 'status', ...rest] = argv;
-const flag = (n) => { const i = rest.indexOf(n); return i > -1 ? rest[i + 1] : undefined; };
+const BOOLEAN_FLAGS = new Set(['--next', '--force', '--prompt', '--json']);
+const flag = (n) => {
+  const eq = rest.find((a) => a.startsWith(`${n}=`));
+  if (eq !== undefined) return eq.slice(n.length + 1);
+  const i = rest.indexOf(n);
+  return i > -1 ? rest[i + 1] : undefined;
+};
 const has = (n) => rest.includes(n);
-const positional = rest.filter((a, i) => !a.startsWith('--') && !(i > 0 && rest[i - 1].startsWith('--') && !['--next', '--force'].includes(rest[i - 1])));
+const positional = rest.filter((a, i) => !a.startsWith('--') && !(i > 0 && rest[i - 1].startsWith('--') && !rest[i - 1].includes('=') && !BOOLEAN_FLAGS.has(rest[i - 1])));
 
 const die = (msg, code = 1) => { console.error(msg); process.exit(code); };
-const sha = (buf) => crypto.createHash('sha1').update(buf).digest('hex');
-const runDir = (id) => path.join(VIS, id);
-const strip = (f) => String(f).replace(/\/$/, '');
-const inside = (file, targets) => targets.some((t) => { const n = strip(String(t).replace(/\\/g, '/').replace(/^\.\//, '')); return file === n || file.startsWith(`${n}/`); });
+const runDir = visibleRunDir;
+const strip = stripSlash;
+const inside = insideTargets;
 
 function loadRun(id) {
   const f = path.join(runDir(String(id || '')), 'run.json');
@@ -61,73 +67,11 @@ function allRuns() {
   try { return fs.readdirSync(VIS).map((d) => readJsonSafe(path.join(VIS, d, 'run.json'), null)).filter(Boolean).sort((a, b) => a.id.localeCompare(b.id)); } catch { return []; }
 }
 
-// ───────────────────────────── project snapshot (to know exactly what the agents changed) ─────────────────────────────
-
-// The rules themselves are watched too: an agent that edits the charter, the team, the config, a role or a skill
-// has broken out of its assignment (the project listing below excludes .harness/, so these are added explicitly).
-const WATCHED_RULES = ['.harness/charter.md', '.harness/team.json', '.harness/config.json', '.harness/roles', '.harness/skills'];
-function watchedRuleFiles() {
-  const out = [];
-  const walk = (rel) => {
-    const abs = path.join(ROOT, rel);
-    let st; try { st = fs.statSync(abs); } catch { return; }
-    if (st.isDirectory()) for (const e of fs.readdirSync(abs)) walk(`${rel}/${e}`); else out.push(rel);
-  };
-  WATCHED_RULES.forEach(walk);
-  // secrets are usually git-ignored, so the project listing would never see them: watch root .env* files by hash
-  try { for (const e of fs.readdirSync(ROOT)) if (/^\.env/.test(e) && fs.statSync(path.join(ROOT, e)).isFile()) out.push(e); } catch { /* none */ }
-  return out;
-}
-
-function dirtyGitFiles() {
-  const r = spawnSync('git', ['status', '--porcelain', '-uall'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  if (r.status !== 0 || !r.stdout) return [];
-  return r.stdout.split('\n').map((l) => l.slice(3).split(' -> ').pop().trim()).filter((f) => f && !f.startsWith('.harness/'));
-}
-
 function snapshot(scope = [], baseFiles = null) {
-  let { files: projectFiles, total } = listProjectFiles(ROOT, MAX_FILES);
-  let scopedMode = false;
-  if (total > MAX_FILES && scope.length) {
-    const scoped = listProjectFiles(ROOT, total).files.filter((f) => inside(f, scope) || matchesAny(f, scope));
-    const dirty = dirtyGitFiles();
-    const merged = [...new Set([...scoped, ...(dirty.length <= MAX_FILES ? dirty : dirty.filter((f) => inside(f, scope) || matchesAny(f, scope)))])];
-    if (merged.length <= MAX_FILES) { projectFiles = merged; total = merged.length; scopedMode = true; }
-    if (baseFiles) for (const f of dirty) if (!(f in baseFiles) && !fs.existsSync(path.join(ROOT, f)) && spawnSync('git', ['cat-file', '-e', `HEAD:${f}`], { cwd: ROOT, stdio: 'ignore' }).status === 0) baseFiles[f] = 'HEAD';
-  }
-  if (total > MAX_FILES) die(`This project has ${total} files; the editor workflow can verify up to ${MAX_FILES} (pass --files to scope a smaller folder, or use node .harness/dispatch.mjs for larger runs).`);
-  const files = [...new Set([...projectFiles, ...watchedRuleFiles()])];
-  const map = {}; let bytes = 0;
-  for (const f of files) {
-    const p = path.join(ROOT, f);
-    try { const st = fs.statSync(p); if (!st.isFile()) continue; map[f] = sha(fs.readFileSync(p)); bytes += st.size; } catch { /* vanished */ }
-  }
-  return { map, bytes, scoped: scopedMode };
+  try { return captureSnapshot(scope, baseFiles, { maxFiles: MAX_FILES }); }
+  catch (e) { die(e.message); }
 }
-function diffSnapshots(base, cur) {
-  const added = []; const modified = []; const deleted = [];
-  for (const f of Object.keys(cur)) { if (!(f in base)) added.push(f); else if (base[f] !== cur[f]) modified.push(f); }
-  for (const f of Object.keys(base)) if (!(f in cur)) deleted.push(f);
-  return { added, modified, deleted, all: [...added, ...modified, ...deleted].sort() };
-}
-function restoreFiles(run, files) {
-  const dir = run.baseline.dir ? path.join(ROOT, run.baseline.dir) : null;
-  if (!run.baseline.rollbackAvailable || !dir || !fs.existsSync(dir)) return { restored: [], failed: files };
-  const restored = []; const failed = [];
-  for (const f of files) {
-    try {
-      const dest = path.join(ROOT, f);
-      if (/^\.env/.test(f)) { failed.push(f); continue; } // never copied, so it cannot be restored automatically
-      if (f in run.baseline.files && run.baseline.files[f] !== 'HEAD') { fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.copyFileSync(path.join(dir, f), dest); }
-      else if (run.baseline.scoped && spawnSync('git', ['cat-file', '-e', `HEAD:${f}`], { cwd: ROOT, stdio: 'ignore' }).status === 0) {
-        const co = spawnSync('git', ['checkout', 'HEAD', '--', f], { cwd: ROOT, stdio: 'ignore' });
-        if (co.status !== 0) { failed.push(f); continue; }
-      } else fs.rmSync(dest, { force: true });
-      restored.push(f);
-    } catch { failed.push(f); }
-  }
-  return { restored, failed };
-}
+const restoreFiles = restoreVisibleFiles;
 
 // ───────────────────────────── helpers: team, prompts, reports ─────────────────────────────
 
@@ -167,8 +111,9 @@ function reportText(run, v) {
   const L = [];
   const head = { PASSED: 'PASSED ✔', FAILED: 'NOT PASSED YET ✖ (can be fixed and re-verified)', HALTED_HITL_REQUIRED: 'STOPPED ✖ — a human decision is needed', ROLLED_BACK: 'ROLLED BACK', ESCALATED: 'ESCALATED — a human decision is needed' }[v.status] || v.status;
   const visual = v.status === 'PASSED' && v.uiFiles?.length;
+  const sessionLabel = run.editor && run.editor !== 'claude-code' ? `${editorDisplayName(run.editor)} editor session` : 'editor session';
   L.push(`HARNESS REPORT — run ${run.id} — ${head}${visual ? ' — NEEDS A VISUAL REVIEW' : ''}`, '', `Task:    ${run.title}`, `Source:  ${run.source === 'backlog' ? `backlog item ${run.backlogId}` : 'goal given by the human'}${run.autonomous ? ' (autonomous mode)' : ''}`,
-    `Flow:    controller → orchestrator (editor session) → ${run.assignments.map((a) => a.lead).join(', ')} → controller verify → this report`, '');
+    `Flow:    controller → orchestrator (${sessionLabel}) → ${run.assignments.map((a) => a.lead).join(', ')} → controller verify → this report`, '');
   L.push('What each agent did:');
   const leads = run.leads || [];
   for (const a of run.assignments) {
@@ -207,6 +152,14 @@ function brief() {
   const wantNext = has('--next');
   const goalArg = flag('--goal');
   if (!wantNext && !flag('--item') && !goalArg) die('Give --goal "<what to build>", or --item <backlog id>, or --next.');
+  const editorFlag = flag('--editor');
+  if ((has('--editor') || rest.some((a) => a.startsWith('--editor='))) && !editorFlag) {
+    die('Give an editor name after --editor (for example: --editor antigravity or --editor cursor).');
+  }
+  let editor = 'claude-code';
+  if (editorFlag !== undefined) {
+    try { editor = normalizeEditor(editorFlag) || 'claude-code'; } catch (e) { die(e.message); }
+  }
 
   const open = allRuns().filter((r) => !TERMINAL.has(r.status));
   if (open.length && !has('--force')) die(`Run ${open[0].id} ("${open[0].title}") is not finished (${open[0].status}). Verify or roll it back first: node .harness/visible.mjs verify ${open[0].id} | rollback ${open[0].id}`, 4);
@@ -248,7 +201,7 @@ function brief() {
   // secrets (.env*) are compared by hash only: they are never copied into the baseline
   if (rollbackAvailable) for (const f of Object.keys(snap.map).filter((k) => !/^\.env/.test(k))) { const dest = path.join(ROOT, baseDirRel, f); fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.copyFileSync(path.join(ROOT, f), dest); }
   const run = {
-    id, status: 'BRIEFED', createdAt: new Date().toISOString(), source: item ? 'backlog' : 'goal', backlogId: item?.id || null, autonomous: auto, autoSession: sid || null,
+    id, status: 'BRIEFED', editor, createdAt: new Date().toISOString(), source: item ? 'backlog' : 'goal', backlogId: item?.id || null, autonomous: auto, autoSession: sid || null,
     title: item?.title || String(goal).slice(0, 80), goal, userAllowed, acceptanceCriteria: item?.acceptanceCriteria || [], interfaceContract: item?.interfaceContract || '',
     check, cycles: 0, assignAttempts: 0, assignments: [],
     charter: { allowedPaths: charter.allowedPaths, forbiddenPaths: charter.forbiddenPaths },
@@ -262,6 +215,7 @@ function brief() {
   const memory = memoryContext(config);
   console.log(`RUN_ID=${id}`);
   console.log(`\nORCHESTRATOR BRIEF — run ${id}${auto ? ' (autonomous mode)' : ''}`);
+  if (editor !== 'claude-code') console.log(`Editor: ${editorDisplayName(editor)}`);
   console.log(`\nTask: ${run.title}\nGoal: ${goal}`);
   if (run.acceptanceCriteria.length) console.log(`Acceptance criteria:\n${run.acceptanceCriteria.map((c) => `  - ${c}`).join('\n')}`);
   if (run.interfaceContract) console.log(`Interface contract:\n${run.interfaceContract}`);
@@ -298,20 +252,37 @@ function assign() {
     saveRun(run);
     die(`REJECTED (attempt ${run.assignAttempts}/3): ${e.message}\nFix the delegation and run assign again. Nothing was started.`, 1);
   }
-  // Claude Code session agents count too: each started lead is one call of "claude-code" in the usage log, checked
-  // against dailyLimits["claude-code"].calls. Tokens are not visible to the controller (they are in the session).
+  const editorFlag = flag('--editor');
+  if ((has('--editor') || rest.some((a) => a.startsWith('--editor='))) && !editorFlag) {
+    die('Give an editor name after --editor (for example: --editor antigravity or --editor cursor).');
+  }
+  let editor = run.editor || 'claude-code';
+  if (editorFlag !== undefined) {
+    try { editor = normalizeEditor(editorFlag) || editor; } catch (e) { die(e.message); }
+  }
+  run.editor = editor;
+
+  // Editor session agents count too: each started lead is one call of `usageEngine` in the usage log, checked
+  // against dailyLimits[usageEngine].calls. Tokens stay inside the editor session and are kept separate from headless CLI quotas.
   {
-    const cap = (config.dailyLimits || {})['claude-code'];
-    const today = (aiUsageSince(`${new Date().toISOString().slice(0, 10)}T00:00:00`)['claude-code'] || { calls: 0 }).calls;
+    const usageEngine = editorUsageKey(editor, config);
+    const editorName = editorDisplayName(editor);
+    const cap = (config.dailyLimits || {})[usageEngine];
+    const today = (aiUsageSince(`${new Date().toISOString().slice(0, 10)}T00:00:00`)[usageEngine] || { calls: 0 }).calls;
     if (cap && typeof cap.calls === 'number' && today + plan.assignments.length > cap.calls) {
       saveRun(run);
-      die(`DAILY_LIMIT: Claude Code session agents used ${today}/${cap.calls} call(s) today; this delegation needs ${plan.assignments.length} more. Nothing was started. Raise "dailyLimits" → "claude-code" in config.json only if the user accepts the use.`, 7);
+      die(`DAILY_LIMIT: ${editorName} session agents used ${today}/${cap.calls} call(s) today; this delegation needs ${plan.assignments.length} more. Nothing was started. Raise "dailyLimits" → "${usageEngine}" in config.json only if the user accepts the use.`, 7);
     }
     const ts = new Date().toISOString();
-    const lines = plan.assignments.map((a) => { const lead = leads.find((l) => l.id === a.lead); return JSON.stringify({ ts, phase: 'AGENT_USAGE', message: `${a.lead}: claude-code ${editorModelFor(lead, config) || 'session model'} (editor run ${id})`, worker: a.lead, engine: 'claude-code', model: editorModelFor(lead, config), tier: null, ok: true, tokens: null, usd: 0, ms: 0, run: id }); });
+    const useClaudeModel = usageEngine === 'claude-code';
+    const lines = plan.assignments.map((a) => {
+      const lead = leads.find((l) => l.id === a.lead);
+      const m = useClaudeModel ? editorModelFor(lead, config) : null;
+      return JSON.stringify({ ts, phase: 'AGENT_USAGE', message: `${a.lead}: ${usageEngine} ${m || 'session model'} (editor run ${id})`, worker: a.lead, engine: usageEngine, model: m, tier: null, ok: true, tokens: null, usd: 0, ms: 0, run: id });
+    });
     fs.appendFileSync(FILES.log, `${lines.join('\n')}\n`);
     const t = usageTodayLine(config);
-    console.log(`AI: ${plan.assignments.length} Claude Code agent(s) for this run · today: ${t}\n`);
+    console.log(`AI: ${plan.assignments.length} ${editorName} agent(s) for this run · today: ${t}\n`);
   }
   run.interfaceContract = [run.interfaceContract, typeof plan.interfaceContract === 'string' ? plan.interfaceContract.slice(0, 4000) : ''].filter(Boolean).join('\n');
   run.assignments = plan.assignments.map((a) => ({ lead: a.lead, goal: a.goal.trim(), files: a.files }));
@@ -400,6 +371,7 @@ function verify() {
   let autoRolledBack = false;
   if (halted) { const r = restoreFiles(run, diffSnapshots(run.baseline.files, snap()).all); autoRolledBack = r.failed.length === 0 && run.baseline.rollbackAvailable; }
   run.status = passed ? 'PASSED' : halted ? 'HALTED_HITL_REQUIRED' : 'FAILED';
+  delete run.pendingJobId;
   run.lastVerify = { at: new Date().toISOString(), passed, violations, reverted, check: check.text };
   if (passed || halted) delete run.cycleSnapshot; else run.cycleSnapshot = snap(); // what the project looked like when this check failed
   run.lastVerify.skipped = check.skipped || 0; run.lastVerify.needsVisualReview = passed && uiFiles.length > 0;
@@ -414,7 +386,7 @@ function verify() {
     try {
       recordSession({
         taskId: run.id, title: run.title, result: passed ? 'VERIFIED' : 'HALTED_HITL_REQUIRED', cycles: run.cycles, maxCycles, goal: run.goal,
-        engine: 'Claude Code editor agents', verifyCmd: run.check.cmd, verifySource: run.check.source, planner: `editor workflow: ${run.orchestrator} → ${run.assignments.map((a) => a.lead).join(', ')}`,
+        engine: `${editorDisplayName(run.editor || 'claude-code')} editor agents`, verifyCmd: run.check.cmd, verifySource: run.check.source, planner: `editor workflow: ${run.orchestrator} → ${run.assignments.map((a) => a.lead).join(', ')}`,
         team: { orchestrator: run.orchestrator, assignments: run.assignments.map((a) => ({ lead: a.lead, goal: a.goal, files: a.files, workers: [{ id: a.lead, files: a.files }] })) },
         subtasks: run.assignments.map((a) => ({ id: a.lead, targetFiles: a.files, prompt: a.goal })), errors: passed ? [] : [violations.join('\n') || check.text],
         outputs: Object.entries(reports).map(([id, output]) => ({ id, output })), finishedAt: new Date().toISOString()
@@ -478,19 +450,62 @@ function propose() {
   if (!added.length) process.exit(1);
 }
 
+function handoff() {
+  const run = positional[0] ? loadRun(positional[0]) : findDefaultHandoffRun();
+  if (!run) die('No editor-workflow runs found yet. Start one with: node .harness/visible.mjs brief --goal "…"');
+  const info = inspectVisibleRun(run, config);
+  if (has('--json')) {
+    const { reportMd, ...restInfo } = info;
+    console.log(JSON.stringify({
+      run: {
+        id: run.id,
+        status: run.status,
+        editor: run.editor || 'claude-code',
+        title: run.title,
+        goal: run.goal,
+        backlogId: run.backlogId || null,
+        cycles: run.cycles,
+        check: run.check,
+        userAllowed: run.userAllowed,
+        acceptanceCriteria: run.acceptanceCriteria,
+        interfaceContract: run.interfaceContract,
+        assignments: run.assignments,
+        lastVerify: run.lastVerify || null,
+        pendingJobId: run.pendingJobId || null,
+        resumedJobId: run.resumedJobId || null,
+        baseline: { rollbackAvailable: !!run.baseline?.rollbackAvailable }
+      },
+      ...restInfo,
+      reportMd,
+      prompt: buildHandoffPrompt(run, info, config)
+    }, null, 2));
+    return;
+  }
+  if (has('--prompt')) {
+    console.log(buildHandoffPrompt(run, info, config));
+    return;
+  }
+  console.log(formatHandoffText(run, info, config));
+}
+
 function status() {
   const runs = allRuns();
   if (!runs.length) { console.log('No editor-workflow runs yet. Start one with /harness:run in Claude Code (or: node .harness/visible.mjs brief --goal "…").'); return; }
-  for (const r of runs.slice(-15)) console.log(`${r.id}  ${r.status.padEnd(22)} ${r.title}${r.backlogId ? `  [${r.backlogId}]` : ''}`);
+  for (const r of runs.slice(-15)) {
+    const ed = r.editor && r.editor !== 'claude-code' ? `  [${editorDisplayName(r.editor)}]` : '';
+    const job = r.pendingJobId ? `  [headless: ${r.pendingJobId}]` : '';
+    console.log(`${r.id}  ${r.status.padEnd(22)} ${r.title}${r.backlogId ? `  [${r.backlogId}]` : ''}${ed}${job}`);
+  }
 }
 
 switch (cmd) {
   case 'brief': brief(); break;
   case 'assign': assign(); break;
   case 'verify': verify(); break;
+  case 'handoff': handoff(); break;
   case 'rollback': rollback(); break;
   case 'propose': propose(); break;
   case 'report': { const f = path.join(runDir(positional[0] || ''), 'report.md'); if (!fs.existsSync(f)) die(`No report for run ${positional[0] || '(none)'} yet (verify it first).`); console.log(fs.readFileSync(f, 'utf8')); break; }
   case 'status': status(); break;
-  default: die(`Unknown command "${cmd}". Use: brief | assign | verify | rollback | propose | status | report`);
+  default: die(`Unknown command "${cmd}". Use: brief | assign | verify | handoff | rollback | propose | status | report`);
 }

@@ -39,8 +39,11 @@ try {
   try { runs = fs.readdirSync(VIS).map((d) => readJsonSafe(path.join(VIS, d, 'run.json'), null)).filter(Boolean); } catch { /* no runs yet */ }
   const open = runs.filter((r) => !['PASSED', 'HALTED_HITL_REQUIRED', 'ROLLED_BACK', 'ESCALATED'].includes(r.status));
   const stopped = runs.filter((r) => ['HALTED_HITL_REQUIRED', 'ESCALATED'].includes(r.status)).slice(-1);
-  if (open.length) lines.push(`- UNFINISHED editor run ${open[0].id} ("${open[0].title}", ${open[0].status}). Ask the user whether to finish it (node .harness/visible.mjs verify ${open[0].id}) or undo it (node .harness/visible.mjs rollback ${open[0].id}). Do not start another task first.`);
-  else if (charter.autonomous && c.READY > 0) {
+  if (open.length) {
+    const r = open[0];
+    const ed = r.editor && r.editor !== 'claude-code' ? `, from ${r.editor}` : '';
+    lines.push(`- UNFINISHED editor run ${r.id} ("${r.title}", ${r.status}${ed}). Ask the user whether to finish it (node .harness/visible.mjs verify ${r.id}), hand off or continue in another AI/terminal (node .harness/visible.mjs handoff ${r.id} or node .harness/dispatch.mjs --resume-visible ${r.id} --wait), or undo it (node .harness/visible.mjs rollback ${r.id}). Do not start another task first.`);
+  } else if (charter.autonomous && c.READY > 0) {
     const { nextReady } = await import('./lib/governance.mjs');
     const next = nextReady();
     lines.push(`- AUTO MODE IS ON (the owner enabled it in .harness/charter.md) and ${c.READY} task(s) are READY${next ? `; next: "${next.title || next.goal}"` : ''}. Start the autonomous workflow now with /harness:auto: you act as the orchestrator, the named agents work visibly, the controller verifies, and you report to the user at the end. If the user's message is about something else, answer it first and then offer to run the READY task(s).`);

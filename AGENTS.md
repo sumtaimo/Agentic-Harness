@@ -153,7 +153,13 @@ Details and limits: `docs/WORKFLOW.md`. The named agents are generated from `.ha
 If you are one of the named agents (`lead-…`): change only the files in your assignment, follow the interface contract, check your work with
 `npm test` or `node --test` only, and finish with a short honest report.
 
-In **Antigravity, Cursor, or VS Code** (where `/harness:run` is not a built-in slash command): for any multi-file or multi-role task, follow the same controller protocol (`node .harness/visible.mjs brief` → `assign` → spawn parallel Lead/Worker subagents with disjoint file scopes using your editor's subagent tool → `verify`), or run the headless controller below when subagents are unavailable.
+In **Antigravity, Cursor, or VS Code** (where `/harness:run` is not a built-in slash command): for any multi-file or multi-role task, follow the same controller protocol (`node .harness/visible.mjs brief --editor antigravity ...` → `assign` → spawn parallel Lead/Worker subagents with disjoint file scopes using your editor's subagent tool → `verify`), or run the headless controller below when subagents are unavailable. Keeping `--editor <name>` (e.g. `antigravity`, `cursor`, `vscode`) attributes session usage cleanly without colliding with headless CLI quotas.
+
+**Stopping or switching sessions mid-run (cross-editor handoff & headless resume):**
+- If an editor session stops, freezes, or hits a usage cap mid-run, inspect what is already on disk and print a continuation prompt:
+  `node .harness/visible.mjs handoff [RUN_ID]` (add `--prompt` for raw prompt text, or `--json` for tooling).
+- Or finish that same unfinished editor run directly in the headless controller (keeping partial edits, inheritance of contract/criteria/last error, and updating `.harness/visible/<run>/` on completion or failure):
+  `node .harness/dispatch.mjs --resume-visible [RUN_ID] [--engine <tool>] --wait`
 
 The sections below describe the headless controller (background / terminal / unattended runs).
 
@@ -281,7 +287,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/backlog.mjs` | backlog list / add / ready / pop / import (with snapshot) / releases |
 | `.harness/roles/` · `skills/` | role personas + tool limits · skill rules |
 | `.harness/team.json` · `team.mjs` | the agent team (orchestrator → leads → workers): scopes, limits, budgets · show / validate / `sync-agents` |
-| `.harness/visible.mjs` | the controller for the editor workflow: brief / assign / verify / rollback / propose / status / report |
+| `.harness/visible.mjs` | the controller for the editor workflow: brief / assign / verify / handoff / rollback / propose / status / report |
 | `.harness/sessions.mjs` · `/harness:sessions` | session board: Session A (role COORDINATOR) runs up to 4 child sessions, one task each; merge only with the owner's yes; merged tasks are cleaned up, unfinished ones flagged HIGH RISK, never deleted |
 | `.claude/agents/lead-*.md` | the named agents (generated from team.json; the user sees them working in the session) |
 | `docs/WORKFLOW.md` | the workflow, the rules, the two modes, what is not guaranteed |

@@ -77,8 +77,27 @@ their own worktrees, local or cloud. The board is `node .harness/sessions.mjs bo
 - **Big runs ask first** (team or parallel mode, 3+ workers, the high model). In autopilot, headless or in Claude Code,
   they are held as "Needs your OK" and the rest goes on; approve one with `node .harness/backlog.mjs approve <id>`.
 - **Daily caps and a usage report** for headless runs: `config.json` → `dailyLimits`, `node .harness/usage.mjs`.
-  Editor-mode agents run in your Claude Code session, so they count against that session, not these caps.
+  Editor-mode agents run inside your editor session (`claude-code` by default, or pass `--editor antigravity` / `cursor`
+  to `visible.mjs brief` and `visible.mjs assign`), so they are tracked under separate editor keys (`claude-code`,
+  `antigravity-editor`, …) and never collide with your headless CLI engine limits.
 - Details: [`ENGINES.md`](ENGINES.md).
+
+## Switching sessions mid-run (cross-editor handoff & headless resume)
+
+If an editor session stops, hits a usage cap, or needs to move into another editor or a terminal while a `visible.mjs` run
+is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
+
+1. **Hand off to another editor session:** run `node .harness/visible.mjs handoff [run] [--prompt] [--json]`. It compares
+   the workspace with the run's pre-run snapshot, shows per-lead progress, missing files, out-of-scope edits, the last
+   verify failure, and ready headless engines, and prints a copy-paste prompt that continues the exact same run ID without
+   starting a duplicate run.
+2. **Or finish headlessly in the controller:** run `node .harness/dispatch.mjs --resume-visible [run] [--engine <tool>] --wait`.
+   - `DELEGATED` and `FAILED` runs convert the saved lead assignments into scoped headless workers, preserve partial edits
+     already on disk, inherit the interface contract, acceptance criteria, backlog ID, and last verify error, and sync
+     `.harness/visible/<run>/` (`run.json`, `report.md`, and backlog status) when finished.
+   - `BRIEFED` runs auto-select team hierarchy (`team.json`) or the AI planner.
+   - If the headless resume halts or rejects after 3 cycles, only the failed headless edits are rolled back so your
+     pre-handoff work stays intact and `node .harness/visible.mjs rollback <run>` still restores all the way to before the run started.
 
 ## 4. What is NOT guaranteed (read this before trusting it with a real project)
 
@@ -105,7 +124,7 @@ their own worktrees, local or cloud. The board is `node .harness/sessions.mjs bo
 
 `.claude/settings.json` ships with narrow rules, so the workflow runs without asking you for every command (the folder must be trusted):
 
-- **Allowed without asking:** only the workflow commands (`visible.mjs brief | assign | verify | propose | status | report`, `status`, `doctor`, `team`, `dispatch`, the read-only `backlog` and `memory` commands) and the two test commands the agents use to check their own work: `npm test` and `node --test`. Never a whole interpreter (`node`, `git`, `npm`).
+- **Allowed without asking:** only the workflow commands (`visible.mjs brief | assign | verify | handoff | propose | status | report`, `status`, `doctor`, `team`, `dispatch`, the read-only `backlog` and `memory` commands) and the two test commands the agents use to check their own work: `npm test` and `node --test`. Never a whole interpreter (`node`, `git`, `npm`).
 - **Always asks:** `visible.mjs rollback`, editing `.harness/team.json`, `.harness/charter.md` or `.harness/config.json`, `backlog import | ready | block`, `memory forget`, `daemon --autonomous`, `git push`.
 - **Denied:** editing `.harness/releases/**`, force-pushing.
 

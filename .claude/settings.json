@@ -23,6 +23,7 @@
       "Bash(node .harness/visible.mjs propose:*)",
       "Bash(node .harness/visible.mjs status:*)",
       "Bash(node .harness/visible.mjs report:*)",
+      "Bash(node .harness/visible.mjs handoff:*)",
       "Bash(npm test:*)",
       "Bash(node --test:*)"
     ],
