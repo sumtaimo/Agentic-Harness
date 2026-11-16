@@ -1,0 +1,843 @@
+#!/usr/bin/env node
+/**
+ * .harness/ui.mjs — read-only local web dashboard for the Agentic Harness (127.0.0.1 only).
+ *
+ *   npm run ui                         start dashboard on http://127.0.0.1:4173/ (auto-opens browser)
+ *   node .harness/ui.mjs               same (default port 4173)
+ *   node .harness/ui.mjs --port 8080   listen on a custom port (0 picks a free port automatically)
+ *   node .harness/ui.mjs --no-open     start the server without launching a browser window
+ *   node .harness/ui.mjs --help        print this help and exit 0
+ *
+ * Zero dependencies, completely offline (no external CDN scripts or styles), strictly read-only
+ * (non-GET/HEAD requests return 405), and bound exclusively to 127.0.0.1.
+ */
+
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync, spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import {
+  ROOT, HARNESS_DIR, FILES, loadConfig, readJsonSafe, aiUsageSince,
+  quotaWarnings, formatQuotaWarning, helpIfAsked
+} from './lib/common.mjs';
+import { readBacklog, backlogCounts, nextReady } from './lib/governance.mjs';
+import { listVisibleRuns, editorDisplayName } from './lib/handoff.mjs';
+import { collectStatus } from './start.mjs';
+
+const DEFAULT_PORT = 4173;
+
+function safeLoadConfig() {
+  try { return loadConfig(); } catch { return {}; }
+}
+
+export function readStatusData() {
+  const status = collectStatus();
+  const state = readJsonSafe(FILES.state, {});
+  return {
+    ts: new Date().toISOString(),
+    ...status,
+    state: {
+      phase: state.phase || null,
+      cycle: state.cycle ?? null,
+      maxCycles: state.maxCycles ?? null,
+      engine: state.engine || null,
+      mode: state.mode || null,
+      workerSummary: state.workerSummary || null,
+      lastGateStatus: state.lastGateStatus || null,
+      autoStatus: state.autoStatus || null,
+      updatedAt: state.updatedAt || null
+    }
+  };
+}
+
+export function readLogsData(limit = 100) {
+  let live = [];
+  try {
+    live = fs.readFileSync(FILES.live, 'utf8')
+      .split(/\r?\n/)
+      .filter((l) => l.trim().length > 0)
+      .slice(-limit);
+  } catch { /* no live log yet */ }
+
+  const telemetry = [];
+  try {
+    const lines = fs.readFileSync(FILES.log, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed && typeof parsed === 'object') telemetry.push(parsed);
+      } catch { /* skip malformed line */ }
+    }
+  } catch { /* no telemetry log yet */ }
+
+  return {
+    ts: new Date().toISOString(),
+    live,
+    telemetry: telemetry.slice(-limit)
+  };
+}
+
+export function readUsageData(days = 7) {
+  const cfg = safeLoadConfig();
+  const todayIso = `${new Date().toISOString().slice(0, 10)}T00:00:00`;
+  const today = aiUsageSince(todayIso);
+  for (const row of Object.values(today)) row.usd = Math.round((Number(row.usd) || 0) * 1e6) / 1e6;
+
+  const spanDays = Math.max(1, Number(days) || 7);
+  const since = new Date(Date.now() - (spanDays - 1) * 86400000).toISOString().slice(0, 10);
+  const rows = [];
+  try {
+    for (const line of fs.readFileSync(FILES.log, 'utf8').split(/\r?\n/)) {
+      if (!line.includes('"AGENT_USAGE"')) continue;
+      try {
+        const e = JSON.parse(line);
+        if (e && typeof e.ts === 'string' && e.ts.slice(0, 10) >= since) rows.push(e);
+      } catch { /* skip malformed line */ }
+    }
+  } catch { /* no log yet */ }
+
+  const byDay = {};
+  const totals = {};
+  for (const e of rows) {
+    const day = e.ts.slice(0, 10);
+    const engine = e.engine || 'unknown';
+    const model = e.model || 'CLI default';
+    const key = `${engine}|${model}`;
+    const d = (byDay[day] ||= {});
+    const item = (d[key] ||= { engine, model, calls: 0, failed: 0, tokens: 0, tokensKnown: 0, usd: 0, minutes: 0 });
+    item.calls += 1;
+    if (!e.ok) item.failed += 1;
+    if (typeof e.tokens === 'number') { item.tokens += e.tokens; item.tokensKnown += 1; }
+    item.usd = Math.round((item.usd + (Number(e.usd) || 0)) * 1e6) / 1e6;
+    item.minutes = Math.round((item.minutes + (Number(e.ms) || 0) / 60000) * 100) / 100;
+
+    const tot = (totals[engine] ||= { calls: 0, failed: 0, tokens: 0, usd: 0, minutes: 0 });
+    tot.calls += 1;
+    if (!e.ok) tot.failed += 1;
+    if (typeof e.tokens === 'number') tot.tokens += e.tokens;
+    tot.usd = Math.round((tot.usd + (Number(e.usd) || 0)) * 1e6) / 1e6;
+    tot.minutes = Math.round((tot.minutes + (Number(e.ms) || 0) / 60000) * 100) / 100;
+  }
+
+  const dailyLimits = {};
+  if (cfg.dailyLimits && typeof cfg.dailyLimits === 'object') {
+    for (const [k, v] of Object.entries(cfg.dailyLimits)) {
+      if (k !== 'note' && v && typeof v === 'object') dailyLimits[k] = v;
+    }
+  }
+
+  const warnings = (() => {
+    try {
+      return quotaWarnings(cfg).map((w) => ({ ...w, message: formatQuotaWarning(w, cfg) }));
+    } catch { return []; }
+  })();
+
+  return {
+    ts: new Date().toISOString(),
+    dailyLimits,
+    today,
+    days7: { since, days: spanDays, byDay, totals },
+    warnings
+  };
+}
+
+export function readBacklogData() {
+  const b = (() => {
+    try { return readBacklog(); } catch { return { version: '2.0.0', project: '', tasks: [] }; }
+  })();
+  const tasks = Array.isArray(b.tasks) ? b.tasks : [];
+  return {
+    ts: new Date().toISOString(),
+    project: b.project || '',
+    maxAutoTasksPerRun: b.maxAutoTasksPerRun ?? 3,
+    counts: backlogCounts(b),
+    next: nextReady(b),
+    tasks
+  };
+}
+
+export function readSessionsData() {
+  const ts = new Date().toISOString();
+  let common = '';
+  try {
+    common = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 4000
+    }).trim();
+  } catch {
+    return { ts, status: 'unavailable', reason: 'Not a git repository (or git unavailable).', base: null, maxActive: 4, tasks: [] };
+  }
+  if (!common) {
+    return { ts, status: 'unavailable', reason: 'Git common dir unavailable.', base: null, maxActive: 4, tasks: [] };
+  }
+
+  const boardFile = path.resolve(ROOT, common, 'harness-sessions.json');
+  if (!fs.existsSync(boardFile)) {
+    return { ts, status: 'ok', base: null, maxActive: 4, tasks: [] };
+  }
+
+  try {
+    const raw = execFileSync(process.execPath, [path.join(HARNESS_DIR, 'sessions.mjs'), 'board', '--json'], {
+      cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000
+    });
+    const data = JSON.parse(raw);
+    return {
+      ts,
+      status: 'ok',
+      base: data.base || null,
+      maxActive: data.maxActive || 4,
+      tasks: Array.isArray(data.tasks) ? data.tasks : []
+    };
+  } catch {
+    return { ts, status: 'unavailable', reason: 'Unable to read git session board.', base: null, maxActive: 4, tasks: [] };
+  }
+}
+
+export function readVisibleData() {
+  const runs = listVisibleRuns().map((r) => ({
+    ...r,
+    editorLabel: editorDisplayName(r.editor || 'claude-code')
+  }));
+  return {
+    ts: new Date().toISOString(),
+    runs
+  };
+}
+
+const DASHBOARD_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic Harness — Local Dashboard</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-alt: #0b1220;
+    --border: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --ok: #22c55e;
+    --warn: #f59e0b;
+    --err: #ef4444;
+    --pill-bg: #334155;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --sans: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --panel-alt: #f1f5f9;
+      --border: #cbd5e1;
+      --text: #0f172a;
+      --muted: #475569;
+      --accent: #0284c7;
+      --ok: #15803d;
+      --warn: #b45309;
+      --err: #b91c1c;
+      --pill-bg: #e2e8f0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.45;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .brand { display: flex; flex-direction: column; gap: 2px; }
+  .brand-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 1.1rem; font-weight: 700; }
+  .root-path { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); word-break: break-all; }
+  .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  button {
+    background: var(--panel-alt);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    background: var(--pill-bg);
+    color: var(--text);
+    font-family: var(--mono);
+  }
+  .pill.ok { background: rgba(34, 197, 94, 0.18); color: var(--ok); border: 1px solid rgba(34, 197, 94, 0.4); }
+  .pill.warn { background: rgba(245, 158, 11, 0.18); color: var(--warn); border: 1px solid rgba(245, 158, 11, 0.4); }
+  .pill.err { background: rgba(239, 68, 68, 0.18); color: var(--err); border: 1px solid rgba(239, 68, 68, 0.4); }
+  .pill.info { background: rgba(56, 189, 248, 0.15); color: var(--accent); border: 1px solid rgba(56, 189, 248, 0.4); }
+  main { max-width: 1360px; margin: 0 auto; padding: 16px 20px 36px; display: flex; flex-direction: column; gap: 16px; }
+  .alerts { display: flex; flex-direction: column; gap: 8px; }
+  .alert {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.88rem;
+    border: 1px solid var(--warn);
+    background: rgba(245, 158, 11, 0.12);
+  }
+  .alert.err { border-color: var(--err); background: rgba(239, 68, 68, 0.12); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+  }
+  .card h2 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 700;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 10px; font-size: 0.86rem; }
+  .kv .k { color: var(--muted); }
+  .kv .v { font-family: var(--mono); word-break: break-word; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  td.mono, th.mono { font-family: var(--mono); }
+  .badge-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  pre.log-box {
+    margin: 0;
+    background: var(--panel-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    max-height: 290px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .muted { color: var(--muted); font-size: 0.84rem; }
+  .full { grid-column: 1 / -1; }
+  @media (max-width: 600px) {
+    .grid { grid-template-columns: 1fr; }
+    .kv { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="brand-row">
+      <h1>Agentic Harness</h1>
+      <span class="pill info">READ-ONLY · 127.0.0.1</span>
+      <span id="conn-pill" class="pill ok">Live</span>
+    </div>
+    <div id="root-path" class="root-path">Loading workspace...</div>
+  </div>
+  <div class="controls">
+    <span id="updated-at" class="muted">--</span>
+    <button id="toggle-live" type="button">Pause refresh</button>
+    <button id="refresh-now" type="button">Refresh now</button>
+  </div>
+</header>
+
+<main>
+  <section id="alerts" class="alerts"></section>
+
+  <div class="grid">
+    <section class="card">
+      <h2><span>Controller &amp; Verification</span><span id="ctrl-pill" class="pill">--</span></h2>
+      <div id="ctrl-kv" class="kv"></div>
+    </section>
+
+    <section class="card">
+      <h2><span>AI Engines &amp; Daily Quota</span><span id="mem-pill" class="pill">--</span></h2>
+      <div id="engines-badges" class="badge-row"></div>
+      <div id="usage-today" class="kv"></div>
+    </section>
+
+    <section class="card">
+      <h2><span>Backlog</span><span id="backlog-pill" class="pill">--</span></h2>
+      <div id="backlog-counts" class="badge-row"></div>
+      <div id="backlog-body" class="table-wrap"></div>
+    </section>
+
+    <section class="card">
+      <h2><span>7-Day Quota &amp; Usage</span><span id="usage-since" class="pill">--</span></h2>
+      <div id="usage-body" class="table-wrap"></div>
+    </section>
+
+    <section class="card">
+      <h2><span>Editor Runs (Visible)</span><span id="visible-pill" class="pill">--</span></h2>
+      <div id="visible-body" class="table-wrap"></div>
+    </section>
+
+    <section class="card">
+      <h2><span>Session Board (Git Worktrees)</span><span id="sessions-pill" class="pill">--</span></h2>
+      <div id="sessions-body" class="table-wrap"></div>
+    </section>
+
+    <section class="card">
+      <h2><span>Live Feed (.harness/live.log)</span><span id="live-count" class="pill">0 lines</span></h2>
+      <pre id="live-log" class="log-box">Loading...</pre>
+    </section>
+
+    <section class="card">
+      <h2><span>Recent Telemetry (.harness/telemetry.log)</span><span id="tel-count" class="pill">0 events</span></h2>
+      <div id="tel-body" class="table-wrap"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+(() => {
+  const el = (tag, attrs, children) => {
+    const node = document.createElement(tag);
+    if (attrs) {
+      for (const [k, v] of Object.entries(attrs)) {
+        if (k === 'className') node.className = v;
+        else if (v !== undefined && v !== null) node.setAttribute(k, String(v));
+      }
+    }
+    const list = Array.isArray(children) ? children : children !== undefined ? [children] : [];
+    for (const child of list) {
+      if (child === undefined || child === null) continue;
+      node.appendChild(typeof child === 'string' || typeof child === 'number' ? document.createTextNode(String(child)) : child);
+    }
+    return node;
+  };
+
+  const pillClassForStatus = (s) => {
+    const val = String(s || '').toUpperCase();
+    if (['READY', 'PASSED', 'DONE', 'OK', 'MERGED', 'CLEANED', 'RUNNING'].includes(val)) return 'pill ok';
+    if (['BLOCKED', 'FAILED', 'ERROR', 'CHECK FAILED', 'HALTED_HITL_REQUIRED', 'ESCALATED', 'DENIED', 'INCOMPATIBLE'].includes(val)) return 'pill err';
+    if (['IN_PROGRESS', 'WORKING', 'BRIEFED', 'DELEGATED', 'AWAITING CONSENT'].includes(val)) return 'pill warn';
+    return 'pill';
+  };
+
+  const makeTable = (headers, rows) => {
+    const thead = el('thead', null, el('tr', null, headers.map((h) => el('th', null, h))));
+    const tbody = el('tbody', null, rows.map((r) => el('tr', null, r.map((cell) => el('td', cell && cell.mono ? { className: 'mono' } : null, cell && cell.node ? cell.node : cell)))));
+    return el('table', null, [thead, tbody]);
+  };
+
+  let liveRefresh = true;
+  let inFlight = false;
+  const connPill = document.getElementById('conn-pill');
+  const toggleBtn = document.getElementById('toggle-live');
+  const refreshBtn = document.getElementById('refresh-now');
+
+  toggleBtn.addEventListener('click', () => {
+    liveRefresh = !liveRefresh;
+    toggleBtn.textContent = liveRefresh ? 'Pause refresh' : 'Resume refresh';
+    connPill.className = liveRefresh ? 'pill ok' : 'pill warn';
+    connPill.textContent = liveRefresh ? 'Live' : 'Paused';
+  });
+
+  async function fetchJson(url) {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error(url + ' -> HTTP ' + res.status);
+    return res.json();
+  }
+
+  function renderAlerts(status, usage) {
+    const box = document.getElementById('alerts');
+    const items = [];
+    if (status.configError) {
+      items.push(el('div', { className: 'alert err' }, 'Config error: ' + status.configError));
+    }
+    if (Array.isArray(status.coreModified) && status.coreModified.length) {
+      items.push(el('div', { className: 'alert err' }, 'Harness core files differ from MANIFEST.json: ' + status.coreModified.join(', ')));
+    }
+    for (const w of (usage.warnings || status.quotaWarnings || [])) {
+      items.push(el('div', { className: w.over ? 'alert err' : 'alert' }, w.message || ('Quota warning: ' + w.label + ' at ' + w.pct + '%')));
+    }
+    if (status.backlog && Array.isArray(status.backlog.held) && status.backlog.held.length) {
+      const desc = status.backlog.held.map((h) => h.id + ' ("' + h.title + '") — run: node .harness/backlog.mjs approve ' + h.id).join(' | ');
+      items.push(el('div', { className: 'alert' }, 'Needs your OK (' + status.backlog.held.length + ' held): ' + desc));
+    }
+    box.replaceChildren(...items);
+  }
+
+  function renderStatus(status) {
+    document.getElementById('root-path').textContent = status.root || '';
+    const ctrlPill = document.getElementById('ctrl-pill');
+    const c = status.controller || {};
+    ctrlPill.className = c.running ? 'pill ok' : 'pill';
+    ctrlPill.textContent = c.running ? ('Running PID ' + c.pid) : 'Stopped';
+
+    const verifyStr = status.verify
+      ? (status.verify.cmd + (status.verify.real ? ' (' + status.verify.source + ')' : ' (NO real check)'))
+      : '(unknown)';
+    const st = status.state || {};
+    const q = status.queues || {};
+    const rows = [
+      ['Phase', (c.phase || st.phase || 'idle') + (st.cycle ? ' (cycle ' + st.cycle + '/' + (st.maxCycles || 3) + ')' : '')],
+      ['Task', c.taskTitle || '(none)'],
+      ['Autopilot', status.autonomous ? 'ON' : 'off'],
+      ['Verify cmd', verifyStr],
+      ['Last gate', st.lastGateStatus || '-'],
+      ['Queues', 'inbox ' + (q.inbox || 0) + ' · completed ' + (q.completed || 0) + ' · failed ' + (q.failed || 0)]
+    ];
+    const kv = document.getElementById('ctrl-kv');
+    kv.replaceChildren(...rows.flatMap(([k, v]) => [
+      el('div', { className: 'k' }, k),
+      el('div', { className: 'v' }, v)
+    ]));
+
+    document.getElementById('mem-pill').textContent = (status.taughtCount || 0) + ' taught rule(s)';
+    const engBox = document.getElementById('engines-badges');
+    const engines = status.engines || [];
+    engBox.replaceChildren(...(engines.length
+      ? engines.map((e) => el('span', { className: pillClassForStatus(e.status) }, e.name + ': ' + e.status))
+      : [el('span', { className: 'muted' }, 'No engines configured')]));
+
+    const todayBox = document.getElementById('usage-today');
+    todayBox.replaceChildren(
+      el('div', { className: 'k' }, 'Today summary'),
+      el('div', { className: 'v' }, status.usageToday || 'No AI calls logged today (UTC)')
+    );
+  }
+
+  function renderBacklog(bl) {
+    const c = bl.counts || {};
+    const total = (bl.tasks || []).length;
+    document.getElementById('backlog-pill').textContent = total + ' task(s)';
+    const countsBox = document.getElementById('backlog-counts');
+    countsBox.replaceChildren(
+      el('span', { className: 'pill ok' }, 'READY ' + (c.READY || 0)),
+      el('span', { className: 'pill warn' }, 'IN_PROGRESS ' + (c.IN_PROGRESS || 0)),
+      el('span', { className: 'pill err' }, 'BLOCKED ' + (c.BLOCKED || 0)),
+      el('span', { className: 'pill' }, 'DONE ' + (c.DONE || 0)),
+      el('span', { className: 'pill' }, 'BACKLOG ' + (c.BACKLOG || 0))
+    );
+    const body = document.getElementById('backlog-body');
+    const tasks = (bl.tasks || []).slice(0, 25);
+    if (!tasks.length) {
+      body.replaceChildren(el('div', { className: 'muted' }, 'Backlog is empty.'));
+      return;
+    }
+    body.replaceChildren(makeTable(
+      ['ID', 'Status', 'Role', 'Title'],
+      tasks.map((t) => [
+        { mono: true, node: el('span', null, t.id) },
+        { node: el('span', { className: pillClassForStatus(t.status) }, t.status || 'BACKLOG') },
+        { mono: true, node: el('span', null, t.role || '-') },
+        el('span', null, (t.title || t.goal || '-') + (t.blockedReason ? ' [' + t.blockedReason + ']' : ''))
+      ])
+    ));
+  }
+
+  function renderUsage(usage) {
+    const d7 = usage.days7 || {};
+    document.getElementById('usage-since').textContent = 'Since ' + (d7.since || '-');
+    const body = document.getElementById('usage-body');
+    const totals = Object.entries(d7.totals || {});
+    if (!totals.length) {
+      body.replaceChildren(el('div', { className: 'muted' }, 'No AI usage logged in the last 7 days.'));
+      return;
+    }
+    const todayMap = usage.today || {};
+    const limits = usage.dailyLimits || {};
+    body.replaceChildren(makeTable(
+      ['Engine', 'Today Calls / Cap', 'Today USD', '7d Calls', '7d Tokens', '7d USD'],
+      totals.map(([eng, row]) => {
+        const td = todayMap[eng] || { calls: 0, usd: 0 };
+        const cap = limits[eng] || {};
+        const capStr = td.calls + (typeof cap.calls === 'number' ? ' / ' + cap.calls : '');
+        const usdStr = '$' + Number(td.usd || 0).toFixed(2) + (typeof cap.usd === 'number' ? ' / $' + cap.usd : '');
+        return [
+          { mono: true, node: el('span', null, eng) },
+          { mono: true, node: el('span', null, capStr) },
+          { mono: true, node: el('span', null, usdStr) },
+          { mono: true, node: el('span', null, row.calls + (row.failed ? ' (' + row.failed + ' fail)' : '')) },
+          { mono: true, node: el('span', null, row.tokens ? String(row.tokens) : '-') },
+          { mono: true, node: el('span', null, '$' + Number(row.usd || 0).toFixed(2)) }
+        ];
+      })
+    ));
+  }
+
+  function renderVisible(vis) {
+    const runs = vis.runs || [];
+    document.getElementById('visible-pill').textContent = runs.length + ' run(s)';
+    const body = document.getElementById('visible-body');
+    if (!runs.length) {
+      body.replaceChildren(el('div', { className: 'muted' }, 'No editor workflow runs recorded in .harness/visible/.'));
+      return;
+    }
+    const recent = runs.slice(-12).reverse();
+    body.replaceChildren(makeTable(
+      ['Run ID', 'Status', 'Editor', 'Cycle', 'Goal / Title'],
+      recent.map((r) => [
+        { mono: true, node: el('span', null, r.id) },
+        { node: el('span', { className: pillClassForStatus(r.status) }, r.status || '-') },
+        el('span', null, r.editorLabel || r.editor || 'claude-code'),
+        { mono: true, node: el('span', null, String(r.cycle || 0)) },
+        el('span', null, r.title || r.goal || '-')
+      ])
+    ));
+  }
+
+  function renderSessions(sess) {
+    const pill = document.getElementById('sessions-pill');
+    const body = document.getElementById('sessions-body');
+    if (sess.status === 'unavailable') {
+      pill.className = 'pill';
+      pill.textContent = 'Unavailable';
+      body.replaceChildren(el('div', { className: 'muted' }, sess.reason || 'Unavailable (not a git repository).'));
+      return;
+    }
+    const tasks = (sess.tasks || []).filter((t) => t.status !== 'CLEANED');
+    const openCount = tasks.filter((t) => t.status !== 'MERGED').length;
+    const riskCount = tasks.filter((t) => t.risk).length;
+    pill.className = riskCount ? 'pill err' : 'pill ok';
+    pill.textContent = openCount + '/' + (sess.maxActive || 4) + ' open' + (riskCount ? ' · ' + riskCount + ' HIGH RISK' : '');
+    if (!tasks.length) {
+      body.replaceChildren(el('div', { className: 'muted' }, 'No active child sessions.'));
+      return;
+    }
+    body.replaceChildren(makeTable(
+      ['ID', 'Status', 'Title', 'Risk / Note'],
+      tasks.map((t) => [
+        { mono: true, node: el('span', null, t.id) },
+        { node: el('span', { className: t.risk ? 'pill err' : pillClassForStatus(t.status) }, t.status + (t.risk ? ' · HIGH RISK' : '')) },
+        el('span', null, t.title || '-'),
+        el('span', null, t.note || t.risk || '-')
+      ])
+    ));
+  }
+
+  function renderLogs(logs) {
+    const live = logs.live || [];
+    document.getElementById('live-count').textContent = live.length + ' line(s)';
+    const pre = document.getElementById('live-log');
+    const atBottom = Math.abs(pre.scrollHeight - pre.clientHeight - pre.scrollTop) < 24;
+    pre.textContent = live.length ? live.join('\\n') : 'No live events yet (.harness/live.log).';
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+
+    const tel = (logs.telemetry || []).slice(-40).reverse();
+    document.getElementById('tel-count').textContent = (logs.telemetry || []).length + ' event(s)';
+    const telBody = document.getElementById('tel-body');
+    if (!tel.length) {
+      telBody.replaceChildren(el('div', { className: 'muted' }, 'No telemetry events logged yet.'));
+      return;
+    }
+    telBody.replaceChildren(makeTable(
+      ['Time (UTC)', 'Phase', 'Detail'],
+      tel.map((e) => [
+        { mono: true, node: el('span', null, String(e.ts || '').slice(11, 19)) },
+        { mono: true, node: el('span', null, e.phase || '-') },
+        el('span', null, (e.engine ? '[' + e.engine + '] ' : '') + (e.message || ''))
+      ])
+    ));
+  }
+
+  async function refresh() {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const [status, logs, usage, backlog, visible, sessions] = await Promise.all([
+        fetchJson('/api/status'),
+        fetchJson('/api/logs'),
+        fetchJson('/api/usage'),
+        fetchJson('/api/backlog'),
+        fetchJson('/api/visible'),
+        fetchJson('/api/sessions')
+      ]);
+      renderAlerts(status, usage);
+      renderStatus(status);
+      renderBacklog(backlog);
+      renderUsage(usage);
+      renderVisible(visible);
+      renderSessions(sessions);
+      renderLogs(logs);
+      document.getElementById('updated-at').textContent = 'Updated ' + new Date().toLocaleTimeString();
+      if (liveRefresh) {
+        connPill.className = 'pill ok';
+        connPill.textContent = 'Live';
+      }
+    } catch (err) {
+      connPill.className = 'pill err';
+      connPill.textContent = 'Offline';
+      document.getElementById('updated-at').textContent = 'Error: ' + err.message;
+    } finally {
+      inFlight = false;
+    }
+  }
+
+  refreshBtn.addEventListener('click', refresh);
+  refresh();
+  setInterval(() => { if (liveRefresh) refresh(); }, 3000);
+})();
+</script>
+</body>
+</html>
+`;
+
+function sendJson(res, statusCode, payload, headOnly = false, extraHeaders = {}) {
+  const body = JSON.stringify(payload, null, 2);
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    ...extraHeaders
+  });
+  res.end(headOnly ? undefined : body);
+}
+
+export function createUiHandler() {
+  return (req, res) => {
+    const method = String(req.method || 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD') {
+      sendJson(res, 405, { error: 'Read-only dashboard: only GET and HEAD requests are allowed' }, false, { Allow: 'GET, HEAD' });
+      return;
+    }
+    const headOnly = method === 'HEAD';
+    let pathname = '/';
+    try {
+      pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    } catch {
+      sendJson(res, 400, { error: 'Invalid request URL' }, headOnly);
+      return;
+    }
+
+    if (pathname === '/' || pathname === '/index.html') {
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Length': Buffer.byteLength(DASHBOARD_HTML),
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff'
+      });
+      res.end(headOnly ? undefined : DASHBOARD_HTML);
+      return;
+    }
+
+    if (pathname === '/api/status') { sendJson(res, 200, readStatusData(), headOnly); return; }
+    if (pathname === '/api/logs') { sendJson(res, 200, readLogsData(), headOnly); return; }
+    if (pathname === '/api/usage') { sendJson(res, 200, readUsageData(), headOnly); return; }
+    if (pathname === '/api/backlog') { sendJson(res, 200, readBacklogData(), headOnly); return; }
+    if (pathname === '/api/sessions') { sendJson(res, 200, readSessionsData(), headOnly); return; }
+    if (pathname === '/api/visible') { sendJson(res, 200, readVisibleData(), headOnly); return; }
+
+    sendJson(res, 404, { error: 'Not found', path: pathname }, headOnly);
+  };
+}
+
+export function openBrowser(url) {
+  try {
+    let child;
+    if (process.platform === 'win32') {
+      child = spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true });
+    } else if (process.platform === 'darwin') {
+      child = spawn('open', [url], { detached: true, stdio: 'ignore' });
+    } else {
+      child = spawn('xdg-open', [url], { detached: true, stdio: 'ignore' });
+    }
+    child.on('error', () => {});
+    child.unref();
+  } catch { /* opening the browser is best-effort */ }
+}
+
+export function parsePortArg(argv = process.argv.slice(2)) {
+  let port = DEFAULT_PORT;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--port' || a.startsWith('--port=')) {
+      const raw = a.includes('=') ? a.slice('--port='.length) : argv[++i];
+      if (raw === undefined || !/^\d+$/.test(raw)) {
+        throw new Error(`Invalid --port "${raw ?? ''}". Expected an integer from 0 to 65535.`);
+      }
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 0 || n > 65535) {
+        throw new Error(`Invalid --port "${raw}". Expected an integer from 0 to 65535.`);
+      }
+      port = n;
+    }
+  }
+  return port;
+}
+
+export function startUiServer({ port = DEFAULT_PORT, open = true } = {}) {
+  const server = http.createServer(createUiHandler());
+  return new Promise((resolve, reject) => {
+    server.once('error', (err) => reject(err));
+    server.listen(port, '127.0.0.1', () => {
+      const addr = server.address();
+      const actualPort = typeof addr === 'object' && addr ? addr.port : port;
+      const url = `http://127.0.0.1:${actualPort}/`;
+      console.log(`Agentic Harness Web UI (read-only): ${url}`);
+      console.log('Press Ctrl+C to stop.');
+      if (open) openBrowser(url);
+      resolve({ server, url, port: actualPort });
+    });
+  });
+}
+
+const isMain = (() => {
+  try {
+    return Boolean(process.argv[1]) && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch { return false; }
+})();
+
+if (isMain) {
+  helpIfAsked(import.meta.url);
+  if (process.env.HARNESS_WORKER === '1') {
+    console.error('Refusing to start the local web dashboard inside a harness worker.');
+    process.exit(2);
+  }
+  const argv = process.argv.slice(2);
+  let port;
+  try {
+    port = parsePortArg(argv);
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
+  const shouldOpen = !argv.includes('--no-open') && process.env.HARNESS_SILENT !== '1';
+  try {
+    const { server } = await startUiServer({ port, open: shouldOpen });
+    const shutdown = () => {
+      server.close(() => process.exit(0));
+      setTimeout(() => process.exit(0), 500).unref();
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+  } catch (err) {
+    if (err && err.code === 'EADDRINUSE') {
+      console.error(`Port ${port} is already in use on 127.0.0.1. Run with --port 0 or choose another port.`);
+    } else {
+      console.error(`Failed to start local web dashboard: ${err?.message || err}`);
+    }
+    process.exit(1);
+  }
+}

@@ -2625,16 +2625,17 @@ await test('hook-session.mjs --brief: prints 4-8 concise lines in idle and busy 
   assert(node(wt, ['.harness/hook-session.mjs', '--brief'], { HARNESS_ROOT: wt }).status === 0, 'broken config must not break --brief');
 });
 
-await test('v1.0.12 packaging: VS Code tasks + backlogId input, npm start script, and install.mjs merges & fingerprints start.mjs', () => {
+await test('v1.0.13 packaging: VS Code tasks + backlogId input, npm start & ui scripts, and install.mjs merges & fingerprints start.mjs and ui.mjs', () => {
   const pkg = json(path.join(REPO, 'package.json'));
-  assert(pkg.version === '1.0.12' && pkg.scripts.start === 'node .harness/start.mjs', JSON.stringify(pkg.scripts));
+  assert(pkg.version === '1.0.13' && pkg.scripts.start === 'node .harness/start.mjs' && pkg.scripts.ui === 'node .harness/ui.mjs', JSON.stringify(pkg.scripts));
   const tasksCfg = json(path.join(REPO, '.vscode', 'tasks.json'));
   const expectedLabels = [
     'Harness: Start Menu (interactive)',
     'Harness: Handoff / Inspect unfinished run',
     'Harness: Resume unfinished run in terminal',
     'Harness: Session Board (child sessions)',
-    'Harness: Approve held backlog item'
+    'Harness: Approve held backlog item',
+    'Harness: Local Web UI (dashboard)'
   ];
   for (const label of expectedLabels) assert(tasksCfg.tasks.some((t) => t.label === label), `missing task: ${label}`);
   assert(tasksCfg.inputs.some((i) => i.id === 'backlogId') && tasksCfg.inputs.some((i) => i.id === 'engine'), 'missing inputs');
@@ -2649,7 +2650,7 @@ await test('v1.0.12 packaging: VS Code tasks + backlogId input, npm start script
   const inst = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj], { encoding: 'utf8' });
   assert(inst.status === 0 && /node \.harness\/start\.mjs/.test(inst.stdout), inst.stdout + inst.stderr);
   const manifest = json(path.join(proj, '.harness', 'MANIFEST.json'));
-  assert(manifest.version === '1.0.12' && Boolean(manifest.files['.harness/start.mjs']), 'start.mjs not fingerprinted in MANIFEST');
+  assert(manifest.version === '1.0.13' && Boolean(manifest.files['.harness/start.mjs']) && Boolean(manifest.files['.harness/ui.mjs']), 'start.mjs/ui.mjs not fingerprinted in MANIFEST');
   const merged = json(path.join(proj, '.vscode', 'tasks.json'));
   assert(merged.tasks.some((t) => t.label === 'My Custom Build'), 'custom task lost');
   assert(!merged.tasks.some((t) => t.label === 'Harness: old stale task'), 'old Harness task not replaced');
@@ -2981,6 +2982,147 @@ await test('quotaWarnings & CLI pre-flight: warns cleanly at >= 80% across commo
   assert(disp.status === 0, `dispatch failed: ${disp.stdout}\n${disp.stderr}`);
   assert(/! Quota warning: mock at 80% of daily calls limit \(8\/10 calls\) \(quotaFallback → claude configured\)/.test(disp.stdout), disp.stdout);
   assert(/RESULT: COMMITTED/.test(disp.stdout) && read(d, 'src/p4.txt') === 'ok', disp.stdout);
+});
+
+// ───────────── v1.0.13 (Priority 5): local read-only web UI (.harness/ui.mjs) ─────────────
+
+async function startUiProcess(cwd, extraEnv = {}, extraArgs = []) {
+  const child = spawn(process.execPath, [path.join(cwd, '.harness', 'ui.mjs'), '--port', '0', '--no-open', ...extraArgs], {
+    cwd,
+    env: { ...env, HARNESS_ROOT: cwd, ...extraEnv },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let out = '';
+  let err = '';
+  const url = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`ui.mjs did not announce URL within 10s.\nstdout: ${out}\nstderr: ${err}`)), 10000);
+    child.stdout.on('data', (chunk) => {
+      out += chunk.toString();
+      const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)\//);
+      if (m) { clearTimeout(timer); resolve(m[0]); }
+    });
+    child.stderr.on('data', (chunk) => { err += chunk.toString(); });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      reject(new Error(`ui.mjs exited early (${code}).\nstdout: ${out}\nstderr: ${err}`));
+    });
+  });
+  const stop = async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    await new Promise((resolve) => {
+      const killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ } }, 1500);
+      child.once('close', () => { clearTimeout(killTimer); resolve(); });
+      try { child.kill('SIGTERM'); } catch { clearTimeout(killTimer); resolve(); }
+    });
+  };
+  return { url, port: new URL(url).port, stop };
+}
+
+await test('ui.mjs CLI guards & local HTTP dashboard (offline SPA, 127.0.0.1, read-only routes, 405/404, non-git sessions)', async () => {
+  const d = sandbox();
+  // CLI guards
+  const rHelp = node(d, ['.harness/ui.mjs', '--help']);
+  assert(rHelp.status === 0 && /ui\.mjs/.test(rHelp.stdout) && /--no-open/.test(rHelp.stdout), rHelp.stdout + rHelp.stderr);
+  assert(node(d, ['.harness/ui.mjs', '--no-open'], { HARNESS_WORKER: '1' }).status === 2, 'HARNESS_WORKER=1 must exit 2');
+  for (const badPort of [['--port', 'bad'], ['--port', '-1'], ['--port', '70000'], ['--port=']]) {
+    const rb = node(d, ['.harness/ui.mjs', '--no-open', ...badPort]);
+    assert(rb.status === 1 && /Invalid --port/.test(rb.stderr), `expected exit 1 for ${badPort.join(' ')}: ${rb.stderr}`);
+  }
+
+  // Populate non-git sandbox with logs, >= 80% quota usage, backlog, held item, open visible run, state
+  const cfgFile = path.join(d, '.harness', 'config.json');
+  const cfg = json(cfgFile);
+  cfg.dailyLimits = { mock: { calls: 10, usd: 5 } };
+  fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2));
+  const today = new Date().toISOString().slice(0, 10);
+  const logLines = Array(8).fill(0).map((_, i) => JSON.stringify({ ts: `${today}T00:05:0${i}.000Z`, phase: 'AGENT_USAGE', engine: 'mock', model: 'fast', ok: true, tokens: 50, usd: 0.5, ms: 400, message: `usage-${i}` }));
+  logLines.push('not-valid-json-line');
+  logLines.push(JSON.stringify({ ts: `${today}T00:06:00.000Z`, phase: 'DISPATCH', message: 'Started job demo' }));
+  fs.writeFileSync(path.join(d, '.harness', 'telemetry.log'), logLines.join('\n') + '\n');
+  fs.writeFileSync(path.join(d, '.harness', 'live.log'), '[00:05:01] line one\n[00:06:00] <script>alert(1)</script>\n');
+  fs.writeFileSync(path.join(d, '.harness', 'state.json'), JSON.stringify({ phase: 'IDLE', cycle: 0, maxCycles: 3, lastGateStatus: 'PASSED', updatedAt: `${today}T00:06:00.000Z` }));
+  setBacklog(d, [
+    { id: 'T-1', title: 'Ready work', status: 'READY', priority: 1, role: 'DEV_ENGINEER', goal: 'do it' },
+    { id: 'T-HELD', title: 'Big team work', status: 'BLOCKED', needsApproval: true, blockedReason: 'Needs your OK', priority: 2, goal: 'big' }
+  ]);
+  const runId = runIdOf(vis(d, 'brief', '--goal', 'Dashboard visible run', '--check', PASS, '--editor', 'antigravity'));
+
+  const srv = await startUiProcess(d);
+  try {
+    // 1. HTML dashboard (offline, zero CDN, no-store)
+    const htmlRes = await fetch(srv.url);
+    assert(htmlRes.status === 200, `GET / status ${htmlRes.status}`);
+    assert((htmlRes.headers.get('cache-control') || '').includes('no-store'), 'missing no-store on /');
+    assert((htmlRes.headers.get('content-type') || '').includes('text/html'), 'expected text/html');
+    const html = await htmlRes.text();
+    assert(/Agentic Harness/.test(html) && !/<script[^>]+src=["']https?:|<link[^>]+href=["']https?:/i.test(html), 'dashboard HTML must be offline with no external CDN URLs');
+
+    // 2. API endpoints
+    const fetchApi = async (p) => {
+      const r = await fetch(`${srv.url.replace(/\/$/, '')}${p}`);
+      assert(r.status === 200 && (r.headers.get('cache-control') || '').includes('no-store'), `${p} failed: ${r.status}`);
+      return r.json();
+    };
+    const st = await fetchApi('/api/status');
+    assert(st.backlog.counts.READY === 1 && st.backlog.held.length === 1 && st.visible.open[0].id === runId && st.quotaWarnings.length >= 2, JSON.stringify(st));
+
+    const logs = await fetchApi('/api/logs');
+    assert(logs.live.length === 2 && logs.telemetry.length === 9, JSON.stringify(logs));
+
+    const usage = await fetchApi('/api/usage');
+    assert(usage.today.mock.calls === 8 && usage.days7.totals.mock.calls === 8 && usage.warnings.some((w) => w.engine === 'mock' && w.pct === 80), JSON.stringify(usage));
+
+    const bl = await fetchApi('/api/backlog');
+    assert(bl.counts.READY === 1 && bl.counts.BLOCKED === 1 && bl.next.id === 'T-1', JSON.stringify(bl));
+
+    const visData = await fetchApi('/api/visible');
+    assert(visData.runs.length === 1 && visData.runs[0].id === runId && visData.runs[0].editorLabel === 'Antigravity', JSON.stringify(visData));
+
+    // Non-git workspace returns clean unavailable payload (never 500)
+    const sess = await fetchApi('/api/sessions');
+    assert(sess.status === 'unavailable' && Array.isArray(sess.tasks) && sess.tasks.length === 0, JSON.stringify(sess));
+
+    // 3. HEAD + read-only 405 + 404 + EADDRINUSE
+    const headRes = await fetch(`${srv.url.replace(/\/$/, '')}/api/status`, { method: 'HEAD' });
+    assert(headRes.status === 200 && (await headRes.text()) === '', 'HEAD /api/status failed');
+    const postRes = await fetch(`${srv.url.replace(/\/$/, '')}/api/status`, { method: 'POST', body: '{}' });
+    assert(postRes.status === 405 && (postRes.headers.get('allow') || '').includes('GET'), `expected 405, got ${postRes.status}`);
+    const delRes = await fetch(`${srv.url.replace(/\/$/, '')}/api/backlog`, { method: 'DELETE' });
+    assert(delRes.status === 405, `expected 405 on DELETE, got ${delRes.status}`);
+    const notFound = await fetch(`${srv.url.replace(/\/$/, '')}/api/does-not-exist`);
+    assert(notFound.status === 404, `expected 404, got ${notFound.status}`);
+
+    const dup = spawnSync(process.execPath, [path.join(d, '.harness', 'ui.mjs'), '--port', srv.port, '--no-open'], {
+      cwd: d, env: { ...env, HARNESS_ROOT: d }, encoding: 'utf8', timeout: 10000
+    });
+    assert(dup.status === 1 && /already in use/.test(dup.stderr), `expected EADDRINUSE error: ${dup.stderr}`);
+  } finally {
+    await srv.stop();
+  }
+});
+
+await test('ui.mjs sessions API inside git repository: returns live child sessions & HIGH RISK status', async () => {
+  const { d, g } = gitSandbox();
+  realTest(d); g('add', 'package.json'); g('commit', '-q', '-m', 'pkg');
+  const rNew = node(d, ['.harness/sessions.mjs', 'new', 'Dashboard child feature', '--type', 'feat'], { HARNESS_ROOT: d });
+  assert(rNew.status === 0, rNew.stdout + rNew.stderr);
+  const common = execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: d, encoding: 'utf8' }).trim();
+  const boardFile = path.resolve(d, common, 'harness-sessions.json');
+  const bj = json(boardFile);
+  bj.tasks[0].createdAt = new Date(Date.now() - 5 * 3600000).toISOString();
+  fs.writeFileSync(boardFile, JSON.stringify(bj, null, 2));
+
+  const srv = await startUiProcess(d);
+  try {
+    const r = await fetch(`${srv.url.replace(/\/$/, '')}/api/sessions`);
+    assert(r.status === 200, r.status);
+    const data = await r.json();
+    assert(data.status === 'ok' && data.tasks.length === 1 && data.tasks[0].id === 'FEAT-1' && Boolean(data.tasks[0].risk), JSON.stringify(data));
+    const st = await (await fetch(`${srv.url.replace(/\/$/, '')}/api/status`)).json();
+    assert(st.sessions && st.sessions.highRisk.length === 1 && st.sessions.highRisk[0].id === 'FEAT-1', JSON.stringify(st.sessions));
+  } finally {
+    await srv.stop();
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

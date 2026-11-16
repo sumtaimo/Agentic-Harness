@@ -297,6 +297,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/state.json` · `telemetry.log` | live state · JSONL event log |
 | `.harness/live.log` · `watch.mjs` | plain-text live feed of every agent action · follow it (`--job <id>` ends with the result) |
 | `.harness/start.mjs` · `usage.mjs` | interactive `[1]`–`[6]` launcher + live banner (`--summary`, `--json`, `npm start`) · daily/7d/30d quota & 80% pre-flight/banner warnings (`npm run usage`) |
+| `.harness/ui.mjs` | read-only local web dashboard on `127.0.0.1:4173` (`npm run ui`, `--port <n>`, `--no-open`; status, backlog, quota, visible runs, sessions, logs) |
 | `.harness/hook-session.mjs` | prints harness state at session start (`--brief`: 4–8 line read-only summary for any editor/shell) |
 | `.vscode/tasks.json` | buttons for the user (Run Task menu) |
 | `.claude/settings.json` · `commands/harness/*.md` | Claude Code permission rules + start-up hook · `/harness:run`, `:status`, `:tick`, `:doctor`, `:teach` (the user must trust the folder once for the rules to apply) |

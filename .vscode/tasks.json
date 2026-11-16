@@ -362,6 +362,26 @@
         "clear": true
       },
       "problemMatcher": []
+    },
+    {
+      "label": "Harness: Local Web UI (dashboard)",
+      "detail": "Start the read-only local web dashboard on http://127.0.0.1:4173/ (status, backlog, quota, sessions, live logs).",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/ui.mjs"
+      ],
+      "isBackground": true,
+      "runOptions": {
+        "instanceLimit": 1
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "group": "harness"
+      },
+      "problemMatcher": []
     }
   ],
   "inputs": [

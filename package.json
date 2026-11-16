@@ -1,6 +1,6 @@
 {
   "name": "agentic-harness",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "private": true,
   "description": "Zero-dependency agentic workflow harness template (no packages to install)",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node .harness/start.mjs",
+    "ui": "node .harness/ui.mjs",
     "test": "node test/run-tests.mjs && node --test test/engine-probe.test.mjs",
     "test:live": "node test/live-e2e.mjs",
     "demo": "node examples/make-demo.mjs",

@@ -35,7 +35,7 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 - **ជំហានទី៤ `verify`៖** controller ស្តារការកែប្រែណាដែលនៅក្រៅការចាត់តាំង ហើយរត់ check ពិតប្រាកដ។
 - **ជំហានទី៥៖** orchestrator រាយការណ៍ជូនអ្នក។ វានិយាយថា "PASSED" លុះត្រាតែ controller និយាយដូច្នោះ។
 - **បន្តការងារពេល session ឈប់ឬអស់ quota៖** បើ session editor ឈប់កណ្តាលទី ប្រើ `node .harness/visible.mjs handoff` ដើម្បីមើលការងារដែលបានកែរួច និងយក prompt បន្តទៅ editor ផ្សេង ឬប្រើ `node .harness/dispatch.mjs --resume-visible --wait` ដើម្បីឱ្យ terminal/engine ផ្សេងបន្តបញ្ចប់ការងារនោះដោយរក្សាការកែប្រែដើមទុក (ប្រើ `--editor <name>` លើ `visible.mjs brief` / `assign` ពេលចាប់ផ្តើមពី editor ផ្សេងក្រៅពី Claude Code)។
-- **ម៉ឺនុយលេខងាយប្រើ និងសង្ខេបខ្លី៖** វាយ `npm start` (`node .harness/start.mjs`, ឬ `--summary` មើលតែតារាងសង្ខេប) ដើម្បីបើកម៉ឺនុយ `[1]`–`[6]` សម្រាប់គ្រប់ការងារទាំងអស់ដោយមិនចាំបាច់ចាំ command វែង ឬរត់ `node .harness/hook-session.mjs --brief` សម្រាប់សង្ខេប ៤–៨ បន្ទាត់នៅក្នុង Antigravity, Cursor ឬ Terminal។
+- **ម៉ឺនុយលេខងាយប្រើ និងសង្ខេបខ្លី៖** វាយ `npm start` (`node .harness/start.mjs`, ឬ `--summary` មើលតែតារាងសង្ខេប) ដើម្បីបើកម៉ឺនុយ `[1]`–`[6]` សម្រាប់គ្រប់ការងារទាំងអស់ដោយមិនចាំបាច់ចាំ command វែង, វាយ `npm run ui` (`node .harness/ui.mjs`, តែលើ `127.0.0.1` ប៉ុណ្ណោះ) ដើម្បីមើលផ្ទាំង Web Dashboard អានតែប៉ុណ្ណោះ (ស្ថានភាព, backlog, quota, sessions និង logs) ឬរត់ `node .harness/hook-session.mjs --brief` សម្រាប់សង្ខេប ៤–៨ បន្ទាត់នៅក្នុង Antigravity, Cursor ឬ Terminal។
 
 ## ៥. ការជ្រើសរើស engine
 

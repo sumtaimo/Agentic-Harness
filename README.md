@@ -218,6 +218,7 @@ Start in one step from any terminal (**`npm start`** or `node .harness/start.mjs
 | **Harness: Resume unfinished run in terminal** | Finishes an unfinished editor run headlessly with your chosen AI engine, keeping partial edits. |
 | **Harness: Session Board (child sessions)** | Shows child task branches, DONE items ready to merge, and HIGH RISK warnings. |
 | **Harness: Approve held backlog item** | Approves a big backlog task held as "Needs OK" so Autopilot can run it. |
+| **Harness: Local Web UI (dashboard)** | Opens the read-only local web dashboard on `http://127.0.0.1:4173/` (`npm run ui`). |
 | **Harness: Run Self-Test Cycle** | Proves the harness itself works (no AI needed). |
 
 In Antigravity, Cursor, or VS Code (without Claude Code's automatic `SessionStart` hook), run `node .harness/hook-session.mjs --brief` for a 4–8 line workspace & quota summary.
@@ -553,6 +554,7 @@ node .harness/dispatch.mjs --resume-visible --wait   # finish an unfinished edit
 node .harness/dispatch.mjs --cwd <dir> --goal "…" --wait   # run workers & checks inside another folder/worktree
 node .harness/sessions.mjs board|new|checkpoint|handoff|merge|cleanup   # multi-session child task board + WIP handoff
 node .harness/start.mjs                  # interactive numbered menu + live overview banner (or: npm start, --summary)
+node .harness/ui.mjs                     # read-only local web dashboard on 127.0.0.1:4173 (or: npm run ui, --port <n>, --no-open)
 node .harness/hook-session.mjs --brief   # 4–8 line status & quota summary for any editor or terminal
 node .harness/team.mjs show|validate     # the agent team and its guardrails
 ```
