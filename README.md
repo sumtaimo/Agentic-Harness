@@ -199,10 +199,11 @@ One developer and a team of people get the same harness: the full AI agent team 
 
 ## 3. Everyday use — no coding needed
 
-Everything is in **Command Palette → Tasks: Run Task**:
+Start in one step from any terminal (**`npm start`** or `node .harness/start.mjs`, `--summary` for the live overview banner) for an interactive numbered menu `[1]`–`[6]`, or use **Command Palette → Tasks: Run Task**:
 
 | Task | What it does |
 |---|---|
+| **Harness: Start Menu (interactive)** | Opens the live overview banner and `[1]`–`[6]` menu (`node .harness/start.mjs`). |
 | **Harness: 1. Start (live screen)** | Starts the background harness and shows the live screen (auto-starts on folder open). |
 | **Harness: 2. New task (type what you want)** | Asks: *what to do*, *which files/folders it may change* (optional), *how to check it* (optional), *which AI*, and *split into parallel workers?* Then runs it and tells you **COMMITTED ✔** or **NOT DONE ✖**. |
 | **Harness: 3. Teach the AI something** | Saves a rule, e.g. *"Always explain changes in simple English"*. Every AI in this folder follows it from then on. |
@@ -213,7 +214,13 @@ Everything is in **Command Palette → Tasks: Run Task**:
 | **Harness: 8. View Backlog & Releases** | The backlog by status, and the saved release snapshots. |
 | **Harness: 9. Import New Goal/Backlog with Snapshot** | Replace the backlog (.json), charter (.md) or skills (folder). The old one is saved first. |
 | **Harness: 10. Add a goal to the backlog** | Add one item, READY to run or as an idea. |
+| **Harness: Handoff / Inspect unfinished run** | Inspects an open/stopped editor run, partial edits, and prints a continuation prompt. |
+| **Harness: Resume unfinished run in terminal** | Finishes an unfinished editor run headlessly with your chosen AI engine, keeping partial edits. |
+| **Harness: Session Board (child sessions)** | Shows child task branches, DONE items ready to merge, and HIGH RISK warnings. |
+| **Harness: Approve held backlog item** | Approves a big backlog task held as "Needs OK" so Autopilot can run it. |
 | **Harness: Run Self-Test Cycle** | Proves the harness itself works (no AI needed). |
+
+In Antigravity, Cursor, or VS Code (without Claude Code's automatic `SessionStart` hook), run `node .harness/hook-session.mjs --brief` for a 4–8 line workspace & quota summary.
 
 Or just **talk to your editor's AI chat**. It reads `AGENTS.md`, so you can say things like:
 > Use the harness to add a contact form to the homepage, and check it with the tests.
@@ -542,6 +549,8 @@ npm run test:live                        # REAL Claude agents end to end, 6 scen
 node .harness/visible.mjs status          # runs of the editor workflow
 node .harness/visible.mjs handoff         # inspect an unfinished run and get a prompt/command to continue it
 node .harness/dispatch.mjs --resume-visible --wait   # finish an unfinished editor run headlessly (keeps partial edits)
+node .harness/start.mjs                  # interactive numbered menu + live overview banner (or: npm start, --summary)
+node .harness/hook-session.mjs --brief   # 4–8 line status & quota summary for any editor or terminal
 node .harness/team.mjs show|validate     # the agent team and its guardrails
 ```
 

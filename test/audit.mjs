@@ -90,6 +90,18 @@ const toMain = [...docFiles, 'website/src/site.ts', 'website/src/components/UseC
 check('every install command points at the tested template (#release), not the lab', !toMain.length, toMain.join(', '));
 check('the landing page deploys from the release branch', /branches: \[release\]/.test(read('.github/workflows/deploy-website.yml')));
 check('installer copy of .gitignore matches .gitignore', !!giCopy && JSON.parse(giCopy) === read('.gitignore'));
+{
+  const tasksCfg = (() => { try { return JSON.parse(read('.vscode/tasks.json')); } catch { return null; } })();
+  const inputIds = new Set((tasksCfg?.inputs || []).map((i) => i.id));
+  const badTasks = !tasksCfg || !Array.isArray(tasksCfg.tasks) ? ['invalid JSON'] : tasksCfg.tasks.flatMap((t) => {
+    const errs = [];
+    const cmdStr = `${t.command || ''} ${(t.args || []).join(' ')}`;
+    for (const m of cmdStr.matchAll(/(\.harness\/[a-z-]+\.mjs)/g)) if (!fs.existsSync(path.join(REPO, m[1]))) errs.push(`${t.label}: missing ${m[1]}`);
+    for (const m of cmdStr.matchAll(/\$\{input:([\w-]+)\}/g)) if (!inputIds.has(m[1])) errs.push(`${t.label}: missing input "${m[1]}"`);
+    return errs;
+  });
+  check('VS Code tasks (.vscode/tasks.json) are valid JSON with real scripts and inputs', !badTasks.length, badTasks.join('; '));
+}
 
 // 5. Website (optional)
 if (process.argv.includes('--site')) {

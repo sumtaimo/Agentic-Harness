@@ -280,6 +280,88 @@
         "reveal": "always",
         "panel": "dedicated"
       }
+    },
+    {
+      "label": "Harness: Start Menu (interactive)",
+      "detail": "Open the interactive numbered menu + live overview banner for every harness workflow.",
+      "type": "shell",
+      "command": "node .harness/start.mjs",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "focus": true
+      }
+    },
+    {
+      "label": "Harness: Handoff / Inspect unfinished run",
+      "detail": "Inspect an unfinished or stopped editor run, partial changes on disk, and print a continuation prompt.",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/visible.mjs",
+        "handoff"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: Resume unfinished run in terminal",
+      "detail": "Continue and verify an unfinished editor run headlessly in Terminal with your selected engine, keeping partial edits.",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/dispatch.mjs",
+        "--resume-visible",
+        "--engine",
+        "${input:engine}",
+        "--wait"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true,
+        "focus": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: Session Board (child sessions)",
+      "detail": "List child task branches, DONE tasks ready to merge, and any HIGH RISK warnings.",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/sessions.mjs",
+        "board"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: Approve held backlog item",
+      "detail": "Approve a big backlog task held as Needs OK so Autopilot can run it.",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/backlog.mjs",
+        "approve",
+        "${input:backlogId}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
     }
   ],
   "inputs": [
@@ -341,6 +423,11 @@
         "BACKLOG"
       ],
       "default": "READY"
+    },
+    {
+      "id": "backlogId",
+      "type": "promptString",
+      "description": "Backlog item ID waiting for approval (see 'Harness: 8. View Backlog & Releases' or hook summary)"
     }
   ]
 }

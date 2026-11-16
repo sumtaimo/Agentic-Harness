@@ -98,6 +98,7 @@ is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
    - `BRIEFED` runs auto-select team hierarchy (`team.json`) or the AI planner.
    - If the headless resume halts or rejects after 3 cycles, only the failed headless edits are rolled back so your
      pre-handoff work stays intact and `node .harness/visible.mjs rollback <run>` still restores all the way to before the run started.
+3. **Interactive menu & quick status (any terminal or editor):** run `npm start` (`node .harness/start.mjs`, or `--summary` for just the overview banner) for `[1]`–`[6]` guided actions (handoff/resume, dispatch, tool consent, backlog approvals, session board, quota & memory), or run `node .harness/hook-session.mjs --brief` for a 4–8 line status snapshot in Antigravity, Cursor, VS Code, or any shell.
 
 ## 4. What is NOT guaranteed (read this before trusting it with a real project)
 

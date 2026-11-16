@@ -2263,7 +2263,7 @@ await test('new roles: lead-ux owns only style files (one owner per file stays t
 
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
   const d = sandbox();
-  for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch', 'sessions']) { // daemon --help once started the controller
+  for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch', 'sessions', 'start']) { // daemon --help once started the controller
     const r = node(d, [`.harness/${c}.mjs`, '--help']);
     assert(r.status === 0 && new RegExp(`${c}\\.mjs`).test(r.stdout), `${c} --help: exit ${r.status}\n${r.stdout.slice(0, 200)}${r.stderr.slice(0, 200)}`);
   }
@@ -2500,6 +2500,161 @@ await test('Windows backslash paths & cross-engine model guards: docs\\ trailing
   const rFb = node(dFb, ['.harness/dispatch.mjs', '--resume-visible', idFb, '--wait']);
   assert(rFb.status === 0 && read(dFb, 'src/fb.js') === 'fb-ok', rFb.stdout + rFb.stderr);
   assert(modelArg(dFb, 'lead-dev') === 'ag-fast', `ENGINE_FALLBACK leaked claude alias: ${modelArg(dFb, 'lead-dev')}`);
+});
+
+// ───────────── v1.0.10 (Priority 2): start.mjs launcher, hook-session.mjs --brief, VS Code tasks ─────────────
+
+await test('start.mjs launcher: --summary & --json show live banner states, fake-CLI readiness/consent, worker guard, and piped menu navigation', () => {
+  const { d, g } = gitSandbox({ autonomous: true });
+  realTest(d); g('add', 'package.json'); g('commit', '-q', '-m', 'pkg');
+  // Fake claude binary on PATH so start.mjs probes awaiting consent -> ready -> denied without touching real CLIs
+  const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-fakebin-'));
+  const claudeHelp = 'Usage: claude [options]\n  -p, --print\n  --allowedTools <t>\n  --disallowedTools <t>\n  --output-format <f>\n  --verbose\n  --model <m>\n';
+  if (process.platform === 'win32') {
+    fs.writeFileSync(path.join(fakeBin, 'claude.txt'), claudeHelp.replace(/\n/g, '\r\n'));
+    fs.writeFileSync(path.join(fakeBin, 'claude.cmd'), '@type "%~dp0claude.txt"\r\n');
+  } else {
+    fs.writeFileSync(path.join(fakeBin, 'claude'), `#!/bin/sh\ncat <<'EOF'\n${claudeHelp}EOF\n`);
+    fs.chmodSync(path.join(fakeBin, 'claude'), 0o755);
+  }
+  const withFakePath = { PATH: `${fakeBin}${path.delimiter}${env[Object.keys(env).find((k) => k.toUpperCase() === 'PATH')] || ''}` };
+
+  // Held item ("Needs OK"), open visible run, quota log, and live controller PID
+  setBacklog(d, [
+    { id: 'B-BIG', title: 'Big team feature', status: 'BLOCKED', needsApproval: true, blockedReason: 'Needs your OK: team mode', priority: 1, goal: 'Build big thing', verifyCmd: PASS },
+    { id: 'B-RDY', title: 'Ready item', status: 'READY', priority: 2, goal: 'Build small thing', verifyCmd: PASS }
+  ]);
+  const runId = runIdOf(vis(d, 'brief', '--goal', 'Editor pause test', '--check', PASS, '--editor', 'antigravity'));
+  fs.appendFileSync(path.join(d, '.harness', 'telemetry.log'), JSON.stringify({ ts: new Date().toISOString(), phase: 'AGENT_USAGE', engine: 'claude', model: 'haiku', ok: true, tokens: 120, usd: 0.02, message: 'usage' }) + '\n');
+  fs.writeFileSync(path.join(d, '.harness', 'daemon.pid'), String(process.pid));
+
+  const sum = node(d, ['.harness/start.mjs', '--summary'], withFakePath);
+  assert(sum.status === 0, sum.stderr);
+  assert(/Controller:\s+running \(PID \d+\)/.test(sum.stdout) && /Autopilot:\s+ON/.test(sum.stdout), sum.stdout);
+  assert(/Verify cmd:\s+npm test/.test(sum.stdout), sum.stdout);
+  assert(/READY 1 · IN_PROGRESS 0 · BLOCKED 1/.test(sum.stdout), sum.stdout);
+  assert(new RegExp(`Open run ${runId}.*Antigravity`).test(sum.stdout), sum.stdout);
+  assert(/Needs OK:\s+1 held item\(s\): B-BIG/.test(sum.stdout), sum.stdout);
+  assert(/claude: awaiting consent/.test(sum.stdout), sum.stdout);
+  assert(/Quota today:.*claude 1\/60 call\(s\)/.test(sum.stdout), sum.stdout);
+
+  // Toggle claude approval -> ready, then deny -> denied, and check --json
+  assert(node(d, ['.harness/engines.mjs', 'allow', 'claude'], withFakePath).status === 0, 'allow claude');
+  const sumReady = node(d, ['.harness/start.mjs', '--json'], withFakePath);
+  assert(sumReady.status === 0, sumReady.stderr);
+  const j = JSON.parse(sumReady.stdout);
+  assert(j.controller.running === true && j.autonomous === true && j.backlog.held.length === 1 && j.visible.open[0].id === runId, JSON.stringify(j));
+  assert(j.engines.find((e) => e.name === 'claude').status === 'ready', JSON.stringify(j.engines));
+  assert(node(d, ['.harness/engines.mjs', 'deny', 'claude'], withFakePath).status === 0, 'deny claude');
+  assert(/claude: denied/.test(node(d, ['.harness/start.mjs', '--summary'], withFakePath).stdout), 'expected claude: denied');
+
+  // Worker guard refuses interactive menu
+  assert(node(d, ['.harness/start.mjs'], { HARNESS_WORKER: '1' }).status === 2, 'HARNESS_WORKER=1 must be refused');
+
+  // Piped interactive menu navigation:
+  // [1] Continue -> [1] handoff; [1] Continue -> [5] rollback declined ("n"); [4] Backlog -> [2] approve B-BIG ("y"); [6] Usage -> [6] --brief; [0] Exit
+  const runMenuInput = (input) => spawnSync(process.execPath, ['.harness/start.mjs'], {
+    cwd: d, env: { ...env, ...withFakePath }, input, encoding: 'utf8', timeout: 30000
+  });
+  const mRes = runMenuInput(`1\n1\n1\n5\nn\n4\n2\nB-BIG\ny\n6\n6\n0\n`);
+  assert(mRes.status === 0, `menu failed (${mRes.status}): ${mRes.stderr}\n${mRes.stdout}`);
+  assert(new RegExp(`HANDOFF — run ${runId}`).test(mRes.stdout), 'menu [1][1] did not print handoff');
+  assert(/Rollback cancelled/.test(mRes.stdout) && runJson(d, runId).status === 'BRIEFED', 'declining rollback must preserve open run');
+  assert(byId(d, 'B-BIG').status === 'READY' && byId(d, 'B-BIG').costApproved === true, `B-BIG should be approved/READY, got ${JSON.stringify(byId(d, 'B-BIG'))}`);
+  assert(/\[Agentic Harness\] Controller:/.test(mRes.stdout) && /Bye!/.test(mRes.stdout), mRes.stdout);
+  assert(runMenuInput('').status === 0 && runMenuInput('1\n').status === 0, 'EOF at main or submenu must exit cleanly without unsettled top-level await');
+  assert(vis(d, 'rollback', runId).status === 0, 'cleanup open visible run');
+});
+
+await test('hook-session.mjs --brief: prints 4-8 concise lines in idle and busy states without mutating git, silent for workers and safe on broken config', () => {
+  // 1. Idle state -> strictly 4 to 8 lines
+  const dIdle = sandbox();
+  const rIdle = node(dIdle, ['.harness/hook-session.mjs', '--brief']);
+  assert(rIdle.status === 0, rIdle.stderr);
+  const idleLines = rIdle.stdout.trim().split(/\r?\n/).filter(Boolean);
+  assert(idleLines.length >= 4 && idleLines.length <= 8, `idle --brief expected 4-8 lines, got ${idleLines.length}:\n${rIdle.stdout}`);
+  assert(/Controller: NOT running.*Backlog:.*Autopilot: ON/.test(idleLines[0]), idleLines[0]);
+  assert(/npm start.*doctor\.mjs/.test(rIdle.stdout), rIdle.stdout);
+
+  // 2. Busy state: remote behind (in separate worktree), open run, Needs OK held task, HIGH RISK session, quota today, edited core
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-brief-'));
+  const G = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const remote = path.join(base, 'remote.git'); fs.mkdirSync(remote); G(remote, 'init', '-q', '--bare', '-b', 'lab');
+  const main = path.join(base, 'main'); fs.cpSync(sandbox(), main, { recursive: true });
+  G(main, 'init', '-q', '-b', 'lab'); G(main, 'add', '-A'); G(main, 'commit', '-q', '-m', 'one'); G(main, 'remote', 'add', 'origin', remote); G(main, 'push', '-q', '-u', 'origin', 'lab');
+
+  // Install MANIFEST via copyDir fingerprint simulation & tamper dispatch.mjs to test core warning
+  const coreFiles = { '.harness/dispatch.mjs': 'bad-hash' };
+  fs.writeFileSync(path.join(main, '.harness', 'MANIFEST.json'), JSON.stringify({ template: 'agentic-harness', version: '1.0.10', files: coreFiles }));
+
+  // Advance remote in another clone
+  const other = path.join(base, 'other'); G(base, 'clone', '-q', '-b', 'lab', remote, other);
+  fs.writeFileSync(path.join(other, 'upstream.txt'), 'u'); G(other, 'add', '-A'); G(other, 'commit', '-q', '-m', 'two'); G(other, 'push', '-q');
+
+  // Create worktree + session board with HIGH RISK stale task
+  const wt = path.join(base, 'wt'); G(main, 'worktree', 'add', '-q', '-b', 'claude/s-brief', wt, 'lab');
+  const S = (cwd, ...a) => spawnSync(process.execPath, [path.join(cwd, '.harness', 'sessions.mjs'), ...a], { cwd, env: { ...env, HARNESS_ROOT: cwd }, encoding: 'utf8' });
+  assert(S(main, 'new', 'Stale child task', '--type', 'feat').status === 0, 'sessions new');
+  const common = G(main, 'rev-parse', '--git-common-dir');
+  const boardFile = path.resolve(main, common, 'harness-sessions.json');
+  const bj = json(boardFile);
+  bj.tasks[0].createdAt = new Date(Date.now() - 5 * 3600000).toISOString(); // past notStartedHours=2 -> NOT STARTED HIGH RISK
+  fs.writeFileSync(boardFile, JSON.stringify(bj, null, 2));
+
+  // Open visible run + held backlog item + usage telemetry in wt
+  setBacklog(wt, [{ id: 'B-HELD', title: 'Large migration', status: 'BLOCKED', needsApproval: true, blockedReason: 'Needs your OK', goal: 'big', verifyCmd: PASS }]);
+  fs.writeFileSync(path.join(wt, '.harness', 'MANIFEST.json'), JSON.stringify({ template: 'agentic-harness', version: '1.0.10', files: coreFiles }));
+  const visId = runIdOf(node(wt, ['.harness/visible.mjs', 'brief', '--goal', 'Pause mid-run', '--check', PASS, '--editor', 'antigravity'], { HARNESS_ROOT: wt }));
+  fs.appendFileSync(path.join(wt, '.harness', 'telemetry.log'), JSON.stringify({ ts: new Date().toISOString(), phase: 'AGENT_USAGE', engine: 'antigravity', model: 'fast', ok: true, tokens: 0, usd: 0, message: 'usage' }) + '\n');
+
+  const rBusy = node(wt, ['.harness/hook-session.mjs', '--brief'], { HARNESS_ROOT: wt, HARNESS_ENGINES: 'claude' });
+  assert(rBusy.status === 0, rBusy.stderr);
+  const busyLines = rBusy.stdout.trim().split(/\r?\n/).filter(Boolean);
+  assert(busyLines.length >= 4 && busyLines.length <= 8, `busy --brief expected 4-8 lines, got ${busyLines.length}:\n${rBusy.stdout}`);
+  assert(new RegExp(`Open run ${visId}`).test(rBusy.stdout) && /--resume-visible/.test(rBusy.stdout), rBusy.stdout);
+  assert(/Needs OK \(1 held\).*backlog\.mjs approve B-HELD/.test(rBusy.stdout), rBusy.stdout);
+  assert(/Sessions 1\/\d+ open.*HIGH RISK: FEAT-1/.test(rBusy.stdout), rBusy.stdout);
+  assert(/Git behind remote/.test(rBusy.stdout) && !fs.existsSync(path.join(wt, 'upstream.txt')), `--brief must warn without modifying wt:\n${rBusy.stdout}`);
+  assert(/AI tools: ready \(claude\).*Quota today: agy 1\/80 call\(s\)/.test(rBusy.stdout), rBusy.stdout);
+  assert(/harness core edited \(\.harness\/dispatch\.mjs\)/.test(rBusy.stdout), rBusy.stdout);
+
+  // Worker & broken config guards
+  const rWork = node(wt, ['.harness/hook-session.mjs', '--brief'], { HARNESS_ROOT: wt, HARNESS_WORKER: '1' });
+  assert(rWork.status === 0 && rWork.stdout === '', `worker should be silent in --brief: ${rWork.stdout}`);
+  fs.writeFileSync(path.join(wt, '.harness', 'config.json'), '{ broken');
+  assert(node(wt, ['.harness/hook-session.mjs', '--brief'], { HARNESS_ROOT: wt }).status === 0, 'broken config must not break --brief');
+});
+
+await test('v1.0.10 packaging: 5 new VS Code tasks + backlogId input, npm start script, and install.mjs merges & fingerprints start.mjs', () => {
+  const pkg = json(path.join(REPO, 'package.json'));
+  assert(pkg.version === '1.0.10' && pkg.scripts.start === 'node .harness/start.mjs', JSON.stringify(pkg.scripts));
+  const tasksCfg = json(path.join(REPO, '.vscode', 'tasks.json'));
+  const expectedLabels = [
+    'Harness: Start Menu (interactive)',
+    'Harness: Handoff / Inspect unfinished run',
+    'Harness: Resume unfinished run in terminal',
+    'Harness: Session Board (child sessions)',
+    'Harness: Approve held backlog item'
+  ];
+  for (const label of expectedLabels) assert(tasksCfg.tasks.some((t) => t.label === label), `missing task: ${label}`);
+  assert(tasksCfg.inputs.some((i) => i.id === 'backlogId') && tasksCfg.inputs.some((i) => i.id === 'engine'), 'missing inputs');
+
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-p2-inst-'));
+  fs.mkdirSync(path.join(proj, '.vscode'), { recursive: true });
+  fs.writeFileSync(path.join(proj, '.vscode', 'tasks.json'), JSON.stringify({
+    version: '2.0.0',
+    tasks: [{ label: 'My Custom Build', type: 'shell', command: 'npm run build' }, { label: 'Harness: old stale task', type: 'shell', command: 'echo old' }],
+    inputs: [{ id: 'customIn', type: 'promptString', description: 'mine' }]
+  }));
+  const inst = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj], { encoding: 'utf8' });
+  assert(inst.status === 0 && /node \.harness\/start\.mjs/.test(inst.stdout), inst.stdout + inst.stderr);
+  const manifest = json(path.join(proj, '.harness', 'MANIFEST.json'));
+  assert(manifest.version === '1.0.10' && Boolean(manifest.files['.harness/start.mjs']), 'start.mjs not fingerprinted in MANIFEST');
+  const merged = json(path.join(proj, '.vscode', 'tasks.json'));
+  assert(merged.tasks.some((t) => t.label === 'My Custom Build'), 'custom task lost');
+  assert(!merged.tasks.some((t) => t.label === 'Harness: old stale task'), 'old Harness task not replaced');
+  for (const label of expectedLabels) assert(merged.tasks.some((t) => t.label === label), `merged tasks missing ${label}`);
+  assert(merged.inputs.some((i) => i.id === 'customIn') && merged.inputs.some((i) => i.id === 'backlogId'), 'merged inputs missing');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

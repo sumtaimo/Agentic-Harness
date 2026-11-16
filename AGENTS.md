@@ -132,7 +132,7 @@ Assume the user may not be a programmer unless `profile.md` says otherwise:
 Use the harness when the user says "run it in the harness / in the background", when a task
 should be checked automatically, or when it can be split across parallel workers.
 
-Check it is ready: `node .harness/doctor.mjs` · current state: `node .harness/status.mjs`
+Check it is ready: `node .harness/doctor.mjs` · current state: `node .harness/status.mjs` · interactive menu: `npm start` (`node .harness/start.mjs`, `--summary` for overview only).
 
 ### In Claude Code you are the ORCHESTRATOR (this is the preferred way)
 
@@ -153,13 +153,13 @@ Details and limits: `docs/WORKFLOW.md`. The named agents are generated from `.ha
 If you are one of the named agents (`lead-…`): change only the files in your assignment, follow the interface contract, check your work with
 `npm test` or `node --test` only, and finish with a short honest report.
 
-In **Antigravity, Cursor, or VS Code** (where `/harness:run` is not a built-in slash command): for any multi-file or multi-role task, follow the same controller protocol (`node .harness/visible.mjs brief --editor antigravity ...` → `assign` → spawn parallel Lead/Worker subagents with disjoint file scopes using your editor's subagent tool → `verify`), or run the headless controller below when subagents are unavailable. Keeping `--editor <name>` (e.g. `antigravity`, `cursor`, `vscode`) attributes session usage cleanly without colliding with headless CLI quotas.
+In **Antigravity, Cursor, or VS Code** (where `/harness:run` is not a built-in slash command): check live status at session start with `node .harness/hook-session.mjs --brief` (4–8 line summary) or `npm start` (`node .harness/start.mjs` interactive menu). For any multi-file or multi-role task, follow the same controller protocol (`node .harness/visible.mjs brief --editor antigravity ...` → `assign` → spawn parallel Lead/Worker subagents with disjoint file scopes using your editor's subagent tool → `verify`), or run the headless controller below when subagents are unavailable. Keeping `--editor <name>` (e.g. `antigravity`, `cursor`, `vscode`) attributes session usage cleanly without colliding with headless CLI quotas.
 
 **Stopping or switching sessions mid-run (cross-editor handoff & headless resume):**
 - If an editor session stops, freezes, or hits a usage cap mid-run, inspect what is already on disk and print a continuation prompt:
   `node .harness/visible.mjs handoff [RUN_ID]` (add `--prompt` for raw prompt text, or `--json` for tooling).
 - Or finish that same unfinished editor run directly in the headless controller (keeping partial edits, inheritance of contract/criteria/last error, and updating `.harness/visible/<run>/` on completion or failure):
-  `node .harness/dispatch.mjs --resume-visible [RUN_ID] [--engine <tool>] --wait`
+  `node .harness/dispatch.mjs --resume-visible [RUN_ID] [--engine <tool>] --wait` (also available in `npm start` → `[1]`).
 
 The sections below describe the headless controller (background / terminal / unattended runs).
 
@@ -295,7 +295,8 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/examples/backlog.sample.json` | a BA + DEV + QA parallel sample to import |
 | `.harness/state.json` · `telemetry.log` | live state · JSONL event log |
 | `.harness/live.log` · `watch.mjs` | plain-text live feed of every agent action · follow it (`--job <id>` ends with the result) |
-| `.harness/hook-session.mjs` | prints harness state for an editor AI at session start (needs the Claude Code hook; see README) |
+| `.harness/start.mjs` | interactive `[1]`–`[6]` launcher + live overview banner (`--summary`, `--json`, `npm start`) |
+| `.harness/hook-session.mjs` | prints harness state at session start (`--brief`: 4–8 line read-only summary for any editor/shell) |
 | `.vscode/tasks.json` | buttons for the user (Run Task menu) |
 | `.claude/settings.json` · `commands/harness/*.md` | Claude Code permission rules + start-up hook · `/harness:run`, `:status`, `:tick`, `:doctor`, `:teach` (the user must trust the folder once for the rules to apply) |
 | `test/run-tests.mjs` · `test/live-e2e.mjs` | free mock-engine tests · opt-in real-agent test (`npm run test:live`) |
