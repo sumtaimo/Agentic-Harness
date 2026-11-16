@@ -32,7 +32,7 @@ import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd,
   listProjectFiles, safeTarget,
-  winQuote, winCommandLine, MODEL_TIERS, chooseModelTier, resolveModel, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
+  winQuote, winCommandLine, needsWinShell, MODEL_TIERS, chooseModelTier, resolveModel, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
 } from './lib/common.mjs';
 helpIfAsked(import.meta.url); // "--help" prints the usage; it must never start the controller
 
@@ -272,7 +272,7 @@ function dailyLimitReached(engine) {
 }
 
 /** Usage / quota limits only (not login problems): the account is fine, it is just out of quota for now. */
-const QUOTA_LIMIT_RE = /hit your .{0,40}limit|(session|usage|daily|weekly|monthly|spending|billing( hard)?) limit|(exceeded|exhausted|out of) .{0,30}(quota|credits?|usage)|(quota|credits?) .{0,20}(exceeded|exhausted|reached|depleted)|insufficient[_\s-]quota|rate.?limit|resource.?exhausted|credit balance|\b429\b.{0,30}(too many requests|rate|quota)|too many requests/i;
+const QUOTA_LIMIT_RE = /hit your .{0,40}limit|\b\d+\s*-?\s*hour\s+limit\b|(session|usage|daily|weekly|monthly|spending|billing( hard)?) limit|(exceeded|exhausted|out of) .{0,30}(quota|credits?|usage)|(quota|credits?) .{0,20}(exceeded|exhausted|reached|depleted)|insufficient[_\s-]quota|rate.?limit|resource.?exhausted|credit balance|\b429\b.{0,30}(too many requests|rate|quota)|too many requests/i;
 
 /**
  * Spawn an AI engine; if it stops on a usage/quota limit and config.quotaFallback names another engine (or another
@@ -329,9 +329,9 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
     const stream = live && Array.isArray(profile.output?.stream);
     const binPath = which(profile.binary);
     const { args, viaStdin } = buildArgs(profile, prompt, allowedTools, disallowedTools, stream, pick.model);
-    const isWin = process.platform === 'win32';
+    const useShell = needsWinShell(binPath);
     const env = { ...process.env, HARNESS_WORKER: '1', HARNESS_WORKER_ID: id };
-    const child = isWin
+    const child = useShell
       ? spawn(winCommandLine(binPath, args), { cwd, env, shell: true, stdio: ['pipe', 'pipe', 'pipe'] })
       : spawn(binPath, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     logTelemetry('ENGINE_SPAWN', `Spawned ${profile.name} for ${id}`, { engine: profile.name, binary: binPath, args: args.map((a) => (a === prompt ? '<prompt>' : a)), promptVia: viaStdin ? 'stdin' : 'args', live: live ? (stream ? 'stream-json' : 'raw') : 'off', cwd });

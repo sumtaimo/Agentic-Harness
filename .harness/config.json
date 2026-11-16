@@ -105,7 +105,7 @@
     },
     "antigravity": {
       "verified": true,
-      "note": "VERIFIED on Windows 11 / Node 24 with agy 1.5.8 (2026-11-14): a full headless run passed ('agy -p <prompt>' created the scoped file, the real check passed, job COMMITTED), including a 3,049-character goal. '-p' is an alias for '--print' and needs a prompt value; '-p \"\"' with the prompt on stdin FAILS ('error: empty prompt'), so the prompt is passed as an argument. Windows limit: a command line is at most 32,767 characters (8,191 through cmd.exe, which .cmd shims use), so a much longer prompt passed as an argument can still fail. agy.exe is installed in ~/.gemini/bin, which the installer does not add to PATH: add that folder to PATH or doctor reports it as not installed. No auto-approve flag on purpose (agy has --dangerously-skip-permissions and --mode); scoped file edits worked without it.",
+      "note": "VERIFIED on Windows 11 / Node 24 with agy 1.5.8 (2026-11-14): a full headless run passed ('agy -p <prompt>' created the scoped file, the real check passed, job COMMITTED), including a 3,049-character goal. '-p' is an alias for '--print' and needs a prompt value; '-p \"\"' with the prompt on stdin FAILS ('error: empty prompt'), so the prompt is passed as an argument. Because agy.exe is a native executable (not a .cmd shim), the controller spawns it with shell: false so Windows cmd.exe never truncates multi-line prompts or drops '--model'. agy.exe is installed in %LOCALAPPDATA%\\agy\\bin or ~/.gemini/bin: add that folder to PATH or doctor reports it as not installed. No auto-approve flag on purpose (agy has --dangerously-skip-permissions and --mode); scoped file edits worked without it.",
       "binary": "agy",
       "args": [
         "-p",

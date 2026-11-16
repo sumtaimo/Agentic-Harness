@@ -78,11 +78,21 @@ export function which(binary) {
 
 /**
  * Quote one argument for a Windows shell command line (spawn with shell: true).
- * An empty string becomes "" so it is not dropped (e.g. a "-p" "" pair).
+ * An empty string becomes "" so it is not dropped (e.g. a "-p" "" pair); newlines are collapsed to spaces
+ * because cmd.exe truncates the command line at the first literal newline.
  */
 export function winQuote(a) {
-  const s = String(a);
+  const s = String(a).replace(/\r?\n/g, ' ');
   return s === '' || /[\s"&|<>^()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
+ * On Windows, only .cmd / .bat shims require cmd.exe (shell: true); native .exe binaries (such as agy.exe)
+ * must be spawned directly with shell: false so multi-line "-p <prompt>" arguments and "--model" flags are
+ * passed intact via CreateProcessW instead of being truncated by cmd.exe at the first newline.
+ */
+export function needsWinShell(binPath) {
+  return process.platform === 'win32' && /\.(cmd|bat)$/i.test(String(binPath || ''));
 }
 
 // ───────────────────────────── AI use, in one short line ─────────────────────────────
@@ -202,8 +212,7 @@ export function probeEngine(profile, { force = false } = {}) {
 
   const first = (profile.args || [])[0];
   const sub = first && !first.startsWith('-') && !first.includes('{') ? [first] : [];
-  const isWin = process.platform === 'win32';
-  const r = isWin
+  const r = needsWinShell(binPath)
     ? spawnSync(winCommandLine(binPath, [...sub, '--help']), { encoding: 'utf8', timeout: 15000, shell: true, env: { ...process.env, NO_COLOR: '1' } })
     : spawnSync(binPath, [...sub, '--help'], { encoding: 'utf8', timeout: 15000, env: { ...process.env, NO_COLOR: '1' } });
   const help = `${r.stdout || ''}\n${r.stderr || ''}`;

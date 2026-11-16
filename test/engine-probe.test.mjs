@@ -206,12 +206,16 @@ test('install.mjs --reset cleans a template copy: owner profile, rules, objectiv
   assert.notEqual(none.status, 0, 'a folder without .harness/ is refused');
 });
 
-test('winQuote keeps an empty argument on Windows and quotes special characters', async () => {
-  const { winQuote } = await import('../.harness/lib/common.mjs');
+test('winQuote keeps an empty argument on Windows, collapses newlines for cmd.exe, and needsWinShell only matches .cmd/.bat on Windows', async () => {
+  const { winQuote, winCommandLine, needsWinShell } = await import('../.harness/lib/common.mjs');
   assert.equal(winQuote(''), '""');
   assert.equal(winQuote('yolo'), 'yolo');
   assert.equal(winQuote('--approval-mode'), '--approval-mode');
   assert.equal(winQuote('a b'), '"a b"');
   assert.equal(winQuote('say "hi"'), '"say ""hi"""');
+  assert.equal(winQuote('line1\n\nline2\r\nline3'), '"line1  line2 line3"');
+  assert.equal(winCommandLine('C:\\Users\\x\\agy.exe', ['-p', 'header\n\ngoal', '--model', 'm']), 'C:\\Users\\x\\agy.exe -p "header  goal" --model m');
   assert.deepEqual(['--approval-mode', 'yolo', '-p', ''].map(winQuote), ['--approval-mode', 'yolo', '-p', '""']);
+  assert.equal(needsWinShell('C:\\Users\\x\\AppData\\Local\\agy\\bin\\agy.EXE'), false, 'native .exe must never use cmd.exe');
+  assert.equal(needsWinShell('C:\\Users\\x\\AppData\\Roaming\\npm\\claude.CMD'), process.platform === 'win32');
 });

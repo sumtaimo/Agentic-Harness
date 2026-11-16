@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, checkCore, detectVerifyCmd, listProjectFiles, helpIfAsked } from './lib/common.mjs';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, checkCore, detectVerifyCmd, listProjectFiles, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
 
@@ -41,10 +41,14 @@ for (const [name, p] of Object.entries(config.profiles)) {
   const flags = profileFlags(p);
   const preferred = name === config.activeProfile || (config.activeProfile === 'auto' && (config.autoOrder || [])[0] === name);
   if (!probe.installed) {
-    // agy is often installed but not on PATH (the Antigravity app puts it in ~/.gemini/bin): say exactly how to fix it.
-    const hidden = name === 'antigravity' && process.env.HARNESS_ENGINES === undefined && ['agy.exe', 'agy'].map((b) => path.join(os.homedir(), '.gemini', 'bin', b)).find((f) => fs.existsSync(f));
+    // agy is often installed but not on PATH (the Antigravity app puts it in %LOCALAPPDATA%\agy\bin or ~/.gemini/bin): say exactly how to fix it.
+    const hidden = name === 'antigravity' && process.env.HARNESS_ENGINES === undefined && [
+      ...(process.env.LOCALAPPDATA ? ['agy.exe', 'agy'].map((b) => path.join(process.env.LOCALAPPDATA, 'agy', 'bin', b)) : []),
+      ...['agy.exe', 'agy'].map((b) => path.join(os.homedir(), '.gemini', 'bin', b))
+    ].find((f) => fs.existsSync(f));
+    const hiddenDir = hidden ? path.dirname(hidden) : path.join(os.homedir(), '.gemini', 'bin');
     const pathFix = process.platform === 'win32'
-      ? `[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ";$HOME\\.gemini\\bin", 'User')   (PowerShell, then open a new terminal)`
+      ? `[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ";${hiddenDir}", 'User')   (PowerShell, then open a new terminal)`
       : `echo 'export PATH="$HOME/.gemini/bin:$PATH"' >> ~/.zshrc   (or ~/.bashrc, then open a new terminal)`;
     if (hidden) { warn(`${name.padEnd(12)} agy is installed at ${hidden} but that folder is not on your PATH, so the harness cannot use it. Fix:  ${pathFix}`); continue; }
     // Missing first choice is only a warning when nothing else can stand in; otherwise "auto" simply uses the next engine.
@@ -78,7 +82,7 @@ try {
   const agProbe = ag ? probeEngine(ag) : null;
   if (ag && agProbe?.installed && engineConsent('antigravity') === true) {
     const wanted = new Set([...Object.values(ag.models || {}), ...Object.values(config.quotaFallback || {}).filter((f) => f?.engine === 'antigravity').flatMap((f) => Object.values(f.models || {}))].filter(Boolean));
-    const r = process.platform === 'win32'
+    const r = needsWinShell(agProbe.binPath)
       ? spawnSync(winCommandLine(agProbe.binPath, ['models']), { encoding: 'utf8', timeout: 30000, shell: true })
       : spawnSync(agProbe.binPath, ['models'], { encoding: 'utf8', timeout: 30000 });
     const listed = new Set(String(r.stdout || '').split('\n').map((l) => l.trim().split(/\s+/)[0]).filter((x) => /^[a-z0-9][\w.-]+$/i.test(x || '')));
