@@ -2263,7 +2263,7 @@ await test('new roles: lead-ux owns only style files (one owner per file stays t
 
 await test('every harness command answers --help with its usage and exit 0 (the first thing a new user tries)', () => {
   const d = sandbox();
-  for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch', 'sessions', 'start']) { // daemon --help once started the controller
+  for (const c of ['backlog', 'team', 'engines', 'memory', 'status', 'usage', 'visible', 'doctor', 'dispatch', 'daemon', 'watch', 'sessions', 'start', 'hook-session']) { // daemon --help once started the controller
     const r = node(d, [`.harness/${c}.mjs`, '--help']);
     assert(r.status === 0 && new RegExp(`${c}\\.mjs`).test(r.stdout), `${c} --help: exit ${r.status}\n${r.stdout.slice(0, 200)}${r.stderr.slice(0, 200)}`);
   }
@@ -2655,6 +2655,84 @@ await test('v1.0.10 packaging: 5 new VS Code tasks + backlogId input, npm start 
   assert(!merged.tasks.some((t) => t.label === 'Harness: old stale task'), 'old Harness task not replaced');
   for (const label of expectedLabels) assert(merged.tasks.some((t) => t.label === label), `merged tasks missing ${label}`);
   assert(merged.inputs.some((i) => i.id === 'customIn') && merged.inputs.some((i) => i.id === 'backlogId'), 'merged inputs missing');
+});
+
+await test('Priority 2 lost-session guards: hook-session --help & corrupt config resilience, start.mjs menuContinue status/baseline guards, submenu back keys, version banner, and TTY raw-mode release', () => {
+  // 1. Corrupt config.json must NOT hide open/stopped lost editor runs or --help in hook-session.mjs
+  const { d } = gitSandbox({ autonomous: false });
+  const pkg = json(path.join(REPO, 'package.json'));
+  const openId = runIdOf(vis(d, 'brief', '--goal', 'Keep open visible run', '--check', PASS, '--editor', 'antigravity'));
+  const helpRes = node(d, ['.harness/hook-session.mjs', '--help']);
+  assert(helpRes.status === 0 && /hook-session\.mjs/.test(helpRes.stdout) && !/\[Agentic Harness\] This folder/.test(helpRes.stdout), `hook-session --help failed:\n${helpRes.stdout}`);
+
+  fs.writeFileSync(path.join(d, '.harness', 'config.json'), '{ broken json');
+  const hkBroken = node(d, ['.harness/hook-session.mjs', '--brief']);
+  assert(hkBroken.status === 0, hkBroken.stderr);
+  const brokenLines = hkBroken.stdout.trim().split(/\r?\n/).filter(Boolean);
+  assert(brokenLines.length >= 4 && brokenLines.length <= 8, `broken config --brief expected 4-8 lines, got ${brokenLines.length}:\n${hkBroken.stdout}`);
+  assert(new RegExp(`Open run ${openId}`).test(hkBroken.stdout) && /config\.json invalid/.test(hkBroken.stdout) && /node \.harness\/start\.mjs/.test(hkBroken.stdout), hkBroken.stdout);
+
+  // Restore valid config in a fresh sandbox for start.mjs menuContinue & dispatch guards
+  const d2 = sandbox();
+  fs.writeFileSync(path.join(d2, '.harness', 'MANIFEST.json'), JSON.stringify({ template: 'agentic-harness', version: pkg.version, files: {} }));
+  const sum2 = node(d2, ['.harness/start.mjs', '--summary']);
+  assert(sum2.status === 0 && sum2.stdout.includes(`v${pkg.version}`), `expected version v${pkg.version} in banner:\n${sum2.stdout}`);
+
+  // Create BOTH a HALTED_HITL_REQUIRED run (no baseline left) AND an open BRIEFED run (baseline present)
+  const haltedId = runIdOf(vis(d2, 'brief', '--goal', 'Halted lost run', '--check', FAIL_VERIFY));
+  assert(vis(d2, 'assign', haltedId, deleg([{ lead: 'lead-dev', goal: 'edit', files: ['src/'] }])).status === 0, 'assign halted');
+  agentsWrite(d2, [['src/h.js', 'bad']]);
+  for (let i = 0; i < 3; i++) assert(vis(d2, 'verify', haltedId).status === 1, `verify fail cycle ${i + 1}`);
+  assert(runJson(d2, haltedId).status === 'HALTED_HITL_REQUIRED' && !fs.existsSync(path.join(d2, '.harness', 'visible', haltedId, 'baseline')), 'halted run should remove baseline');
+
+  // handoff omits rollback command when baseline is absent
+  const haltedHandoff = vis(d2, 'handoff', haltedId);
+  assert(haltedHandoff.status === 0 && !/visible\.mjs rollback/.test(haltedHandoff.stdout) && /Undo snapshot unavailable/.test(haltedHandoff.stdout), haltedHandoff.stdout);
+
+  const open2 = runIdOf(vis(d2, 'brief', '--goal', 'Open briefed run', '--check', PASS, '--editor', 'antigravity'));
+
+  const runMenu2 = (input) => spawnSync(process.execPath, ['.harness/start.mjs'], { cwd: d2, env: { ...env, HARNESS_ROOT: d2 }, input, encoding: 'utf8', timeout: 20000 });
+  // [1] Continue sees BOTH open2 and haltedId; picking haltedId + [3] Resume is refused cleanly; 'b' goes back inside submenu; open2 + [4] Verify is refused cleanly; 'q' goes back inside submenu [6]
+  const haltedBlocked = runMenu2(`1\n${haltedId}\n3\n1\n${haltedId}\nb\n0\n`);
+  assert(haltedBlocked.status === 0 && haltedBlocked.stdout.includes(open2) && haltedBlocked.stdout.includes(haltedId), haltedBlocked.stdout);
+  assert(/unavailable: HALTED_HITL_REQUIRED/.test(haltedBlocked.stdout) && /Cannot resume run/.test(haltedBlocked.stdout), haltedBlocked.stdout);
+  assert(!/Unknown option "b"/.test(haltedBlocked.stdout) && !/Unknown choice "b"/.test(haltedBlocked.stdout), `submenu back key 'b' failed:\n${haltedBlocked.stdout}`);
+
+  const briefedVerifyBlocked = runMenu2(`1\n${open2}\n4\n6\nq\n0\n`);
+  assert(briefedVerifyBlocked.status === 0 && /unavailable: BRIEFED/.test(briefedVerifyBlocked.stdout) && /Cannot verify run/.test(briefedVerifyBlocked.stdout), briefedVerifyBlocked.stdout);
+  assert(!/Unknown option "q"/.test(briefedVerifyBlocked.stdout) && !/Unknown choice "q"/.test(briefedVerifyBlocked.stdout) && /Bye!/.test(briefedVerifyBlocked.stdout), briefedVerifyBlocked.stdout);
+
+  // Menu [2] rejects invalid mode & engine typos instead of defaulting/running
+  const badDispatch = runMenu2('2\nTest goal\nweird\n2\nTest goal\n1\n\n\nbogus-engine\n0\n');
+  assert(badDispatch.status === 0 && /Unknown mode "weird"; cancelled/.test(badDispatch.stdout) && /Unknown engine "bogus-engine"; cancelled/.test(badDispatch.stdout), badDispatch.stdout);
+
+  // Simulated TTY spy: raw mode transitions true -> false around child runScript -> true, and custom output captures Bye!
+  const ttyScript = `
+    import { PassThrough } from 'node:stream';
+    import { runMenu } from './.harness/start.mjs';
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const rawTransitions = [];
+    let out = '';
+    output.on('data', (c) => { out += c.toString(); });
+    input.isTTY = true;
+    input.setRawMode = (mode) => { rawTransitions.push(Boolean(mode)); return input; };
+    const p = runMenu({ input, output });
+    setTimeout(() => input.write('6\\r6\\r0\\r'), 30);
+    await p;
+    console.log(JSON.stringify({ rawTransitions, hasBanner: out.includes('AGENTIC HARNESS'), hasBye: out.includes('Bye!') }));
+  `;
+  const ttyRes = spawnSync(process.execPath, ['--input-type=module', '-e', ttyScript], { cwd: d2, env: { ...env, HARNESS_ROOT: d2 }, encoding: 'utf8', timeout: 20000 });
+  assert(ttyRes.status === 0, ttyRes.stderr + ttyRes.stdout);
+  const ttyJson = JSON.parse(ttyRes.stdout.trim().split(/\r?\n/).pop());
+  assert(ttyJson.hasBanner && ttyJson.hasBye && ttyJson.rawTransitions.join(',') === 'true,false,true,false', JSON.stringify(ttyJson));
+
+  // Simulated TTY Ctrl+C (\x03) closes cleanly with exit 0
+  const ttySig = ttyScript.replace("'6\\r6\\r0\\r'", "'\\x03'");
+  const sigRes = spawnSync(process.execPath, ['--input-type=module', '-e', ttySig], { cwd: d2, env: { ...env, HARNESS_ROOT: d2 }, encoding: 'utf8', timeout: 20000 });
+  assert(sigRes.status === 0 && JSON.parse(sigRes.stdout.trim().split(/\r?\n/).pop()).hasBanner, sigRes.stderr + sigRes.stdout);
+
+  assert(vis(d2, 'rollback', open2).status === 0, 'cleanup open2');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

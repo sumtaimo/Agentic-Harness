@@ -74,6 +74,11 @@ export function writeVisibleRun(run) {
   atomicWriteJson(path.join(dir, 'run.json'), run);
 }
 
+/** True when `run` still has its pre-run baseline directory on disk for rollback. */
+export function hasVisibleBaseline(run) {
+  return Boolean(run?.baseline?.rollbackAvailable && run.baseline.dir && fs.existsSync(path.join(ROOT, run.baseline.dir)));
+}
+
 export function listVisibleRuns() {
   try {
     return fs.readdirSync(VISIBLE_DIR)
@@ -334,13 +339,14 @@ export function buildHandoffPrompt(run, info, config) {
   } else {
     lines.push(`- This run is in terminal status ${run.status}. Review status or start a new run when ready.`);
   }
-  if (run.baseline?.rollbackAvailable) lines.push(`To discard all edits from this run and restore pre-run files: node .harness/visible.mjs rollback ${run.id}`);
+  if (hasVisibleBaseline(run)) lines.push(`To discard all edits from this run and restore pre-run files: node .harness/visible.mjs rollback ${run.id}`);
   return lines.join('\n');
 }
 
 export function formatHandoffText(run, info, config) {
   const maxCycles = config.maxCycles ?? 3;
   const prompt = buildHandoffPrompt(run, info, config);
+  const canRollback = hasVisibleBaseline(run);
   const resumeCmd = `node .harness/dispatch.mjs --resume-visible ${run.id}${info.suggestedEngine ? ` --engine ${info.suggestedEngine}` : ''} --wait`;
   const lines = [
     `HANDOFF — run ${run.id} (${run.status})`,
@@ -350,7 +356,7 @@ export function formatHandoffText(run, info, config) {
     `Goal:    ${run.goal}`,
     `Check:   ${run.check?.cmd || '(default)'}  (${run.check?.source || 'unknown'})`,
     `Cycle:   ${run.cycles || 0}/${maxCycles}${run.pendingJobId ? `  (pending headless job: ${run.pendingJobId})` : ''}`,
-    `Undo:    ${run.baseline?.rollbackAvailable ? 'pre-run baseline snapshot available (rollback possible)' : 'no baseline snapshot (check git status)'}`
+    `Undo:    ${canRollback ? 'pre-run baseline snapshot available (rollback possible)' : 'no baseline snapshot on disk (auto-restored or inspect git status)'}`
   ];
   if (run.interfaceContract) lines.push('', 'Interface contract:', ...run.interfaceContract.split('\n').map((l) => `  ${l}`));
 
@@ -388,8 +394,12 @@ export function formatHandoffText(run, info, config) {
   } else {
     lines.push(`  • Run is ${run.status} (terminal) and cannot be resumed directly.`);
   }
-  lines.push(`  3. Or undo everything to how it was before the run:`);
-  lines.push(`       node .harness/visible.mjs rollback ${run.id}`);
+  if (canRollback) {
+    lines.push(`  3. Or undo everything to how it was before the run:`);
+    lines.push(`       node .harness/visible.mjs rollback ${run.id}`);
+  } else {
+    lines.push(`  3. Undo snapshot unavailable (check git status / git checkout if needed).`);
+  }
 
   lines.push('', '----- [HANDOFF PROMPT FOR NEXT SESSION] -----', prompt, '----- [END HANDOFF PROMPT] -----');
   return lines.join('\n');

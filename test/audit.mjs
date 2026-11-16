@@ -44,7 +44,7 @@ check('the template itself stays editable for maintainers', !tplDeny.includes('E
 
 // 2. Every command a user can run
 console.log('\nEvery command answers --help (and never starts work)');
-const cmds = fs.readdirSync(path.join(proj, '.harness')).filter((f) => f.endsWith('.mjs') && !['sdk.mjs', 'hook-session.mjs'].includes(f));
+const cmds = fs.readdirSync(path.join(proj, '.harness')).filter((f) => f.endsWith('.mjs') && f !== 'sdk.mjs');
 const badHelp = cmds.filter((c) => { const r = run([path.join('.harness', c), '--help'], proj); return r.status !== 0 || !r.stdout.includes(c); });
 check(`${cmds.length} commands answer --help with exit 0`, !badHelp.length, `failing: ${badHelp.join(', ')}`);
 const doc = run(['.harness/doctor.mjs'], proj, { HARNESS_ENGINES: '' });
