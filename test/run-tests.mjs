@@ -2043,20 +2043,28 @@ await test('autopilot in Claude Code (brief --next) holds a big task like the he
   assert(/wait for the user's OK/.test(hook.stdout) && /BIG/.test(hook.stdout), `the session hook must tell the AI about held tasks:\n${hook.stdout}`);
 });
 
-await test('quota fallback chain: A → B when A is out; if B is out too it stops (never switches back, no loop); the shipped config covers all three tools', () => {
+await test('quota fallback chain: A → B when A is out; if B is out too it stops (never switches back, no loop); A → B → C works and never leaks A\'s custom model name; the shipped config covers all three tools', () => {
   const d = sandbox();
   const lim = path.join(d, 'lim.mjs');
-  fs.writeFileSync(lim, "process.stdin.resume();process.stdin.on('end',()=>{process.stderr.write(\"ERROR: You've hit your usage limit.\\n\");process.exit(1);});");
+  fs.writeFileSync(lim, "process.stdin.resume();process.stdin.on('end',()=>{process.stderr.write(\"ERROR: You exceeded your current quota, please check your plan and billing details.\\n\");process.exit(1);});");
   const out = { verified: true, binary: process.execPath, args: [lim], promptVia: 'stdin', allowedTools: [] };
-  withProfiles(d, { a: { ...out }, b: { ...out } });
+  const baseMock = json(path.join(d, '.harness', 'config.json')).profiles.mock;
+  withProfiles(d, { a: { ...out }, b: { ...out }, mock: { ...baseMock, modelArgs: ['MODEL={model}'], models: { fast: 'm-fast', medium: 'm-mid', high: 'm-high' } } });
   const f = path.join(d, '.harness', 'config.json'); const c = json(f);
   c.quotaFallback = { a: { engine: 'b', models: {} }, b: { engine: 'a', models: {} } };
   fs.writeFileSync(f, JSON.stringify(c, null, 2));
   drop(d, { id: 'loop', title: 'loop', engine: 'a', verifyCmd: PASS, subtasks: [{ id: 'w', engine: 'a', targetFiles: ['x.txt'], prompt: 'WRITE x.txt hi' }] });
   runOnce(d);
   const used = log(d).filter((e) => e.phase === 'AGENT_USAGE').map((e) => e.engine);
-  assert(used.join() === 'a,b', `exactly one switch, no way back: ${used.join()}`);
-  assert(/usage limit/.test(stateOf(d).lastGateStatus), stateOf(d).lastGateStatus);
+  assert(used.join() === 'a,b', `loop a↔b must stop without switching back: ${used.join()}`);
+  assert(/exceeded your current quota/.test(stateOf(d).lastGateStatus), stateOf(d).lastGateStatus);
+  // 3-hop chain a → b → mock with an engine-specific model on 'a': mock must run on its own 'm-fast', not 'a-custom'
+  c.quotaFallback = { a: { engine: 'b', models: {} }, b: { engine: 'mock', models: {} } };
+  fs.writeFileSync(f, JSON.stringify(c, null, 2));
+  drop(d, { id: 'chain3', title: 'chain3', engine: 'a', verifyCmd: existsCheck('c3.txt'), subtasks: [{ id: 'w3', engine: 'a', model: 'a-custom', targetFiles: ['c3.txt'], prompt: 'WRITE c3.txt ok' }] });
+  runOnce(d);
+  assert(stateOf(d).phase === '4_COMMITTED' && fs.existsSync(path.join(d, 'c3.txt')), stateOf(d).lastGateStatus);
+  assert(modelArg(d, 'w3') === 'm-fast', `cross-engine fallback must use mock's tier model, not a-custom: ${modelArg(d, 'w3')}`);
   const shipped = json(path.join(REPO, '.harness', 'config.json')).quotaFallback;
   assert(shipped.claude?.engine === 'antigravity' && shipped.codex?.engine === 'antigravity' && shipped.antigravity?.engine === 'claude', JSON.stringify(shipped));
 });

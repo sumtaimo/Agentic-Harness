@@ -32,7 +32,7 @@ import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd,
   listProjectFiles, safeTarget,
-  winQuote, winCommandLine, chooseModelTier, resolveModel, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
+  winQuote, winCommandLine, MODEL_TIERS, chooseModelTier, resolveModel, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
 } from './lib/common.mjs';
 helpIfAsked(import.meta.url); // "--help" prints the usage; it must never start the controller
 
@@ -272,27 +272,34 @@ function dailyLimitReached(engine) {
 }
 
 /** Usage / quota limits only (not login problems): the account is fine, it is just out of quota for now. */
-const QUOTA_LIMIT_RE = /hit your .{0,40}limit|session limit|usage limit|quota (exceeded|exhausted)|rate.?limit|resource.?exhausted|credit balance/i;
+const QUOTA_LIMIT_RE = /hit your .{0,40}limit|(session|usage|daily|weekly|monthly|spending|billing( hard)?) limit|(exceeded|exhausted|out of) .{0,30}(quota|credits?|usage)|(quota|credits?) .{0,20}(exceeded|exhausted|reached|depleted)|insufficient[_\s-]quota|rate.?limit|resource.?exhausted|credit balance|\b429\b.{0,30}(too many requests|rate|quota)|too many requests/i;
 
 /**
- * Spawn an AI engine; if it stops on a usage/quota limit and config.quotaFallback names another engine for it
- * (e.g. claude → antigravity, using agy's Claude models), the same agent retries ONCE there, on the model for the
- * same tier. Only an engine the person already allowed is used. Shown live and logged as QUOTA_FALLBACK.
+ * Spawn an AI engine; if it stops on a usage/quota limit and config.quotaFallback names another engine (or another
+ * model on the same engine), the same agent retries along the fallback chain on the model for the same tier, never
+ * visiting the same engine/model twice (no loops). Only an engine the person already allowed is used.
  */
-function spawnEngine(opts) {
+function spawnEngine(opts, tried = new Set()) {
   return spawnEngineOnce(opts).catch((e) => {
+    tried.add(e.engineName);
+    tried.add(`${e.engineName}:${e.modelUsed || ''}`);
     const fb = e.quotaLimit && !opts.noQuotaFallback ? (config.quotaFallback || {})[e.engineName] : null;
-    if (!fb || !fb.engine || fb.engine === e.engineName) throw e;
+    if (!fb || !fb.engine) throw e;
+    const model = fb.models?.[e.tierUsed] || null;
+    const sameEngine = fb.engine === e.engineName;
+    if (sameEngine ? (!model || model === e.modelUsed || tried.has(`${fb.engine}:${model}`)) : tried.has(fb.engine)) throw e;
     const u = engineUsable(config, fb.engine);
     if (!u.ok) {
       logTelemetry('QUOTA_FALLBACK_UNAVAILABLE', `${opts.id}: ${e.engineName} hit its usage limit, and ${fb.engine} cannot take over: ${u.why}`, { worker: opts.id });
       throw e;
     }
-    const model = fb.models?.[e.tierUsed] || null;
-    logTelemetry('QUOTA_FALLBACK', `${opts.id}: ${e.engineName} hit its usage limit → retrying on ${fb.engine}${model ? ` (${model})` : ''}`, { worker: opts.id, from: e.engineName, to: fb.engine, tier: e.tierUsed, model });
-    if (liveOn()) livePrint(opts.id, `⇄ ${e.engineName} usage limit → continuing on ${fb.engine}${model ? ` (${model})` : ''}`);
+    const keepOverride = opts.model && MODEL_TIERS.includes(String(opts.model).toLowerCase()) ? opts.model : null;
+    const nextModel = model || (sameEngine ? opts.model : keepOverride) || null;
+    const nextTier = e.tierUsed ? { tier: e.tierUsed, reasons: [...(opts.tier?.reasons || []), `quota fallback from ${e.engineName}`] } : opts.tier;
+    logTelemetry('QUOTA_FALLBACK', `${opts.id}: ${e.engineName} hit its usage limit → retrying on ${fb.engine}${nextModel ? ` (${nextModel})` : ''}`, { worker: opts.id, from: e.engineName, to: fb.engine, tier: e.tierUsed, model: nextModel });
+    if (liveOn()) livePrint(opts.id, `⇄ ${e.engineName} usage limit → continuing on ${fb.engine}${nextModel ? ` (${nextModel})` : ''}`);
     writeState({ history: pushHistory(`⇄ ${e.engineName} limit → ${fb.engine} for ${opts.id}`) });
-    return spawnEngineOnce({ ...opts, engine: fb.engine, model: model || opts.model || null, noQuotaFallback: true });
+    return spawnEngine({ ...opts, engine: fb.engine, tier: nextTier, model: nextModel }, tried);
   });
 }
 
@@ -310,7 +317,7 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
     const over = dailyLimitReached(profile.name);
     if (over) {
       logTelemetry('DAILY_LIMIT', `${id}: ${profile.name} reached its daily cap (${over}); not started`, { worker: id, engine: profile.name });
-      return reject(Object.assign(new Error(`${id} (${profile.name}): daily cap reached (${over}). It resets tomorrow (UTC); raise "dailyLimits" in config.json only if you accept the use.`), { fatal: true, engineName: profile.name, tierUsed: pick.tier, quotaLimit: true }));
+      return reject(Object.assign(new Error(`${id} (${profile.name}): daily cap reached (${over}). It resets tomorrow (UTC); raise "dailyLimits" in config.json only if you accept the use.`), { fatal: true, engineName: profile.name, tierUsed: pick.tier, modelUsed: pick.model, quotaLimit: true }));
     }
     const startedAt = Date.now();
     logTelemetry('MODEL_TIER', `${id}: ${pick.tier} tier → ${pick.model || `${profile.name} default (no --model)`}${pick.source === 'auto' ? '' : ` (${pick.source})`}`, { worker: id, engine: profile.name, tier: pick.tier, model: pick.model, source: pick.source, reasons: t.reasons });
@@ -363,18 +370,18 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
         // The engine's own error (e.g. Claude's JSON {"is_error":true,"result":"You've hit your limit"}) is on stdout;
         // stderr may only hold unrelated warnings, so prefer the engine's message when there is one.
         try { summarizeOutput(stdout); } catch (e) {
-          if (e.engineError) return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${e.message}`), { fatal: e.fatal, engineName: profile.name, tierUsed: pick.tier, quotaLimit: QUOTA_LIMIT_RE.test(e.message) }));
+          if (e.engineError) return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${e.message}`), { fatal: e.fatal, engineName: profile.name, tierUsed: pick.tier, modelUsed: pick.model, quotaLimit: QUOTA_LIMIT_RE.test(e.message) }));
         }
         const raw = `${stderr}\n${stdout}`.trim();
         const fatal = engineErrorIsFatal(raw);
-        return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${(stderr || stdout).trim().slice(0, 4000)}${fatal ? ' (account/login problem: retrying cannot fix it)' : ''}`), { fatal, engineName: profile.name, tierUsed: pick.tier, quotaLimit: QUOTA_LIMIT_RE.test(raw) }));
+        return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${(stderr || stdout).trim().slice(0, 4000)}${fatal ? ' (account/login problem: retrying cannot fix it)' : ''}`), { fatal, engineName: profile.name, tierUsed: pick.tier, modelUsed: pick.model, quotaLimit: QUOTA_LIMIT_RE.test(raw) }));
       }
       try {
         const r = summarizeOutput(stdout);
         if (r.denials.length) logTelemetry('PERMISSION_DENIED', `${id}: engine denied ${r.denials.length} action(s) outside its role`, { worker: id, denials: r.denials });
         trackCost(id, r.cost);
         done(resolve, { engine: profile.name, output: r.text, denials: r.denials, costUsd: r.cost });
-      } catch (e) { done(reject, e); }
+      } catch (e) { done(reject, Object.assign(e, { engineName: profile.name, tierUsed: pick.tier, modelUsed: pick.model, quotaLimit: QUOTA_LIMIT_RE.test(e.message) })); }
     });
   });
 }
@@ -391,7 +398,8 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
  */
 function engineErrorIsFatal(text, status) {
   if ([401, 402, 403, 429].includes(Number(status))) return true;
-  return /hit your .{0,40}limit|usage limit|quota (exceeded|exhausted)|rate.?limit|resource.?exhausted|credit balance|not logged in|please (run .{0,30})?log ?in|login required|unauthori[sz]ed|authentication (failed|required|error)|invalid api key/i.test(String(text || ''));
+  const s = String(text || '');
+  return QUOTA_LIMIT_RE.test(s) || /not logged in|please (run .{0,30})?log ?in|login required|unauthori[sz]ed|authentication (failed|required|error)|invalid api key/i.test(s);
 }
 
 function summarizeOutput(stdout) {
