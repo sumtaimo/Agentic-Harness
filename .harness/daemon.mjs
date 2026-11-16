@@ -43,7 +43,7 @@ const highAlwaysAllowed = () => (loadApprovals().alwaysAllow || []).includes('hi
 import {
   readCharter, loadRoles, loadSkills, matchSkills, computeAllowedTools, computeDisallowedTools,
   matchesAny, withinAll, skillRulesNotGranted, readBacklog, writeBacklog, updateBacklogItem, nextReady, backlogCounts, itemToJob,
-  loadTeam, validateTeam, leadOwns
+  loadTeam, validateTeam, leadOwns, validateDelegation
 } from './lib/governance.mjs';
 import {
   isRepoWithCommits, branchSha, ensureBranch, protectedShas, ensureWorkerWorktree, commitScoped,
@@ -841,26 +841,7 @@ async function hierDecompose(task, gov) {
   const leadLine = (l) => `- ${l.id} (role ${l.role}; may own: ${l.scope.join(', ')}; up to ${l.maxWorkers ?? 3} workers)`;
 
   // ── level 1: the orchestrator delegates the goal to leads
-  const validateAssignments = (plan) => {
-    if (!Array.isArray(plan.assignments) || !plan.assignments.length) throw new Error('JSON has no "assignments" list.');
-    const seenLeads = new Set(); const claimed = [];
-    for (const a of plan.assignments) {
-      const lead = leads.find((l) => l.id === a.lead);
-      if (!lead || !delegable.has(lead.id)) throw new Error(`assignment to "${a.lead}": that is not a lead you may delegate to (${[...delegable].join(', ')}).`);
-      if (seenLeads.has(lead.id)) throw new Error(`lead "${lead.id}" is assigned twice; use each lead at most once.`);
-      seenLeads.add(lead.id);
-      if (typeof a.goal !== 'string' || !a.goal.trim()) throw new Error(`assignment to "${lead.id}" has no goal.`);
-      if (!Array.isArray(a.files) || !a.files.length) throw new Error(`assignment to "${lead.id}" has no files.`);
-      a.files = a.files.map((f) => { const s = safeTarget(f); if (!s) throw new Error(`assignment to "${lead.id}" has an unsafe path "${f}".`); const base = s.replace(/\/+$/, ''); return String(f).endsWith('/') ? `${base}/` : base; });
-      for (const f of a.files) {
-        if (!leadOwns(lead, f, leads)) throw new Error(`file "${f}" is outside lead "${lead.id}"'s scope (${lead.scope.join(', ')})${withinAll(f, lead.scope) ? '; a more specific scope of another lead owns it (e.g. test files belong to the QA lead)' : ''}.`);
-        if (userAllowed.length && !inScope(stripSlash(f), userAllowed)) throw new Error(`file "${f}" is outside the files the user allowed (${userAllowed.join(', ')}).`);
-        for (const [other, by] of claimed) if (by !== lead.id && (stripSlash(f) === stripSlash(other) || stripSlash(f).startsWith(`${stripSlash(other)}/`) || stripSlash(other).startsWith(`${stripSlash(f)}/`))) throw new Error(`Swarm Lock Collision: "${f}" (${lead.id}) overlaps "${other}" (${by}).`);
-        claimed.push([f, lead.id]);
-      }
-    }
-    return plan;
-  };
+  const validateAssignments = (plan) => validateDelegation(plan, { leads, delegable, userAllowed });
 
   let plan = null; let feedback = '';
   for (let attempt = 1; attempt <= attempts && !plan; attempt++) {
@@ -932,6 +913,7 @@ async function hierDecompose(task, gov) {
             const safe = safeTarget(f);
             if (!safe) throw new Error(`worker "${s.id}" has an unsafe path "${f}".`);
             if (!a.files.some((af) => inScope(stripSlash(safe), [stripSlash(af)]))) throw new Error(`worker "${s.id}" targets "${f}", outside your assigned files (${a.files.join(', ')}).`);
+            if (!leadOwns(lead, safe, leads)) throw new Error(`worker "${s.id}" targets "${f}", which belongs to another lead's scope.`);
           }
         }
         return subs;

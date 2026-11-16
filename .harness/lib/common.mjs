@@ -360,7 +360,7 @@ function nearestModel(profile, tier, source) {
 export const usesCliDefault = (profile) => !MODEL_TIERS.some((t) => profile?.models?.[t]);
 
 /** A typical job for each role, so the team view can say which model an agent gets (same rules as the controller). */
-const TYPICAL_FILES = { BA_ANALYST: ['docs/spec.md'], QA_AUDITOR: ['test/feature.test.js'], DEV_ENGINEER: ['src/a.js', 'src/b.js'], PO_ARCHITECT: ['docs/plan.md'] };
+const TYPICAL_FILES = { BA_ANALYST: ['docs/spec.md'], QA_AUDITOR: ['test/feature.test.js'], DEV_ENGINEER: ['src/a.js', 'src/b.js'], UX_DESIGNER: ['src/app.css', 'src/theme.css'], PO_ARCHITECT: ['docs/plan.md'] };
 /**
  * Which model a team member gets: for its own planning call (orchestrator / lead) and for its workers' typical job.
  * engineName null/auto → the first engine of autoOrder. A member "model" (alias, or a tier name) overrides both.
@@ -392,7 +392,10 @@ export function costlyRunReasons(config, { hierarchy = false, autoPlan = false, 
   else if (autoPlan) out.push({ kind: 'parallel', text: 'parallel mode: an AI planner on the high tier, then several workers run at once' });
   if (Number(workers) >= 3) out.push({ kind: 'many-workers', text: `${workers} workers run at the same time` });
   const m = String(model || '').toLowerCase();
-  const highModels = Object.values(config?.profiles || {}).map((p) => p?.models?.high).filter(Boolean).map((s) => String(s).toLowerCase());
+  const highModels = [
+    ...Object.values(config?.profiles || {}).map((p) => p?.models?.high),
+    ...Object.values(config?.quotaFallback || {}).map((f) => f?.models?.high)
+  ].filter(Boolean).map((s) => String(s).toLowerCase());
   if (m && (m === 'high' || highModels.includes(m))) out.push({ kind: 'high-model', text: `every agent is forced onto the most expensive model (--model ${model})` });
   return out;
 }

@@ -55,7 +55,7 @@ if (cmd === 'validate') {
     process.exit(0);
   }
   const mode = usable.length >= 3 ? '3+ engines: planning / coding / QA each get their own' : usable.length === 2 ? '2 engines: planning on one, coding + QA on the other' : '1 engine: it does every role';
-  console.log(`\nRouting (${mode}):\n  planning / research (PO_ARCHITECT, BA_ANALYST) → ${label(routing.plan)}\n  coding (DEV_ENGINEER)                          → ${label(routing.code)}\n  QA / review (QA_AUDITOR)                       → ${label(routing.qa)}`);
+  console.log(`\nRouting (${mode}):\n  planning / research (PO_ARCHITECT, BA_ANALYST) → ${label(routing.plan)}\n  coding (DEV_ENGINEER, UX_DESIGNER)             → ${label(routing.code)}\n  QA / review (QA_AUDITOR)                       → ${label(routing.qa)}`);
   const next = applyEngineRouting(team, routing);
   console.log('');
   next.members.forEach((m) => { const x = mm(m); console.log(`  ${m.id.padEnd(14)} [${m.role}]  → ${label(m.engine)}  plans on ${x.plan}, workers on ${x.work}${(team.members.find((o) => o.id === m.id) || {}).engine === m.engine ? '' : '   (changed)'}`); });
