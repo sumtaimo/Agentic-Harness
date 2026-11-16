@@ -77,6 +77,39 @@ export function which(binary) {
 }
 
 /**
+ * Find every distinct copy of `binary` across PATH directories in search order.
+ * Resolves symlinks/junctions to deduplicate identical underlying binaries and picks at most one
+ * winning executable per directory (matching `which()` so Windows paired `<bin>` + `<bin>.cmd` shims
+ * in the same install folder are not falsely flagged as duplicates).
+ */
+export function findAllOnPath(binary, envPath = process.env.PATH, pathExt = process.env.PATHEXT) {
+  if (!binary) return [];
+  if (binary.includes('/') || binary.includes('\\')) {
+    try { return fs.statSync(binary).isFile() ? [binary] : []; } catch { return []; }
+  }
+  const exts = process.platform === 'win32'
+    ? [...new Set((pathExt || '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean).concat(['']))]
+    : [''];
+  const out = [];
+  const seen = new Set();
+  for (const dir of String(envPath || '').split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const full = path.join(dir, binary + ext);
+      try {
+        if (!fs.statSync(full).isFile()) continue;
+        let real = path.resolve(full);
+        try { real = fs.realpathSync.native(full); } catch { /* keep resolved path */ }
+        const key = process.platform === 'win32' ? real.toLowerCase() : real;
+        if (!seen.has(key)) { seen.add(key); out.push(full); }
+        break; // One resolved binary per PATH directory (Windows CLIs often ship paired <bin> + <bin>.cmd shims).
+      } catch { /* keep looking */ }
+    }
+  }
+  return out;
+}
+
+/**
  * Quote one argument for a Windows shell command line (spawn with shell: true).
  * An empty string becomes "" so it is not dropped (e.g. a "-p" "" pair); newlines are collapsed to spaces
  * because cmd.exe truncates the command line at the first literal newline.
@@ -128,6 +161,55 @@ export function usageTodayLine(config = loadConfig()) {
 /** "agy 2 call(s) (1 failed) · codex 1 call(s)" for one job, '' when none. */
 export function usageLine(used) {
   return Object.entries(used).map(([k, r]) => `${k === 'antigravity' ? 'agy' : k} ${r.calls} call(s)${r.failed ? ` (${r.failed} failed)` : ''}${r.usd ? `, $${r.usd.toFixed(2)}` : ''}`).join(' · ');
+}
+
+/**
+ * Check today's (UTC) AGENT_USAGE against `config.dailyLimits` and return items at or above `threshold` (default 80%).
+ * Returns [{ engine, label, metric, used, limit, pct, remaining, over, fallback }] sorted descending by pct.
+ */
+export function quotaWarnings(config = loadConfig(), engines = null, threshold = 0.8) {
+  const limits = config?.dailyLimits;
+  if (!limits || typeof limits !== 'object') return [];
+  const usedMap = aiUsageSince(`${new Date().toISOString().slice(0, 10)}T00:00:00`);
+  const list = engines ? [...new Set(engines.map((e) => String(e).trim()).filter(Boolean))] : Object.keys(limits).filter((k) => k !== 'note');
+  const warnings = [];
+  for (const engine of list) {
+    const cap = limits[engine];
+    if (!cap || typeof cap !== 'object') continue;
+    const row = usedMap[engine] || { calls: 0, tokens: 0, usd: 0 };
+    const label = engine === 'antigravity' ? 'agy' : engine;
+    const fallback = config?.quotaFallback?.[engine]?.engine || null;
+    for (const metric of ['calls', 'tokens', 'usd']) {
+      const limit = cap[metric];
+      if (typeof limit !== 'number' || !(limit > 0)) continue;
+      const used = metric === 'usd' ? Math.round((Number(row.usd) || 0) * 1e6) / 1e6 : (Number(row[metric]) || 0);
+      const ratio = used / limit;
+      if (ratio >= threshold) {
+        warnings.push({
+          engine,
+          label,
+          metric,
+          used,
+          limit,
+          pct: Math.round(ratio * 100),
+          remaining: Math.max(0, metric === 'usd' ? Number((limit - used).toFixed(2)) : limit - used),
+          over: used >= limit,
+          fallback
+        });
+      }
+    }
+  }
+  return warnings.sort((a, b) => b.pct - a.pct || a.engine.localeCompare(b.engine) || a.metric.localeCompare(b.metric));
+}
+
+export function formatQuotaWarning(w, config = null) {
+  const valStr = w.metric === 'usd'
+    ? `$${Number(w.used).toFixed(2)}/$${w.limit}`
+    : `${w.used}/${w.limit} ${w.metric}`;
+  const fb = w.fallback || config?.quotaFallback?.[w.engine]?.engine || null;
+  const fbLabel = fb ? (fb === 'antigravity' ? 'agy' : fb) : '';
+  const fbHint = fbLabel ? ` (quotaFallback → ${fbLabel} configured)` : '';
+  return `Quota warning: ${w.label} at ${w.pct}% of daily ${w.metric} limit (${valStr})${w.over ? ' — limit reached' : ''}${fbHint}`;
 }
 
 // ───────────────────────────── harness core integrity ─────────────────────────────

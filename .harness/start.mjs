@@ -18,7 +18,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   ROOT, HARNESS_DIR, DIRS, FILES, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd,
-  probeEngine, engineConsent, ROUTABLE_ENGINES, usageTodayLine, checkCore, listLessons, helpIfAsked
+  probeEngine, engineConsent, ROUTABLE_ENGINES, usageTodayLine, quotaWarnings, formatQuotaWarning, checkCore, listLessons, helpIfAsked
 } from './lib/common.mjs';
 import { readCharter, readBacklog, backlogCounts } from './lib/governance.mjs';
 import { listVisibleRuns, VISIBLE_TERMINAL, RESUMABLE_STATUSES, editorDisplayName } from './lib/handoff.mjs';
@@ -95,6 +95,7 @@ export function collectStatus() {
 
   const sessions = readSessionsSummary();
   const usageToday = (() => { try { return usageTodayLine(cfg) || ''; } catch { return ''; } })();
+  const quotaWarnList = (() => { try { return quotaWarnings(cfg); } catch { return []; } })();
   const taughtCount = (() => { try { return listLessons(FILES.lessons).length; } catch { return 0; } })();
   const core = (() => { try { return checkCore(ROOT); } catch { return { manifest: null, changed: [], missing: [], added: [] }; } })();
 
@@ -125,6 +126,7 @@ export function collectStatus() {
     engines,
     sessions,
     usageToday,
+    quotaWarnings: quotaWarnList,
     taughtCount,
     coreModified: [...(core.changed || []), ...(core.missing || [])]
   };
@@ -182,6 +184,7 @@ export function formatSummary(info) {
   ];
   if (info.configError) lines.push(`! Config error: ${info.configError}`);
   if (info.coreModified.length) lines.push(`! Core warning: edited files in this project: ${info.coreModified.join(', ')}`);
+  for (const w of info.quotaWarnings || []) lines.push(`! ${formatQuotaWarning(w)}`);
   lines.push('============================================================================');
   return lines.join('\n');
 }

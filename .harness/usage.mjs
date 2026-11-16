@@ -10,7 +10,7 @@
  * Claude Code; Antigravity does not), cost in USD (Claude Code only) and duration. Daily caps: "dailyLimits" in config.json.
  */
 import fs from 'node:fs';
-import { FILES, loadConfig, helpIfAsked } from './lib/common.mjs';
+import { FILES, loadConfig, helpIfAsked, quotaWarnings, formatQuotaWarning } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 
 const args = process.argv.slice(2);
@@ -35,12 +35,20 @@ for (const e of rows) {
   r.usd += Number(e.usd) || 0; r.minutes += (Number(e.ms) || 0) / 60000;
 }
 
-if (asJson) { console.log(JSON.stringify({ since, days, usage: sum }, null, 2)); process.exit(0); }
-
 const config = (() => { try { return loadConfig(); } catch { return {}; } })();
+const warnings = quotaWarnings(config);
+if (asJson) { console.log(JSON.stringify({ since, days, usage: sum, warnings }, null, 2)); process.exit(0); }
+
 const fmt = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
 console.log(`AI usage since ${since} (${days} day${days > 1 ? 's' : ''}), from .harness/telemetry.log\n`);
-if (!rows.length) { console.log('No AI calls logged in this period.'); process.exit(0); }
+if (!rows.length) {
+  console.log('No AI calls logged in this period.');
+  if (warnings.length) {
+    console.log('');
+    for (const w of warnings) console.log(`! ${formatQuotaWarning(w, config)}`);
+  }
+  process.exit(0);
+}
 const totals = {};
 for (const day of Object.keys(sum).sort()) {
   console.log(day);
@@ -55,4 +63,8 @@ for (const [eng, t] of Object.entries(totals)) {
   const cap = (config.dailyLimits || {})[eng];
   const capTxt = cap && typeof cap === 'object' ? `  daily cap: ${Object.entries(cap).map(([k, v]) => `${v} ${k}`).join(', ')}` : '  no daily cap (config.json "dailyLimits")';
   console.log(`  ${eng.padEnd(12)} ${t.calls} call(s)${t.tokens ? `, ${fmt(t.tokens)} tokens` : ''}${t.usd ? `, $${t.usd.toFixed(2)}` : ''}${capTxt}`);
+}
+if (warnings.length) {
+  console.log('');
+  for (const w of warnings) console.log(`! ${formatQuotaWarning(w, config)}`);
 }

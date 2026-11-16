@@ -279,7 +279,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/daemon.mjs` | the controller + live screen (HUD) |
 | `.harness/dispatch.mjs` | put a job in the inbox (`--help` for options) |
 | `.harness/memory.mjs` | remember / list / forget / context / sessions |
-| `.harness/doctor.mjs` · `status.mjs` | setup check · current state |
+| `.harness/doctor.mjs` · `status.mjs` | setup check (incl. duplicate `agy` PATH guard) · current state |
 | `.harness/config.json` | engines, max cycles, timeouts, worktrees, auto git commit |
 | `.harness/memory/` | `profile.md`, `lessons.md` (committed); `auto-lessons.md`, `sessions/` (git-ignored) |
 | `.harness/inbox/` → `completed/` or `failed/` | job files (`failed/` also has `.trace.txt`) |
@@ -296,7 +296,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/examples/backlog.sample.json` | a BA + DEV + QA parallel sample to import |
 | `.harness/state.json` · `telemetry.log` | live state · JSONL event log |
 | `.harness/live.log` · `watch.mjs` | plain-text live feed of every agent action · follow it (`--job <id>` ends with the result) |
-| `.harness/start.mjs` | interactive `[1]`–`[6]` launcher + live overview banner (`--summary`, `--json`, `npm start`) |
+| `.harness/start.mjs` · `usage.mjs` | interactive `[1]`–`[6]` launcher + live banner (`--summary`, `--json`, `npm start`) · daily/7d/30d quota & 80% pre-flight/banner warnings (`npm run usage`) |
 | `.harness/hook-session.mjs` | prints harness state at session start (`--brief`: 4–8 line read-only summary for any editor/shell) |
 | `.vscode/tasks.json` | buttons for the user (Run Task menu) |
 | `.claude/settings.json` · `commands/harness/*.md` | Claude Code permission rules + start-up hook · `/harness:run`, `:status`, `:tick`, `:doctor`, `:teach` (the user must trust the folder once for the rules to apply) |

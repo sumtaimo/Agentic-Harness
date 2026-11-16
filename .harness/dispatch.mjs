@@ -52,7 +52,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline/promises';
-import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable, detectEngines, compatibleModelFor, aiUsageSince, usageLine, usageTodayLine, MODEL_TIERS } from './lib/common.mjs';
+import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable, detectEngines, compatibleModelFor, aiUsageSince, usageLine, usageTodayLine, quotaWarnings, formatQuotaWarning, MODEL_TIERS } from './lib/common.mjs';
 import { askEngineConsent } from './lib/consent.mjs';
 import { loadTeam } from './lib/governance.mjs';
 import { RESUMABLE_STATUSES, VISIBLE_TERMINAL, editorDisplayName, listVisibleRuns, readVisibleRun, writeVisibleRun, inspectVisibleRun } from './lib/handoff.mjs';
@@ -303,6 +303,9 @@ const usePlanner = autoPlan && subtasks.length === 0 && !hierarchy;
     console.error(`ENGINE_APPROVAL_NEEDED: no AI tool is allowed and ready on this machine, so nothing was started.\n${why}\nAllow one in a terminal with:  node .harness/engines.mjs`);
     process.exit(3);
   }
+  const namedUsable = named.filter((k) => usable.includes(k));
+  const checkEngines = namedUsable.length ? [...new Set(namedUsable)] : usable.slice(0, 1);
+  for (const w of quotaWarnings(config, checkEngines)) console.log(`! ${formatQuotaWarning(w, config)}`);
 }
 
 // ── Approval gate: ask the person only when this run may use a lot of tokens / quota ──

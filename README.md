@@ -541,7 +541,8 @@ node .harness/daemon.mjs --status        # same as status.mjs
 node .harness/backlog.mjs overview|add|ready|block|pop|import|releases
 node .harness/dispatch.mjs --help        # all options: --goal --files --check --engine --auto-plan --wait, swarm --worker id:files:prompt
 node .harness/memory.mjs list|remember|forget|context|sessions
-node .harness/doctor.mjs                 # setup check + engine flag probe
+node .harness/doctor.mjs                 # setup check, engine flag probe + duplicate agy PATH guard
+node .harness/usage.mjs                  # daily/7d/30d token & call usage + ≥80% daily limit warnings (--json)
 node .harness/status.mjs --log 25        # state + recent JSONL events
 node .harness/watch.mjs --job <id>       # live feed of every agent action until that job finishes
 node test/run-tests.mjs                  # end-to-end tests with a mock engine (no AI account needed, free)

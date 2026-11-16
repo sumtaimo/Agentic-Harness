@@ -67,7 +67,9 @@ Each tier maps to one model per engine in `.harness/config.json`; `node .harness
   first); change or remove them there. When a cap is reached the agent is not started (`DAILY_LIMIT`);
   Claude work can still continue on agy. Counted by the controller from its own log, per UTC day.
 - **Where did it go?** `node .harness/usage.mjs` (or `npm run usage`) lists calls, tokens, cost and minutes per day,
-  engine and model. Antigravity does not report tokens, so it is counted in calls.
+  engine and model. Antigravity does not report tokens, so it is counted in calls. Whenever today's UTC usage reaches
+  **≥ 80%** of any configured `dailyLimits` threshold, `usage.mjs` (`--json` + text), `dispatch.mjs` (non-blocking pre-flight,
+  pointing out any configured `quotaFallback` partner), and `start.mjs` (`--summary` / `--json`) emit a quota warning.
 - **Renamed models.** `doctor` runs `agy models` and warns when a configured model ID no longer exists.
 
 ## Each AI tool is allowed once
@@ -116,8 +118,8 @@ Details and the full rules: [`MULTI-MODEL-SETUP.md`](MULTI-MODEL-SETUP.md#6-mode
 node .harness/doctor.mjs     # or: npm run doctor
 ```
 
-Doctor runs `<binary> --help` for each engine and lists any configured flag that is missing.
-An engine with a missing flag will not be used.
+Doctor runs `<binary> --help` for each engine, lists any configured flag that is missing, and warns if multiple `agy`
+binaries appear on `PATH` (shadowing an active binary with another version). An engine with a missing flag will not be used.
 
 ## What ENGINE_FALLBACK means
 
@@ -145,7 +147,7 @@ succeeds. Today `claude` and `antigravity` are `"verified": true`.
 
 Notes for Antigravity:
 
-- `agy.exe` lives in `%LOCALAPPDATA%\agy\bin` or `~/.gemini/bin`, which may not be on PATH by default. Add that folder to PATH, or doctor reports `agy` as not installed.
+- `agy.exe` lives in `%LOCALAPPDATA%\agy\bin` or `~/.gemini/bin`, which may not be on PATH by default. Add that folder to PATH, or doctor reports `agy` as not installed; if multiple copies of `agy` exist across PATH directories, `doctor` warns so you can remove the stale one.
 - `-p` is an alias of `--print`. `agy` does NOT read the prompt from stdin when `-p` is empty (`error: empty prompt`), so the prompt is passed as an argument.
 - Because `agy.exe` is a native `.exe` (not a `.cmd` shim), the controller spawns it with `shell: false` on Windows so `cmd.exe` never truncates multi-line prompts or drops `--model`. Windows `CreateProcess` still has a 32,767-character command-line limit (8,191 through `cmd.exe`, which `.cmd` shims use); 3,049 characters worked, while a much longer prompt can still fail.
 - `agy` has no auto-approve flag in the profile on purpose (it has `--dangerously-skip-permissions` and `--mode`). Scoped file edits worked without it.

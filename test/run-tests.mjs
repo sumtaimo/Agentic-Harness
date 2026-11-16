@@ -2625,9 +2625,9 @@ await test('hook-session.mjs --brief: prints 4-8 concise lines in idle and busy 
   assert(node(wt, ['.harness/hook-session.mjs', '--brief'], { HARNESS_ROOT: wt }).status === 0, 'broken config must not break --brief');
 });
 
-await test('v1.0.11 packaging: VS Code tasks + backlogId input, npm start script, and install.mjs merges & fingerprints start.mjs', () => {
+await test('v1.0.12 packaging: VS Code tasks + backlogId input, npm start script, and install.mjs merges & fingerprints start.mjs', () => {
   const pkg = json(path.join(REPO, 'package.json'));
-  assert(pkg.version === '1.0.11' && pkg.scripts.start === 'node .harness/start.mjs', JSON.stringify(pkg.scripts));
+  assert(pkg.version === '1.0.12' && pkg.scripts.start === 'node .harness/start.mjs', JSON.stringify(pkg.scripts));
   const tasksCfg = json(path.join(REPO, '.vscode', 'tasks.json'));
   const expectedLabels = [
     'Harness: Start Menu (interactive)',
@@ -2649,7 +2649,7 @@ await test('v1.0.11 packaging: VS Code tasks + backlogId input, npm start script
   const inst = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj], { encoding: 'utf8' });
   assert(inst.status === 0 && /node \.harness\/start\.mjs/.test(inst.stdout), inst.stdout + inst.stderr);
   const manifest = json(path.join(proj, '.harness', 'MANIFEST.json'));
-  assert(manifest.version === '1.0.11' && Boolean(manifest.files['.harness/start.mjs']), 'start.mjs not fingerprinted in MANIFEST');
+  assert(manifest.version === '1.0.12' && Boolean(manifest.files['.harness/start.mjs']), 'start.mjs not fingerprinted in MANIFEST');
   const merged = json(path.join(proj, '.vscode', 'tasks.json'));
   assert(merged.tasks.some((t) => t.label === 'My Custom Build'), 'custom task lost');
   assert(!merged.tasks.some((t) => t.label === 'Harness: old stale task'), 'old Harness task not replaced');
@@ -2860,6 +2860,127 @@ await test('Priority 3 UX & permissions integration: start.mjs menu [5][3] hando
   const settings = json(path.join(REPO, '.claude', 'settings.json'));
   assert(settings.permissions.allow.includes('Bash(node .harness/sessions.mjs board:*)'), 'missing board allow rule');
   assert(settings.permissions.ask.includes('Bash(node .harness/sessions.mjs merge:*)'), 'missing merge ask rule');
+});
+
+// ───────────── v1.0.12 (Priority 4): agy duplicate PATH guard & 80% quota warnings ─────────────
+
+await test('findAllOnPath & doctor.mjs: detects multiple agy binaries on PATH while deduplicating identical/symlinked paths', async () => {
+  const { findAllOnPath } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-path-'));
+  const dir1 = path.join(tmp, 'bin1');
+  const dir2 = path.join(tmp, 'bin2');
+  const dirSym = path.join(tmp, 'binsym');
+  fs.mkdirSync(dir1, { recursive: true });
+  fs.mkdirSync(dir2, { recursive: true });
+  fs.mkdirSync(dirSym, { recursive: true });
+
+  const binName = process.platform === 'win32' ? 'agy.cmd' : 'agy';
+  const body = process.platform === 'win32'
+    ? '@echo off\r\nif "%1"=="--help" echo Usage: agy -p --model\r\n'
+    : '#!/bin/sh\nif [ "$1" = "--help" ]; then echo "Usage: agy -p --model"; fi\n';
+  const f1 = path.join(dir1, binName);
+  const f2 = path.join(dir2, binName);
+  fs.writeFileSync(f1, body, { mode: 0o755 });
+  fs.writeFileSync(f2, body, { mode: 0o755 });
+  if (process.platform === 'win32') {
+    // Also place a POSIX wrapper in dir1 alongside agy.cmd — must count as ONE install in dir1
+    fs.writeFileSync(path.join(dir1, 'agy'), '#!/bin/sh\necho shim\n', { mode: 0o755 });
+  }
+  let symOk = false;
+  try { fs.symlinkSync(f1, path.join(dirSym, binName)); symOk = true; } catch { /* Windows without symlink privilege */ }
+
+  assert(findAllOnPath('').length === 0, 'empty binary should return []');
+  assert(findAllOnPath('no-such-bin-xyz', `${dir1}${path.delimiter}${dir2}`).length === 0, 'missing binary');
+  const two = findAllOnPath('agy', `${dir1}${path.delimiter}${dir1}${path.delimiter}${dir2}`, '.CMD;.EXE');
+  assert(two.length === 2 && two[0].startsWith(dir1) && two[1].startsWith(dir2), `expected 2 ordered entries, got ${JSON.stringify(two)}`);
+  if (symOk) {
+    const dedup = findAllOnPath('agy', `${dir1}${path.delimiter}${dirSym}`);
+    assert(dedup.length === 1, `symlink to same realpath must deduplicate, got ${JSON.stringify(dedup)}`);
+  }
+
+  // E2E doctor.mjs check: HARNESS_ENGINES must be deleted (not ''), and leave antigravity without consent so `agy models` isn't invoked
+  const d = sandbox();
+  const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+  const envTwo = { ...env };
+  delete envTwo.HARNESS_ENGINES;
+  envTwo[pathKey] = `${dir1}${path.delimiter}${dir2}${path.delimiter}${env[pathKey] || ''}`;
+  const rTwo = spawnSync(process.execPath, ['.harness/doctor.mjs'], { cwd: d, env: envTwo, encoding: 'utf8', timeout: 30000 });
+  assert(/multiple 'agy' binaries on PATH/.test(rTwo.stdout) && rTwo.stdout.includes(dir1) && rTwo.stdout.includes(dir2), `expected duplicate agy warning in doctor:\n${rTwo.stdout}\n${rTwo.stderr}`);
+
+  const envOne = { ...env };
+  delete envOne.HARNESS_ENGINES;
+  envOne[pathKey] = `${dir1}${path.delimiter}${env[pathKey] || ''}`;
+  const rOne = spawnSync(process.execPath, ['.harness/doctor.mjs'], { cwd: d, env: envOne, encoding: 'utf8', timeout: 30000 });
+  assert(!/multiple 'agy' binaries on PATH/.test(rOne.stdout), `single agy on PATH must not warn:\n${rOne.stdout}`);
+});
+
+await test('quotaWarnings & CLI pre-flight: warns cleanly at >= 80% across common.mjs, usage.mjs, start.mjs, and non-blocking dispatch.mjs', () => {
+  const d = sandbox();
+  const cfgFile = path.join(d, '.harness', 'config.json');
+  const cfg = json(cfgFile);
+  cfg.dailyLimits = {
+    note: 'string note ignored',
+    mock: { calls: 10, usd: 5, tokens: 1000 },
+    claude: { calls: 10, usd: 5 }
+  };
+  cfg.quotaFallback = {
+    ...(cfg.quotaFallback || {}),
+    mock: { engine: 'claude', models: {} }
+  };
+  fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2));
+
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const logFile = path.join(d, '.harness', 'telemetry.log');
+  const mkEv = (ts, engine, usd = 0, tokens = 0) => JSON.stringify({ ts, phase: 'AGENT_USAGE', engine, model: 'fast', ok: true, usd, tokens, ms: 500 });
+
+  // Boundary check < 80% (7/10 calls, $3.99/$5, 799/1000 tokens + old yesterday records ignored)
+  const belowEvents = [
+    ...Array(5).fill(0).map(() => mkEv(`${yesterday}T12:00:00.000Z`, 'mock', 5, 2000)),
+    ...Array(7).fill(0).map((_, i) => mkEv(`${today}T00:01:0${i}.000Z`, 'mock', i === 0 ? 3.99 : 0, i === 0 ? 799 : 0))
+  ];
+  fs.writeFileSync(logFile, belowEvents.join('\n') + '\n');
+
+  const checkWarnings = () => {
+    const script = `import { quotaWarnings } from '${pathToFileURL(path.join(d, '.harness', 'lib', 'common.mjs')).href}'; console.log(JSON.stringify(quotaWarnings()));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: d, env: { ...env, HARNESS_ROOT: d }, encoding: 'utf8' });
+    assert(r.status === 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  assert(checkWarnings().length === 0, `expected 0 warnings below 80%, got ${JSON.stringify(checkWarnings())}`);
+
+  // Push mock to exact 80% on calls (8/10), 80% on usd via IEEE-754 tricky $0.01 + seven $0.00..., let's do 10 x $0.40 on claude ($4.00/$5 = 80%) and 100% tokens on mock
+  fs.writeFileSync(logFile, [
+    ...Array(8).fill(0).map((_, i) => mkEv(`${today}T00:02:0${i}.000Z`, 'mock', 0.1, i === 0 ? 1000 : 0)),
+    ...Array(10).fill(0).map((_, i) => mkEv(`${today}T00:03:0${i}.000Z`, 'claude', 0.4, 0))
+  ].join('\n') + '\n');
+
+  const warns = checkWarnings();
+  const tokW = warns.find((w) => w.engine === 'mock' && w.metric === 'tokens');
+  const callsW = warns.find((w) => w.engine === 'mock' && w.metric === 'calls');
+  const usdW = warns.find((w) => w.engine === 'claude' && w.metric === 'usd');
+  assert(tokW && tokW.pct === 100 && tokW.over === true && tokW.remaining === 0, JSON.stringify(tokW));
+  assert(callsW && callsW.pct === 80 && callsW.over === false && callsW.remaining === 2, JSON.stringify(callsW));
+  assert(usdW && usdW.pct === 80 && usdW.over === false && usdW.used === 4 && usdW.remaining === 1, JSON.stringify(usdW));
+
+  // usage.mjs (--json + text)
+  const uJson = JSON.parse(node(d, ['.harness/usage.mjs', '--json']).stdout);
+  assert(Array.isArray(uJson.warnings) && uJson.warnings.length >= 3, JSON.stringify(uJson));
+  const uTxt = node(d, ['.harness/usage.mjs']);
+  assert(uTxt.status === 0 && /Quota warning: mock at 80% of daily calls limit \(8\/10 calls\)/.test(uTxt.stdout) && /Quota warning: claude at 80% of daily usd limit \(\$4\.00\/\$5\)/.test(uTxt.stdout), uTxt.stdout);
+
+  // start.mjs (--json + --summary)
+  const sJson = JSON.parse(node(d, ['.harness/start.mjs', '--json']).stdout);
+  assert(Array.isArray(sJson.quotaWarnings) && sJson.quotaWarnings.length >= 3, JSON.stringify(sJson.quotaWarnings));
+  const sSum = node(d, ['.harness/start.mjs', '--summary']);
+  assert(sSum.status === 0 && /! Quota warning: mock at 80% of daily calls limit/.test(sSum.stdout), sSum.stdout);
+
+  // dispatch.mjs pre-flight warning: adjust mock below 100% (8/10 calls, 800/1000 tokens -> 80%, not blocked) and confirm non-blocking execution + quotaFallback hint
+  fs.writeFileSync(logFile, Array(8).fill(0).map((_, i) => mkEv(`${today}T00:04:0${i}.000Z`, 'mock', 0.1, 100)).join('\n') + '\n');
+  const disp = node(d, ['.harness/dispatch.mjs', '--goal', 'WRITE src/p4.txt ok', '--files', 'src/p4.txt', '--check', existsCheck('src/p4.txt'), '--wait']);
+  assert(disp.status === 0, `dispatch failed: ${disp.stdout}\n${disp.stderr}`);
+  assert(/! Quota warning: mock at 80% of daily calls limit \(8\/10 calls\) \(quotaFallback → claude configured\)/.test(disp.stdout), disp.stdout);
+  assert(/RESULT: COMMITTED/.test(disp.stdout) && read(d, 'src/p4.txt') === 'ok', disp.stdout);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

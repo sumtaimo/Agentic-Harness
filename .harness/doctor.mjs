@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, checkCore, detectVerifyCmd, listProjectFiles, helpIfAsked } from './lib/common.mjs';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
 
@@ -57,6 +57,10 @@ for (const [name, p] of Object.entries(config.profiles)) {
     else if (preferred) note(`${name.padEnd(12)} not installed (first in your order); the next one is used: ${others.join(', ')}`);
     else console.log(`  · ${name.padEnd(12)} not installed`);
     continue;
+  }
+  if (name === 'antigravity' && process.env.HARNESS_ENGINES === undefined) {
+    const agyHits = findAllOnPath(p.binary);
+    if (agyHits.length > 1) warn(`${name.padEnd(12)} multiple '${p.binary}' binaries on PATH — using #1 (${agyHits[0]}), shadowing: ${agyHits.slice(1).join(', ')}. Keep one copy on PATH to avoid version mismatches.`);
   }
   if (!probe.checked && !flags.length) { ok(`${name.padEnd(12)} ${probe.binPath} — no command-line flags to check`); continue; }
   if (!probe.checked) { warn(`${name.padEnd(12)} ${probe.binPath} — flags not checked (${probe.error})${probe.compatible ? ' — used anyway (verified profile)' : ' → will NOT be used (unverified profile); fix the CLI or its "args" in config.json'}`); continue; }
