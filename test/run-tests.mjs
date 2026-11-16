@@ -2625,9 +2625,9 @@ await test('hook-session.mjs --brief: prints 4-8 concise lines in idle and busy 
   assert(node(wt, ['.harness/hook-session.mjs', '--brief'], { HARNESS_ROOT: wt }).status === 0, 'broken config must not break --brief');
 });
 
-await test('v1.0.10 packaging: 5 new VS Code tasks + backlogId input, npm start script, and install.mjs merges & fingerprints start.mjs', () => {
+await test('v1.0.11 packaging: VS Code tasks + backlogId input, npm start script, and install.mjs merges & fingerprints start.mjs', () => {
   const pkg = json(path.join(REPO, 'package.json'));
-  assert(pkg.version === '1.0.10' && pkg.scripts.start === 'node .harness/start.mjs', JSON.stringify(pkg.scripts));
+  assert(pkg.version === '1.0.11' && pkg.scripts.start === 'node .harness/start.mjs', JSON.stringify(pkg.scripts));
   const tasksCfg = json(path.join(REPO, '.vscode', 'tasks.json'));
   const expectedLabels = [
     'Harness: Start Menu (interactive)',
@@ -2649,7 +2649,7 @@ await test('v1.0.10 packaging: 5 new VS Code tasks + backlogId input, npm start 
   const inst = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj], { encoding: 'utf8' });
   assert(inst.status === 0 && /node \.harness\/start\.mjs/.test(inst.stdout), inst.stdout + inst.stderr);
   const manifest = json(path.join(proj, '.harness', 'MANIFEST.json'));
-  assert(manifest.version === '1.0.10' && Boolean(manifest.files['.harness/start.mjs']), 'start.mjs not fingerprinted in MANIFEST');
+  assert(manifest.version === '1.0.11' && Boolean(manifest.files['.harness/start.mjs']), 'start.mjs not fingerprinted in MANIFEST');
   const merged = json(path.join(proj, '.vscode', 'tasks.json'));
   assert(merged.tasks.some((t) => t.label === 'My Custom Build'), 'custom task lost');
   assert(!merged.tasks.some((t) => t.label === 'Harness: old stale task'), 'old Harness task not replaced');
@@ -2657,5 +2657,211 @@ await test('v1.0.10 packaging: 5 new VS Code tasks + backlogId input, npm start 
   assert(merged.inputs.some((i) => i.id === 'customIn') && merged.inputs.some((i) => i.id === 'backlogId'), 'merged inputs missing');
 });
 
+// ───────────── v1.0.11 (Priority 3): sessions checkpoint & handoff, dispatch --cwd ─────────────
+
+await test('sessions.mjs checkpoint: commits dirty WIP (Harness-Wip), avoids empty commit when clean, resets DONE/CHECK FAILED back to WORKING until reported done, and enforces guards', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-cp-'));
+  const main = path.join(base, 'main'); fs.cpSync(sandbox(), main, { recursive: true });
+  fs.writeFileSync(path.join(main, 'package.json'), JSON.stringify({ name: 'cp', private: true, scripts: { test: 'node -e "process.exit(require(\'fs\').existsSync(\'BROKEN\')?1:0)"' } }));
+  const G = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  G(main, 'init', '-q', '-b', 'lab'); G(main, 'add', '-A'); G(main, 'commit', '-q', '-m', 'init');
+  const S = (cwd, ...a) => spawnSync(process.execPath, [path.join(main, '.harness', 'sessions.mjs'), ...a], { cwd, env: { ...env, HARNESS_ROOT: main }, encoding: 'utf8', timeout: 30000 });
+
+  // 1. Clean tree creates no empty commit; dirty WIP commits Harness-Wip + updates board lastCheckpoint
+  assert(S(main, 'new', 'Auth helper', '--type', 'feat').status === 0, 'new FEAT-1');
+  const wt = path.join(base, 'wt1');
+  G(main, 'worktree', 'add', '-q', '-b', 'claude/cp1', wt, 'lab');
+  assert(S(wt, 'start', 'FEAT-1').status === 0, 'start FEAT-1');
+  const tipBefore = G(wt, 'rev-parse', 'HEAD');
+  const cleanCp = S(main, 'checkpoint', 'FEAT-1');
+  assert(cleanCp.status === 0 && /already clean/.test(cleanCp.stdout) && G(wt, 'rev-parse', 'HEAD') === tipBefore, cleanCp.stdout + cleanCp.stderr);
+
+  fs.mkdirSync(path.join(wt, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(wt, 'src', 'wip.js'), 'export const a = 1;\n');
+  fs.writeFileSync(path.join(wt, 'notes here.txt'), 'draft\n');
+  const cp1 = S(main, 'checkpoint', 'FEAT-1', '--message', 'halfway there');
+  assert(cp1.status === 0 && /committed 2 WIP file\(s\)/.test(cp1.stdout) && G(wt, 'status', '--porcelain') === '', cp1.stdout + cp1.stderr);
+  assert(/FEAT-1: wip - halfway there/.test(G(wt, 'log', '-1', '--format=%B')) && /Harness-Wip: FEAT-1/.test(G(wt, 'log', '-1', '--format=%B')), 'missing Harness-Wip trailer');
+  let bj = JSON.parse(S(main, 'board', '--json').stdout);
+  let r1 = bj.tasks.find((x) => x.id === 'FEAT-1');
+  assert(r1.status === 'WORKING' && r1.lastCheckpoint?.message === 'halfway there' && r1.lastCheckpoint?.files.includes('notes here.txt'), JSON.stringify(r1));
+
+  // 2. WIP commit after DONE returns task to WORKING until a fresh `report done`
+  assert(S(wt, 'report', 'FEAT-1', 'done', '--summary', 'almost').status === 0, 'report FEAT-1 done');
+  assert(JSON.parse(S(main, 'board', '--json').stdout).tasks.find((x) => x.id === 'FEAT-1').status === 'DONE', 'expected DONE');
+  fs.writeFileSync(path.join(wt, 'src', 'wip.js'), 'export const a = 2;\n');
+  assert(S(main, 'checkpoint', 'FEAT-1', '--message', 'fixup after done').status === 0, 'checkpoint after done');
+  assert(JSON.parse(S(main, 'board', '--json').stdout).tasks.find((x) => x.id === 'FEAT-1').status === 'WORKING', 'newer WIP must revert DONE back to WORKING');
+  assert(S(wt, 'report', 'FEAT-1', 'done', '--summary', 'final').status === 0, 're-report done');
+  assert(S(main, 'merge', 'FEAT-1').status === 0, 'merge FEAT-1');
+  assert(S(main, 'checkpoint', 'FEAT-1').status === 1, 'cannot checkpoint MERGED/CLEANED task');
+
+  // 3. WIP commit after CHECK FAILED returns task from CHECK FAILED back to WORKING until fixed + re-reported done
+  assert(S(main, 'new', 'Check reset', '--type', 'bug').status === 0, 'new BUG-1');
+  const wt2 = path.join(base, 'wt2');
+  G(main, 'worktree', 'add', '-q', '-b', 'claude/cp2', wt2, 'lab');
+  assert(S(wt2, 'start', 'BUG-1').status === 0, 'start BUG-1');
+  fs.writeFileSync(path.join(wt2, 'BROKEN'), '1');
+  G(wt2, 'add', '-A'); G(wt2, 'commit', '-q', '-m', 'break');
+  assert(S(wt2, 'report', 'BUG-1', 'done').status === 0, 'report BUG-1 done');
+  assert(S(main, 'merge', 'BUG-1').status === 1, 'merge should fail on BROKEN');
+  assert(JSON.parse(S(main, 'board', '--json').stdout).tasks.find((x) => x.id === 'BUG-1').status === 'CHECK FAILED', 'expected CHECK FAILED');
+  fs.rmSync(path.join(wt2, 'BROKEN'));
+  assert(S(main, 'checkpoint', 'BUG-1', '--message', 'removed broken').status === 0, 'checkpoint BUG-1');
+  assert(JSON.parse(S(main, 'board', '--json').stdout).tasks.find((x) => x.id === 'BUG-1').status === 'WORKING', 'WIP commit after CHECK FAILED must move back to WORKING');
+  assert(S(wt2, 'report', 'BUG-1', 'done', '--summary', 'fixed').status === 0 && S(main, 'merge', 'BUG-1').status === 0, 'BUG-1 merges after fix + done');
+
+  // 4. Missing worktree & HARNESS_WORKER=1 guards
+  assert(S(main, 'new', 'No worktree', '--type', 'task').status === 0, 'new TASK-1');
+  assert(S(main, 'checkpoint', 'TASK-1').status === 1, 'missing worktree must refuse checkpoint');
+  const wk = spawnSync(process.execPath, [path.join(main, '.harness', 'sessions.mjs'), 'checkpoint', 'TASK-1'], { cwd: main, env: { ...env, HARNESS_ROOT: main, HARNESS_WORKER: '1' }, encoding: 'utf8' });
+  assert(wk.status === 2, `worker must be refused (exit ${wk.status})`);
+});
+
+await test('sessions.mjs handoff: inspects local/spaced worktrees & remote cloud branches, supports --checkpoint --json, --prompt, auto-detection, and useGitWorktrees warnings', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-hoff-'));
+  const remote = path.join(base, 'remote.git'); fs.mkdirSync(remote);
+  const G = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  G(remote, 'init', '-q', '--bare', '-b', 'lab');
+  const main = path.join(base, 'main'); fs.cpSync(sandbox({ worktrees: true }), main, { recursive: true });
+  fs.writeFileSync(path.join(main, 'package.json'), JSON.stringify({ name: 'hoff', private: true, scripts: { test: PASS } }));
+  G(main, 'init', '-q', '-b', 'lab'); G(main, 'add', '-A'); G(main, 'commit', '-q', '-m', 'init');
+  G(main, 'remote', 'add', 'origin', remote); G(main, 'push', '-q', '-u', 'origin', 'lab');
+
+  const S = (cwd, root, ...a) => spawnSync(process.execPath, [path.join(root, '.harness', 'sessions.mjs'), ...a], { cwd, env: { ...env, HARNESS_ROOT: root }, encoding: 'utf8', timeout: 30000 });
+  assert(S(main, main, 'new', 'Spaced Feature', '--type', 'feat').status === 0, 'new FEAT-1');
+  const wt = path.join(base, 'wt with space');
+  G(main, 'worktree', 'add', '-q', '-b', 'claude/h1', wt, 'lab');
+  assert(S(wt, wt, 'start', 'FEAT-1').status === 0, 'start FEAT-1');
+  fs.writeFileSync(path.join(wt, 'app.js'), 'console.log(1);\n');
+  G(wt, 'add', '-A'); G(wt, 'commit', '-q', '-m', 'feat: app');
+  fs.writeFileSync(path.join(wt, 'dirty.txt'), 'unsaved');
+
+  // Auto-select sole open task, warn about useGitWorktrees + dirty WIP, quote spaced --cwd path
+  const txt = S(main, main, 'handoff');
+  assert(txt.status === 0 && /SESSION HANDOFF — FEAT-1 \(WORKING\)/.test(txt.stdout) && /useGitWorktrees is true/.test(txt.stdout), txt.stdout + txt.stderr);
+  assert(/dispatch\.mjs --cwd "[^"]*wt with space"/.test(txt.stdout) && /----- \[HANDOFF PROMPT FOR NEXT SESSION\] -----/.test(txt.stdout), txt.stdout);
+
+  const pr = S(main, main, 'handoff', '--prompt');
+  assert(pr.status === 0 && !/SESSION HANDOFF —/.test(pr.stdout) && /\[HARNESS SESSION HANDOFF: FEAT-1/.test(pr.stdout), pr.stdout);
+
+  // --checkpoint --json must return valid JSON on stdout with checkpointResult and clean uncommitted list
+  const cj = S(main, main, 'handoff', 'FEAT-1', '--checkpoint', '--json');
+  assert(cj.status === 0, cj.stderr);
+  const parsed = JSON.parse(cj.stdout);
+  assert(parsed.checkpointResult?.committed === true && parsed.uncommitted.length === 0 && parsed.checkpointNeededForWorktrees === false && parsed.readyHeadlessEngines.includes('mock'), cj.stdout);
+
+  // 2 open tasks: from main without ID errors; inside child branch auto-selects FEAT-2; cloud push without local worktree still inspects remote branch
+  assert(S(main, main, 'new', 'Cloud Only', '--type', 'bug').status === 0, 'new BUG-1');
+  const wt2 = path.join(base, 'wt2');
+  G(main, 'worktree', 'add', '-q', '-b', 'claude/h2', wt2, 'lab');
+  assert(S(wt2, wt2, 'start', 'BUG-1').status === 0, 'start BUG-1');
+  fs.writeFileSync(path.join(wt2, 'cloud.js'), 'cloud\n'); G(wt2, 'add', '-A'); G(wt2, 'commit', '-q', '-m', 'cloud work');
+  G(wt2, 'push', '-q', '-u', 'origin', 'task/bug-1-cloud-only');
+
+  const amb = S(main, main, 'handoff');
+  assert(amb.status === 1 && /2 open child tasks/.test(amb.stderr), amb.stdout + amb.stderr);
+  const autoWt2 = JSON.parse(S(wt2, wt2, 'handoff', '--json').stdout);
+  assert(autoWt2.task.id === 'BUG-1' && autoWt2.ahead >= 1, JSON.stringify(autoWt2));
+
+  // Drop local worktree + local branch to simulate remote-only cloud session
+  G(main, 'worktree', 'remove', '--force', wt2);
+  G(main, 'branch', '-D', 'task/bug-1-cloud-only');
+  const cloudH = JSON.parse(S(main, main, 'handoff', 'BUG-1', '--json').stdout);
+  assert(cloudH.worktree === null && cloudH.resumeCmd === null && cloudH.branchRef === 'refs/remotes/origin/task/bug-1-cloud-only' && cloudH.commits.some((c) => /cloud work/.test(c.subject)), JSON.stringify(cloudH));
+  assert(spawnSync(process.execPath, [path.join(main, '.harness', 'sessions.mjs'), 'handoff', 'FEAT-1', '--checkpoint'], { cwd: main, env: { ...env, HARNESS_ROOT: main, HARNESS_WORKER: '1' }, encoding: 'utf8' }).status === 2, 'worker handoff --checkpoint refused');
+});
+
+await test('dispatch.mjs --cwd: runs single-worker, --auto-plan, useGitWorktrees+autoGitCommit, and 3-cycle rollback strictly inside external worktree while ignoring integrationMode and leaving ROOT clean', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-cwd-'));
+  const G = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+  // 1. Main repo with integrationMode: always (must be bypassed when --cwd targets child worktree)
+  const main = path.join(base, 'main'); fs.cpSync(sandbox(), main, { recursive: true });
+  fs.writeFileSync(path.join(main, 'package.json'), JSON.stringify({ name: 'root', private: true, scripts: { test: 'node -e "process.exit(99)"' } }));
+  { const cf = path.join(main, '.harness', 'config.json'); const c = json(cf); c.git.integrationMode = 'always'; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  G(main, 'init', '-q', '-b', 'main'); G(main, 'add', '-A'); G(main, 'commit', '-q', '-m', 'init');
+  const wt = path.join(base, 'child wt');
+  G(main, 'worktree', 'add', '-q', '-b', 'task/feat-1-cwd', wt, 'main');
+  fs.writeFileSync(path.join(wt, 'package.json'), JSON.stringify({ name: 'child', private: true, scripts: { test: 'node -e "process.exit(require(\'fs\').readFileSync(\'src/cwd.js\',\'utf8\')===\'cwd-ok\'?0:1)"' } }));
+  G(wt, 'add', 'package.json'); G(wt, 'commit', '-q', '-m', 'child pkg');
+
+  // Guard checks on dispatch.mjs --cwd
+  assert(node(main, ['.harness/dispatch.mjs', '--cwd', path.join(base, 'nope'), '--goal', 'x']).status === 1, 'missing --cwd folder rejected');
+  assert(node(main, ['.harness/dispatch.mjs', '--cwd', path.join(main, 'package.json'), '--goal', 'x']).status === 1, 'file path rejected for --cwd');
+  assert(node(main, ['.harness/dispatch.mjs', '--cwd', path.join(main, '.harness'), '--goal', 'x']).status === 1, '.harness rejected for --cwd');
+  assert(node(main, ['.harness/dispatch.mjs', '--cwd', path.join(main, '.git'), '--goal', 'x']).status === 1, '.git rejected for --cwd');
+  assert(node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--branch', 'uat', '--goal', 'x']).status === 1, '--cwd + --branch rejected');
+  assert(node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--resume-visible', '--goal', 'x']).status === 1, '--cwd + --resume-visible rejected');
+  assert(node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--goal', 'x'], { HARNESS_WORKER: '1' }).status === 2, 'worker --cwd rejected');
+
+  // Single worker runs inside wt using wt package.json test, while ROOT never gets src/cwd.js or branch uat
+  const r1 = node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--goal', 'WRITE src/cwd.js cwd-ok', '--files', 'src/cwd.js', '--wait']);
+  assert(r1.status === 0 && /Workdir: /.test(r1.stdout) && /COMMITTED ✔/.test(r1.stdout), r1.stdout + r1.stderr);
+  assert(read(wt, 'src/cwd.js') === 'cwd-ok' && !fs.existsSync(path.join(main, 'src', 'cwd.js')), 'edit must land only inside external worktree');
+  assert(!G(main, 'branch', '--list', 'uat'), 'integration branch uat must not be created for --cwd');
+  const sess1 = fs.readdirSync(path.join(main, '.harness', 'memory', 'sessions')).map((f) => read(main, `.harness/memory/sessions/${f}`)).join('');
+  assert(sess1.includes(`- Workdir: ${fs.realpathSync.native(wt)}`), `session note missing Workdir:\n${sess1}`);
+
+  // 2. --auto-plan + --cwd sees child files and creates files inside child folder while ROOT stays untouched
+  fs.writeFileSync(path.join(wt, 'only-in-child.flag'), '1');
+  const planJson = JSON.stringify({
+    interfaceContract: 'contract',
+    subtasks: [{ id: 'child-w', role: 'DEV_ENGINEER', targetFiles: ['src/ap.js'], prompt: 'WRITE src/ap.js ap-ok' }]
+  });
+  const rAp = node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--goal', `PLAN_JSON ${planJson}`, '--auto-plan', '--check', existsCheck('src/ap.js'), '--wait']);
+  assert(rAp.status === 0 && read(wt, 'src/ap.js') === 'ap-ok' && !fs.existsSync(path.join(main, 'src', 'ap.js')), rAp.stdout + rAp.stderr);
+  assert(promptOf(wt, 'ai-planner').includes('only-in-child.flag'), 'AI planner should list files in external cwd');
+
+  // 3. useGitWorktrees: true + autoGitCommit: true with --cwd commits inside wt on its branch
+  { const cf = path.join(main, '.harness', 'config.json'); const c = json(cf); c.useGitWorktrees = true; c.autoGitCommit = true; c.git.integrationMode = 'off'; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  fs.rmSync(path.join(wt, '.mock-prompts'), { recursive: true, force: true });
+  G(wt, 'add', '-A'); G(wt, 'commit', '-q', '-m', 'before wt-auto');
+  const wtCommitsBefore = Number(G(wt, 'rev-list', '--count', 'HEAD'));
+  const rWt = node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--goal', 'WRITE src/wtcommit.js wt-ok', '--files', 'src/wtcommit.js', '--check', existsCheck('src/wtcommit.js'), '--wait']);
+  assert(rWt.status === 0 && read(wt, 'src/wtcommit.js') === 'wt-ok' && !fs.existsSync(path.join(main, 'src', 'wtcommit.js')), rWt.stdout + rWt.stderr);
+  assert(Number(G(wt, 'rev-list', '--count', 'HEAD')) === wtCommitsBefore + 1 && /harness:/.test(G(wt, 'log', '-1', '--format=%s')), 'autoGitCommit should commit inside child worktree');
+
+  // 4. 3-cycle failure rolls back external worktree via .harness/staging/ and preserves pre-existing content in wt
+  { const cf = path.join(main, '.harness', 'config.json'); const c = json(cf); c.useGitWorktrees = false; c.autoGitCommit = false; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  fs.writeFileSync(path.join(wt, 'src', 'keep.js'), 'BEFORE');
+  const rFail = node(main, ['.harness/dispatch.mjs', '--cwd', wt, '--goal', 'WRITE src/keep.js BROKEN\nWRITE src/newfail.js tmp', '--files', 'src/keep.js,src/newfail.js', '--check', 'node -e "process.exit(1)"', '--wait']);
+  assert(rFail.status === 1 && /NOT DONE/.test(rFail.stdout), rFail.stdout + rFail.stderr);
+  assert(read(wt, 'src/keep.js') === 'BEFORE' && !fs.existsSync(path.join(wt, 'src', 'newfail.js')), '3-cycle failure must roll back edits in external worktree');
+  const failedJob = json(path.join(main, '.harness', 'failed', ls(main, 'failed')[0]));
+  assert(failedJob.cwd === fs.realpathSync.native(wt), JSON.stringify(failedJob));
+});
+
+await test('Priority 3 UX & permissions integration: start.mjs menu [5][3] handoff & [5][4] checkpoint, hook-session inspect hint, and .claude/settings.json rules', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-p3-ui-'));
+  const main = path.join(base, 'main'); fs.cpSync(sandbox(), main, { recursive: true });
+  const G = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  G(main, 'init', '-q', '-b', 'lab'); G(main, 'add', '-A'); G(main, 'commit', '-q', '-m', 'init');
+  const S = (cwd, ...a) => spawnSync(process.execPath, [path.join(main, '.harness', 'sessions.mjs'), ...a], { cwd, env: { ...env, HARNESS_ROOT: main }, encoding: 'utf8' });
+
+  assert(S(main, 'new', 'UI menu child', '--type', 'feat').status === 0, 'new FEAT-1');
+  const wt = path.join(base, 'wt-ui');
+  G(main, 'worktree', 'add', '-q', '-b', 'claude/ui1', wt, 'lab');
+  assert(S(wt, 'start', 'FEAT-1').status === 0, 'start FEAT-1');
+  fs.writeFileSync(path.join(wt, 'partial.txt'), 'ui wip\n');
+
+  // Force STALE risk so hook-session (full) prints the inspect hint
+  { const cf = path.join(main, '.harness', 'config.json'); const c = json(cf); c.sessions = { staleHours: 0, notStartedHours: 0 }; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  fs.writeFileSync(path.join(wt, 'committed.txt'), '1'); G(wt, 'add', 'committed.txt'); G(wt, 'commit', '-q', '-m', 'c1');
+  const hk = node(main, ['.harness/hook-session.mjs'], { HARNESS_ROOT: main });
+  assert(/HIGH RISK FEAT-1.*\(inspect: node \.harness\/sessions\.mjs handoff FEAT-1\)/.test(hk.stdout), hk.stdout);
+
+  // Navigate start.mjs menu: [5] Sessions -> [4] checkpoint -> FEAT-1 -> note; then [5] Sessions -> [3] handoff -> FEAT-1 -> n; then [0] Exit
+  const mRes = spawnSync(process.execPath, ['.harness/start.mjs'], {
+    cwd: main, env: { ...env, HARNESS_ROOT: main }, input: '5\n4\nFEAT-1\nmenu note\n5\n3\nFEAT-1\nn\n0\n', encoding: 'utf8', timeout: 30000
+  });
+  assert(mRes.status === 0 && /CHECKPOINT FEAT-1: committed/.test(mRes.stdout) && /SESSION HANDOFF — FEAT-1/.test(mRes.stdout), `start.mjs [5][3]/[5][4] failed:\n${mRes.stderr}\n${mRes.stdout}`);
+
+  const settings = json(path.join(REPO, '.claude', 'settings.json'));
+  assert(settings.permissions.allow.includes('Bash(node .harness/sessions.mjs board:*)'), 'missing board allow rule');
+  assert(settings.permissions.ask.includes('Bash(node .harness/sessions.mjs merge:*)'), 'missing merge ask rule');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
+

@@ -160,6 +160,7 @@ In **Antigravity, Cursor, or VS Code** (where `/harness:run` is not a built-in s
   `node .harness/visible.mjs handoff [RUN_ID]` (add `--prompt` for raw prompt text, or `--json` for tooling).
 - Or finish that same unfinished editor run directly in the headless controller (keeping partial edits, inheritance of contract/criteria/last error, and updating `.harness/visible/<run>/` on completion or failure):
   `node .harness/dispatch.mjs --resume-visible [RUN_ID] [--engine <tool>] --wait` (also available in `npm start` → `[1]`).
+- For a `/harness:sessions` child task/worktree (`sessions.mjs`), save uncommitted WIP with `node .harness/sessions.mjs checkpoint <ID> [--message "…"]`, inspect progress and get a cross-engine handoff prompt with `node .harness/sessions.mjs handoff [ID] [--checkpoint] [--prompt|--json]`, or finish it headlessly inside the child worktree using `node .harness/dispatch.mjs --cwd <worktree> --goal "…" --wait` (also in `npm start` → `[5]`; `--cwd` cannot be combined with `--branch` or `--resume-visible`).
 
 The sections below describe the headless controller (background / terminal / unattended runs).
 
@@ -288,7 +289,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/roles/` · `skills/` | role personas + tool limits · skill rules |
 | `.harness/team.json` · `team.mjs` | the agent team (orchestrator → leads → workers): scopes, limits, budgets · show / validate / `sync-agents` |
 | `.harness/visible.mjs` | the controller for the editor workflow: brief / assign / verify / handoff / rollback / propose / status / report |
-| `.harness/sessions.mjs` · `/harness:sessions` | session board: Session A (role COORDINATOR) runs up to 4 child sessions, one task each; merge only with the owner's yes; merged tasks are cleaned up, unfinished ones flagged HIGH RISK, never deleted |
+| `.harness/sessions.mjs` · `/harness:sessions` | session board: Session A (role COORDINATOR) runs up to 4 child sessions, one task each; `checkpoint` saves WIP, `handoff` inspects & prepares cross-engine resume (`dispatch.mjs --cwd`), merge only with the owner's yes; merged tasks are cleaned up, unfinished ones flagged HIGH RISK, never deleted |
 | `.claude/agents/lead-*.md` | the named agents (generated from team.json; the user sees them working in the session) |
 | `docs/WORKFLOW.md` | the workflow, the rules, the two modes, what is not guaranteed |
 | `.harness/releases/` | snapshots made before every upload (git-ignored, never edit) |

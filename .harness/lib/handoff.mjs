@@ -189,7 +189,7 @@ export function restoreVisibleFiles(run, files) {
 
 // ───────────────────────────── handoff inspection & formatting ─────────────────────────────
 
-function usableEngines(config) {
+export function usableEngines(config) {
   const order = [...new Set([...(config.autoOrder || []), ...ROUTABLE_ENGINES])];
   return order.filter((k) => config.profiles?.[k] && engineUsable(config, k).ok);
 }

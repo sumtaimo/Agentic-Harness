@@ -613,6 +613,7 @@ export function recordSession(record) {
     `- Task ID: ${record.taskId}`,
     `- Result: **${record.result}**`,
     `- Engine: ${record.engine}`,
+    ...(record.cwd ? [`- Workdir: ${record.cwd}`] : []),
     `- Cycles used: ${record.cycles}/${record.maxCycles}`,
     `- Verify command: \`${record.verifyCmd}\` (${record.verifySource || 'given by task'})`,
     ...(record.git ? [`- Git: ${record.git.mergedSha ? `merged into **${record.git.branch}** @ ${record.git.mergedSha.slice(0, 8)} (from ${record.git.baseSha.slice(0, 8)})` : `**${record.git.branch}** unchanged`}; worker branches ${record.git.workerBranches.join(', ') || '-'}${record.git.keptBranches ? ' (kept for review)' : ' (deleted)'}; protected branches ${record.git.protectedUnchanged ? 'unchanged' : 'CHANGED — check!'}`] : []),

@@ -549,6 +549,8 @@ npm run test:live                        # REAL Claude agents end to end, 6 scen
 node .harness/visible.mjs status          # runs of the editor workflow
 node .harness/visible.mjs handoff         # inspect an unfinished run and get a prompt/command to continue it
 node .harness/dispatch.mjs --resume-visible --wait   # finish an unfinished editor run headlessly (keeps partial edits)
+node .harness/dispatch.mjs --cwd <dir> --goal "…" --wait   # run workers & checks inside another folder/worktree
+node .harness/sessions.mjs board|new|checkpoint|handoff|merge|cleanup   # multi-session child task board + WIP handoff
 node .harness/start.mjs                  # interactive numbered menu + live overview banner (or: npm start, --summary)
 node .harness/hook-session.mjs --brief   # 4–8 line status & quota summary for any editor or terminal
 node .harness/team.mjs show|validate     # the agent team and its guardrails
@@ -718,7 +720,9 @@ change and report findings; they never edit.
 Talk to one session (Session A): `/harness:sessions` runs up to 4 child sessions, one task each, with clear names
 (`FEAT-3 Login page`), follows them up, merges a finished one only after your yes (the check runs first) and then
 removes its worktree and branch. Unfinished or idle children are never deleted: they show as HIGH RISK until you
-decide. Board: `node .harness/sessions.mjs board`. Details: [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
+decide. Save uncommitted WIP with `node .harness/sessions.mjs checkpoint <ID>`, inspect or switch engines with
+`node .harness/sessions.mjs handoff [ID] [--checkpoint]`, or run headless workers directly in the child worktree via
+`node .harness/dispatch.mjs --cwd <worktree> --goal "…" --wait`. Board: `node .harness/sessions.mjs board`. Details: [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
 
 ## Maintaining the template
 

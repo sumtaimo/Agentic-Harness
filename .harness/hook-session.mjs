@@ -200,7 +200,7 @@ try {
       if (openSess.length) {
         const done = openSess.filter((t) => t.status === 'DONE').map((t) => t.id);
         lines.push(`- Session board: ${openSess.length}/${bj.maxActive} child task(s) open (${openSess.map((t) => `${t.id} ${t.status}`).join(', ')}).${done.length ? ` Ready to merge after the user's yes: ${done.join(', ')}.` : ''} Coordinate with /harness:sessions.`);
-        for (const t of openSess.filter((x) => x.risk)) lines.push(`- HIGH RISK ${t.id} "${t.title}": ${t.note}. Tell the user.`);
+        for (const t of openSess.filter((x) => x.risk)) lines.push(`- HIGH RISK ${t.id} "${t.title}": ${t.note} (inspect: node .harness/sessions.mjs handoff ${t.id}). Tell the user.`);
       }
     }
   } catch { /* no board yet, or not a git repository */ }

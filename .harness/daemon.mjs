@@ -65,6 +65,30 @@ let draining = false;
 let state = {};
 let lastFinished = null; // { autonomous, backlogId, title, ok } of the last job
 
+const realNorm = (p) => {
+  let r;
+  try { r = fs.realpathSync.native(p); } catch { r = path.resolve(p); }
+  return process.platform === 'win32' ? r.toLowerCase() : r;
+};
+const isSameDir = (a, b) => realNorm(a) === realNorm(b);
+
+function resolveTaskWorkRoot(task) {
+  if (!task?.cwd) return ROOT;
+  const resolved = path.resolve(ROOT, String(task.cwd));
+  let st;
+  try { st = fs.statSync(resolved); } catch {
+    throw fatal(`Task cwd folder does not exist: ${resolved}`);
+  }
+  if (!st.isDirectory()) throw fatal(`Task cwd path is not a folder: ${resolved}`);
+  let realWork = resolved;
+  try { realWork = fs.realpathSync.native(resolved); } catch { /* resolved exists */ }
+  const blockedSeg = /(?:^|\/)\.(git|harness)(?:\/|$)/;
+  if (blockedSeg.test(resolved.replace(/\\/g, '/')) || blockedSeg.test(realWork.replace(/\\/g, '/'))) {
+    throw fatal(`Refusing task cwd inside .git or .harness: ${realWork}`);
+  }
+  return realWork;
+}
+
 // ───────────────────────────── state + telemetry ─────────────────────────────
 
 function writeState(patch) {
@@ -459,7 +483,7 @@ function enforceBudget(task, where) {
 
 /** Which memory parts the engine already loads itself (e.g. CLAUDE.md "@.harness/memory/lessons.md"). */
 function autoLoadedMemory(profile, cwd) {
-  if (!profile.instructionFile || config.useGitWorktrees || path.resolve(cwd) !== ROOT) return []; // worktrees see the last commit, maybe stale
+  if (!profile.instructionFile || config.useGitWorktrees || !isSameDir(cwd, ROOT)) return []; // worktrees see the last commit, maybe stale
   let text = '';
   try { text = fs.readFileSync(path.join(cwd, profile.instructionFile), 'utf8'); } catch { return []; }
   const skip = [];
@@ -547,8 +571,8 @@ function runWorker(subtask, cwd, errorContext, { cycle = 1, model = null } = {})
 
 // ───────────────────────────── git helpers ─────────────────────────────
 
-async function isGitRepo() {
-  try { await execFileAsync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: ROOT }); return true; } catch { return false; }
+async function isGitRepo(root = ROOT) {
+  try { await execFileAsync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: root }); return true; } catch { return false; }
 }
 
 const inScope = (file, targets) => targets.length === 0 || targets.some((t) => {
@@ -556,8 +580,8 @@ const inScope = (file, targets) => targets.length === 0 || targets.some((t) => {
   return file === n || file.startsWith(n + '/');
 });
 
-/** Copy the worker's changes from its worktree back to the main folder — only files in scope. */
-async function syncWorktree(wtPath, sub) {
+/** Copy the worker's changes from its worktree back to the target folder — only files in scope. */
+async function syncWorktree(wtPath, sub, destRoot = ROOT) {
   const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-uall', '-z'], { cwd: wtPath });
   const entries = stdout.split('\0').filter(Boolean);
   const copied = []; const blocked = [];
@@ -567,7 +591,7 @@ async function syncWorktree(wtPath, sub) {
     if (status.startsWith('R')) i++; // rename: next entry is the old path
     if (file.startsWith('.harness/')) continue;
     if (!inScope(file, sub.targetFiles)) { blocked.push(file); continue; }
-    const src = path.join(wtPath, file); const dest = path.join(ROOT, file);
+    const src = path.join(wtPath, file); const dest = path.join(destRoot, file);
     if (fs.existsSync(src)) { fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.copyFileSync(src, dest); } else if (fs.existsSync(dest)) fs.rmSync(dest);
     copied.push(file);
   }
@@ -578,7 +602,7 @@ async function syncWorktree(wtPath, sub) {
 // ───────────────────────────── staging backup + rollback ─────────────────────────────
 
 /** Back up every scoped target before Node 2 runs (only when worktrees are off). */
-function backupScope(plan) {
+function backupScope(plan, workRoot = ROOT) {
   if (config.useGitWorktrees || config.rollbackOnFailure === false) return null;
   const aiWorkers = plan.subtasks.filter((s) => s.prompt);
   if (!aiWorkers.length) return null;
@@ -591,21 +615,22 @@ function backupScope(plan) {
   fs.mkdirSync(path.join(dir, 'files'), { recursive: true });
   const manifest = [];
   for (const t of [...new Set(aiWorkers.flatMap((s) => s.targetFiles))]) {
-    const abs = path.join(ROOT, t);
+    const abs = path.join(workRoot, t);
     if (fs.existsSync(abs)) {
       fs.cpSync(abs, path.join(dir, 'files', t), { recursive: true });
       manifest.push({ path: t, existed: true });
     } else manifest.push({ path: t, existed: false });
   }
-  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ taskId: plan.taskId, createdAt: new Date().toISOString(), entries: manifest }, null, 2));
-  logTelemetry('STAGING_BACKUP', `Backed up ${manifest.length} scoped path(s) before execution`, { taskId: plan.taskId, paths: manifest.map((m) => m.path) });
-  return { dir, manifest };
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ taskId: plan.taskId, workRoot, createdAt: new Date().toISOString(), entries: manifest }, null, 2));
+  logTelemetry('STAGING_BACKUP', `Backed up ${manifest.length} scoped path(s) before execution`, { taskId: plan.taskId, paths: manifest.map((m) => m.path), ...(isSameDir(workRoot, ROOT) ? {} : { cwd: workRoot }) });
+  return { dir, manifest, workRoot };
 }
 
 function restoreScope(backup) {
   if (!backup || backup.unavailable) return backup?.unavailable ? 'not possible (unscoped AI worker)' : null;
+  const targetRoot = backup.workRoot || ROOT;
   for (const m of backup.manifest) {
-    const abs = path.join(ROOT, m.path);
+    const abs = path.join(targetRoot, m.path);
     fs.rmSync(abs, { recursive: true, force: true });
     if (m.existed) {
       fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -613,7 +638,7 @@ function restoreScope(backup) {
     }
   }
   fs.rmSync(backup.dir, { recursive: true, force: true });
-  logTelemetry('ROLLBACK_DONE', `Restored ${backup.manifest.length} scoped path(s) to their state before the task`, { paths: backup.manifest.map((m) => m.path) });
+  logTelemetry('ROLLBACK_DONE', `Restored ${backup.manifest.length} scoped path(s) to their state before the task`, { paths: backup.manifest.map((m) => m.path), ...(isSameDir(targetRoot, ROOT) ? {} : { cwd: targetRoot }) });
   return `restored ${backup.manifest.map((m) => m.path).join(', ')}`;
 }
 
@@ -626,6 +651,7 @@ function discardBackup(backup) {
 /** Which integration branch a task uses (null = classic in-place mode). */
 function integrationFor(task) {
   const g = config.git || {};
+  if (task.cwd && !task.integrationBranch) return null;
   if (task.integrationBranch) return task.integrationBranch;
   const mode = g.integrationMode || 'off';
   if (!g.integrationBranch || mode === 'off') return null;
@@ -753,12 +779,12 @@ function catalog(gov) {
 }
 
 /** Ask the AI to split a goal into parallel workers with disjoint files. Re-asks once on an invalid plan. */
-async function aiDecompose(task, gov) {
+async function aiDecompose(task, gov, workRoot = ROOT) {
   const pc = config.planner || {};
   const maxWorkers = pc.maxWorkers || 4;
   const allowed = (task.targetFiles || []).map(safeTarget).filter(Boolean);
-  const { files, total } = listProjectFiles(ROOT, pc.maxFilesListed || 400);
-  const scripts = readJsonSafe(path.join(ROOT, 'package.json'), null)?.scripts;
+  const { files, total } = listProjectFiles(workRoot, pc.maxFilesListed || 400);
+  const scripts = readJsonSafe(path.join(workRoot, 'package.json'), null)?.scripts;
   const memory = memoryContext(config);
   const hasRoles = Object.keys(gov.roles).length > 0;
   let feedback = '';
@@ -789,7 +815,7 @@ async function aiDecompose(task, gov) {
 
     logTelemetry('1_AI_PLANNER', `AI planner attempt ${attempt}/${attempts}`, { goal: (task.goal || '').slice(0, 300) });
     const { output, engine } = await spawnEngine({
-      id: 'ai-planner', engine: task.engine, prompt, cwd: ROOT,
+      id: 'ai-planner', engine: task.engine, prompt, cwd: workRoot,
       timeoutMs: pc.timeoutMs || config.workerTimeoutMs, allowedTools: pc.allowedTools || ['Read', 'Glob', 'Grep'],
       disallowedTools: computeDisallowedTools(gov.charter),
       tier: chooseModelTier({ kind: 'plan', level: 'orchestrator' }), model: task.model || null
@@ -828,7 +854,7 @@ async function aiDecompose(task, gov) {
 const stripSlash = (f) => String(f).replace(/\/$/, '');
 const minutesToMs = (m, dflt) => (typeof m === 'number' && m > 0 ? Math.round(m * 60000) : dflt);
 
-async function hierDecompose(task, gov) {
+async function hierDecompose(task, gov, workRoot = ROOT) {
   const team = loadTeam();
   if (!team) throw fatal('This task asks for the team hierarchy, but .harness/team.json does not exist.');
   const pc = config.planner || {};
@@ -840,8 +866,8 @@ async function hierDecompose(task, gov) {
   const attempts = pc.maxAttempts || 2;
   const goalText = task.goal || task.prompt || task.title;
   const userAllowed = (task.targetFiles || []).map(safeTarget).filter(Boolean);
-  const { files, total } = listProjectFiles(ROOT, pc.maxFilesListed || 400);
-  const scripts = readJsonSafe(path.join(ROOT, 'package.json'), null)?.scripts;
+  const { files, total } = listProjectFiles(workRoot, pc.maxFilesListed || 400);
+  const scripts = readJsonSafe(path.join(workRoot, 'package.json'), null)?.scripts;
   const memory = memoryContext(config);
   const readOnly = ['Read', 'Glob', 'Grep'];
   const deny = computeDisallowedTools(gov.charter);
@@ -877,7 +903,7 @@ async function hierDecompose(task, gov) {
       feedback ? `\n[YOUR PREVIOUS PLAN WAS REJECTED — fix this]:\n${feedback}` : ''
     ].filter(Boolean).join('\n');
     logTelemetry('1_ORCHESTRATOR', `${orch.id} delegation attempt ${attempt}/${attempts}`, { goal: String(goalText).slice(0, 300) });
-    const { output } = await spawnEngine({ id: orch.id, engine: task.engine || orch.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(orch.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny, tier: chooseModelTier({ kind: 'plan', level: 'orchestrator', role: orch.role }), model: task.model || orch.model || null, modelSourceEngine: task.model ? null : (orch.engine || null) });
+    const { output } = await spawnEngine({ id: orch.id, engine: task.engine || orch.engine, prompt, cwd: workRoot, timeoutMs: minutesToMs(orch.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny, tier: chooseModelTier({ kind: 'plan', level: 'orchestrator', role: orch.role }), model: task.model || orch.model || null, modelSourceEngine: task.model ? null : (orch.engine || null) });
     try {
       let parsed;
       try { parsed = extractJson(output); } catch { throw new Error(`Reply was not valid JSON: ${output.slice(0, 300)}`); }
@@ -912,7 +938,7 @@ async function hierDecompose(task, gov) {
         fb ? `\n[YOUR PREVIOUS PLAN WAS REJECTED — fix this]:\n${fb}` : ''
       ].filter(Boolean).join('\n');
       logTelemetry('1_LEAD', `${lead.id} planning attempt ${attempt}/${attempts}`, { lead: lead.id });
-      const { output } = await spawnEngine({ id: lead.id, engine: task.engine || lead.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(lead.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny, tier: chooseModelTier({ kind: 'plan', level: 'lead', role: lead.role }), model: task.model || lead.model || null, modelSourceEngine: task.model ? null : (lead.engine || null) });
+      const { output } = await spawnEngine({ id: lead.id, engine: task.engine || lead.engine, prompt, cwd: workRoot, timeoutMs: minutesToMs(lead.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny, tier: chooseModelTier({ kind: 'plan', level: 'lead', role: lead.role }), model: task.model || lead.model || null, modelSourceEngine: task.model ? null : (lead.engine || null) });
       try {
         let parsed;
         try { parsed = extractJson(output); } catch { throw new Error(`Reply was not valid JSON: ${output.slice(0, 300)}`); }
@@ -959,7 +985,7 @@ async function hierDecompose(task, gov) {
   return { subtasks, interfaceContract: contract, verifySuggestion: typeof plan.verifySuggestion === 'string' ? plan.verifySuggestion.slice(0, 300) : '', team: teamPlan };
 }
 
-async function runPlanner(task, errorTrace = null, previous = null) {
+async function runPlanner(task, errorTrace = null, previous = null, workRoot = ROOT) {
   const allShell = (subs) => subs.length > 0 && subs.every((s) => s.cliCommand && !s.prompt);
   const engineLabel = (subs) => {
     if (allShell(subs)) return String(task.engine || 'shell').toUpperCase(); // no AI involved
@@ -975,7 +1001,7 @@ async function runPlanner(task, errorTrace = null, previous = null) {
   const gov = loadGov();
   const given = Array.isArray(task.subtasks) && task.subtasks.length > 0;
   writeState({ phase: '1_PLANNER', engine: engineLabel(given ? task.subtasks : [{ prompt: 'x' }]), taskTitle: task.title, planSummary: given ? `${task.subtasks.length} worker(s) given by the task` : 'single worker' });
-  logTelemetry('1_PLANNER', 'Validating task and checking file-lock boundaries', { engine: task.engine || 'auto', errorTrace, autonomous: !!task.autonomous, backlogId: task.backlogId });
+  logTelemetry('1_PLANNER', 'Validating task and checking file-lock boundaries', { engine: task.engine || 'auto', errorTrace, autonomous: !!task.autonomous, backlogId: task.backlogId, ...(isSameDir(workRoot, ROOT) ? {} : { cwd: workRoot }) });
 
   let subtasks; let planSummary; let verifySuggestion = task.verifySuggestion || ''; let interfaceContract = task.interfaceContract || ''; let teamPlan = null;
   const vOpts = { gov, autonomous: !!task.autonomous, requireScope: !!task.autonomous };
@@ -985,12 +1011,12 @@ async function runPlanner(task, errorTrace = null, previous = null) {
     subtasks.forEach((sub) => resolveGovernance(sub, gov));
     planSummary = `${subtasks.length} worker(s) given by the task`;
   } else if (task.hierarchy) {
-    const r = await hierDecompose(task, gov);
+    const r = await hierDecompose(task, gov, workRoot);
     subtasks = r.subtasks; verifySuggestion = r.verifySuggestion || verifySuggestion; teamPlan = r.team;
     interfaceContract = [interfaceContract, r.interfaceContract].filter(Boolean).join('\n');
     planSummary = `hierarchy ${r.team.orchestrator} → ${r.team.assignments.length} lead(s) → ${subtasks.length} worker(s): ${r.team.assignments.map((a) => `${a.lead}[${a.workers.length}]`).join(' ')}`;
   } else if (task.autoPlan) {
-    const r = await aiDecompose(task, gov);
+    const r = await aiDecompose(task, gov, workRoot);
     subtasks = r.subtasks; verifySuggestion = r.verifySuggestion || verifySuggestion;
     interfaceContract = [interfaceContract, r.interfaceContract].filter(Boolean).join('\n');
     planSummary = `AI planner → ${subtasks.length} worker(s): ${subtasks.map((s) => `${s.resolvedRole ? `${s.resolvedRole}:` : ''}${s.id}[${s.targetFiles.join(',')}]`).join('  ')}`;
@@ -1009,7 +1035,7 @@ async function runPlanner(task, errorTrace = null, previous = null) {
   if (subtasks.some((s) => s.resolvedRole)) planSummary += `  | roles: ${subtasks.map((s) => s.resolvedRole || '-').join(', ')}`;
 
   let verifyCmd = task.verifyCmd; let verifySource = 'given by task'; let verifyReal = !!task.verifyCmd;
-  if (!verifyCmd) { const d = detectVerifyCmd(ROOT, config); verifyCmd = d.cmd; verifySource = d.source; verifyReal = d.real; }
+  if (!verifyCmd) { const d = detectVerifyCmd(workRoot, config); verifyCmd = d.cmd; verifySource = d.source; verifyReal = d.real; }
   if (task.autonomous && gov.charter.requireRealCheck && !verifyReal) {
     throw fatal('Autonomous task has no real check (charter requireRealCheck). Add a "test" script to package.json or a human-approved "verifyCmd" to the backlog item.');
   }
@@ -1019,6 +1045,7 @@ async function runPlanner(task, errorTrace = null, previous = null) {
     taskId: task.id || `job-${Date.now()}`,
     title: task.title || 'Unnamed Harness Task',
     engine: engineLabel(subtasks), mode, subtasks, verifyCmd, verifySource, verifySuggestion, planSummary, interfaceContract, team: teamPlan,
+    workRoot,
     errorContext: errorTrace
   };
 }
@@ -1029,14 +1056,15 @@ async function runExecutorSwarm(plan, gitCtx = null) {
   writeState({ phase: '2_EXECUTOR_SWARM', mode: plan.mode, workerSummary: `Spawning ${plan.subtasks.length} parallel worker(s): ${plan.subtasks.map((s) => `${s.resolvedRole ? `${s.resolvedRole}:` : ''}${s.id}`).join(' | ')}` });
   logTelemetry('2_EXECUTOR', `Dispatching ${plan.subtasks.length} worker(s)`, { mode: plan.mode, engine: plan.engine });
 
+  const workRoot = plan.workRoot || ROOT;
   const useWorktrees = !gitCtx && config.useGitWorktrees && plan.subtasks.some((s) => s.prompt);
-  if (useWorktrees && !(await isGitRepo())) throw fatal('useGitWorktrees is on, but this folder is not a git repository with at least one commit.');
+  if (useWorktrees && !(await isGitRepo(workRoot))) throw fatal('useGitWorktrees is on, but this folder is not a git repository with at least one commit.');
 
   let finished = 0;
   const workerPromises = plan.subtasks.map(async (sub) => {
     for (const f of sub.targetFiles) activeFileLocks.add(f);
     writeState({ phase: '2_EXECUTOR_SWARM' });
-    let workerCwd = ROOT;
+    let workerCwd = workRoot;
     const wtPath = path.join(DIRS.worktrees, `${plan.taskId}-${sub.id}`.replace(/[^\w.-]/g, '_'));
     try {
       if (gitCtx) { // integration mode: own branch + worktree from the integration branch, kept across cycles
@@ -1048,7 +1076,7 @@ async function runExecutorSwarm(plan, gitCtx = null) {
         }
         workerCwd = w.path;
       } else if (useWorktrees) {
-        await execFileAsync('git', ['worktree', 'add', '--detach', wtPath, 'HEAD'], { cwd: ROOT });
+        await execFileAsync('git', ['worktree', 'add', '--detach', wtPath, 'HEAD'], { cwd: workRoot });
         workerCwd = wtPath;
       }
       const result = await runWorker(sub, workerCwd, plan.errorContext, { cycle: plan.cycle || 1, model: plan.model || null });
@@ -1057,7 +1085,7 @@ async function runExecutorSwarm(plan, gitCtx = null) {
         logTelemetry('BUDGET_AGENT_EXCEEDED', `${sub.id} cost $${(taskCost.agents[sub.id] || 0).toFixed(4)} > its cap $${sub.maxCostUsd}`, { agent: sub.id });
         throw fatal(`BUDGET_AGENT_EXCEEDED: worker ${sub.id} cost $${(taskCost.agents[sub.id] || 0).toFixed(3)}, over its cap of $${sub.maxCostUsd}.`);
       }
-      if (useWorktrees) result.sync = await syncWorktree(wtPath, sub);
+      if (useWorktrees) result.sync = await syncWorktree(wtPath, sub, workRoot);
       if (gitCtx && sub.prompt) {
         const c = await commitScoped({
           wtPath: workerCwd, targets: sub.targetFiles, inScope, root: ROOT, ignore: gitCtx.link,
@@ -1073,7 +1101,7 @@ async function runExecutorSwarm(plan, gitCtx = null) {
       return result;
     } finally {
       for (const f of sub.targetFiles) activeFileLocks.delete(f);
-      if (useWorktrees && fs.existsSync(wtPath)) await execFileAsync('git', ['worktree', 'remove', '--force', wtPath], { cwd: ROOT }).catch(() => {});
+      if (useWorktrees && fs.existsSync(wtPath)) await execFileAsync('git', ['worktree', 'remove', '--force', wtPath], { cwd: workRoot }).catch(() => {});
       writeState({ phase: '2_EXECUTOR_SWARM' });
     }
   });
@@ -1103,10 +1131,11 @@ async function runExecutorSwarm(plan, gitCtx = null) {
 // ───────────────────────────── Node 3: verifier ─────────────────────────────
 
 async function runVerifier(plan) {
+  const verifyDir = plan.verifyCwd || plan.workRoot || ROOT;
   writeState({ phase: '3_VERIFIER', lastGateStatus: `Running: ${plan.verifyCmd}` });
-  logTelemetry('3_VERIFIER', `Executing verification command: ${plan.verifyCmd}`, { source: plan.verifySource, cwd: plan.verifyCwd ? path.relative(ROOT, plan.verifyCwd) : '.' });
+  logTelemetry('3_VERIFIER', `Executing verification command: ${plan.verifyCmd}`, { source: plan.verifySource, cwd: isSameDir(verifyDir, ROOT) ? '.' : verifyDir });
   try {
-    const { stdout } = await execAsync(plan.verifyCmd, { cwd: plan.verifyCwd || ROOT, timeout: config.verifyTimeoutMs || 600000, maxBuffer: 32 * 1024 * 1024 });
+    const { stdout } = await execAsync(plan.verifyCmd, { cwd: verifyDir, timeout: config.verifyTimeoutMs || 600000, maxBuffer: 32 * 1024 * 1024 });
     const cleanOut = (stdout || '').trim().split('\n').filter(Boolean).pop() || 'OK';
     writeState({ phase: '3_VERIFIED', lastGateStatus: `PASS (Exit 0): ${plan.verifyCmd} -> ${cleanOut}` });
     logTelemetry('3_VERIFIED', 'Verifier exit code 0');
@@ -1122,6 +1151,7 @@ async function runVerifier(plan) {
 // ───────────────────────────── Node 4: committer ─────────────────────────────
 
 async function runCommitter(plan, task, taskFile, gitCtx = null, { archive = true } = {}) {
+  const workRoot = plan.workRoot || ROOT;
   let gitNote = '';
   if (gitCtx) { // the verified candidate becomes the new integration branch tip
     const how = await advanceBranch({ branch: gitCtx.branch, newSha: gitCtx.candidate, expectedOld: gitCtx.tipAtCandidate, root: ROOT });
@@ -1129,13 +1159,15 @@ async function runCommitter(plan, task, taskFile, gitCtx = null, { archive = tru
     gitNote = ` → ${gitCtx.branch} @ ${gitCtx.candidate.slice(0, 8)}`;
     logTelemetry('GIT_INTEGRATED', `${gitCtx.branch} moved ${gitCtx.tipAtCandidate.slice(0, 8)} → ${gitCtx.candidate.slice(0, 8)} (${how})`, { branch: gitCtx.branch, from: gitCtx.tipAtCandidate, to: gitCtx.candidate });
     writeState({ gitSummary: `${gitCtx.branch} @ ${gitCtx.candidate.slice(0, 8)} (verified merge) — your folder untouched` });
-  } else if (config.autoGitCommit && (await isGitRepo())) {
+  } else if (config.autoGitCommit && (await isGitRepo(workRoot))) {
     const scope = plan.subtasks.flatMap((s) => s.targetFiles);
     try {
-      await execFileAsync('git', ['add', '-A', '--', ...(scope.length ? scope : ['.']), ':(exclude).harness'], { cwd: ROOT });
-      const { stdout } = await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd: ROOT });
+      await execFileAsync('git', ['add', '-A', '--', ...(scope.length ? scope : ['.']), ':(exclude).harness'], { cwd: workRoot });
+      const { stdout } = await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd: workRoot });
       if (stdout.trim()) {
-        await execFileAsync('git', ['commit', '-m', `harness: ${plan.title}`, '-m', `Task ${plan.taskId}; verified by: ${plan.verifyCmd}`], { cwd: ROOT });
+        const hasEmail = await execFileAsync('git', ['config', 'user.email'], { cwd: workRoot }).then((r) => Boolean(r.stdout.trim()), () => false);
+        const idArgs = hasEmail ? [] : ['-c', 'user.name=Agentic Harness', '-c', 'user.email=harness@localhost'];
+        await execFileAsync('git', [...idArgs, 'commit', '-m', `harness: ${plan.title}`, '-m', `Task ${plan.taskId}; verified by: ${plan.verifyCmd}`], { cwd: workRoot });
         gitNote = ' + git commit';
       }
     } catch (e) { logTelemetry('4_GIT_COMMIT_FAILED', e.message); gitNote = ' (git commit failed — see log)'; }
@@ -1144,6 +1176,7 @@ async function runCommitter(plan, task, taskFile, gitCtx = null, { archive = tru
   logTelemetry('4_COMMITTER', 'Task passed all gates and committed', { taskId: plan.taskId, engine: plan.engine, verifyCmd: plan.verifyCmd });
   const extra = {
     result: 'COMMITTED', plan: plan.subtasks, verifyCmd: plan.verifyCmd, completedAt: new Date().toISOString(),
+    ...(!isSameDir(workRoot, ROOT) ? { cwd: workRoot } : {}),
     ...(plan.team ? { team: plan.team } : {}), costUsd: Math.round(taskCost.usd * 10000) / 10000, costByAgent: taskCost.agents,
     ...(gitCtx ? { git: { branch: gitCtx.branch, from: gitCtx.tipAtCandidate, to: gitCtx.candidate, workerBranches: Object.values(gitCtx.workers).map((w) => w.branch) } } : {})
   };
@@ -1190,6 +1223,7 @@ async function executeSquareCycle(taskFile) {
   const errors = [];
   let plan = null; let outputs = []; let cycle = 1; let lastErrorTrace = task.initialError || null; let haltReason = null; let backup = null;
   const integration = integrationFor(task); let gitCtx = null; let gitResult = null;
+  let workRoot = ROOT;
   const title = task.title || path.basename(taskFile);
   resetCost();
   taskStartedIso = new Date().toISOString();
@@ -1204,10 +1238,19 @@ async function executeSquareCycle(taskFile) {
   while (cycle <= MAX_CYCLES) {
     writeState({ cycle, taskId: task.id, taskTitle: title, lastGateStatus: cycle > 1 ? `Retrying with previous error (cycle ${cycle})` : 'Planning…' });
     try {
-      plan = await runPlanner(task, lastErrorTrace, plan);
+      if (cycle === 1) {
+        workRoot = resolveTaskWorkRoot(task);
+        if (!isSameDir(workRoot, ROOT) && (integration || task.integrationBranch)) {
+          throw fatal('Cannot combine task cwd with an integration branch (the external worktree already defines its own branch).');
+        }
+        if (!isSameDir(workRoot, ROOT) && task.visibleRunId) {
+          throw fatal('Cannot combine task cwd with visibleRunId (visible runs target the main project root).');
+        }
+      }
+      plan = await runPlanner(task, lastErrorTrace, plan, workRoot);
       plan.cycle = cycle; plan.model = task.model || null; // model tier: retries escalate; --model on the task overrides
       if (integration && !gitCtx) gitCtx = await startIntegration(task, integration);
-      if (cycle === 1 && !backup && !gitCtx) backup = backupScope(plan);
+      if (cycle === 1 && !backup && !gitCtx) backup = backupScope(plan, workRoot);
       if (cycle > 1) enforceBudget(task, `cycle ${cycle - 1}`); // never start another cycle once over budget
       outputs = await runExecutorSwarm(plan, gitCtx);
       enforceBudget(task, `cycle ${cycle} workers`);
@@ -1246,6 +1289,7 @@ async function executeSquareCycle(taskFile) {
   try { if (task.visibleRunId) syncVisibleRunAfterDaemon(task, plan, { passed: false, phase, cycle: usedCycles, errors, outputs, reason, rollback, gitResult, startedAt: taskStartedIso }); } catch (e) { logTelemetry('VISIBLE_SYNC_FAILED', e.message); }
   const dest = archiveTask(taskFile, task, DIRS.failed, {
     result: phase, haltReason: reason, haltedAt: new Date().toISOString(), cyclesUsed: usedCycles, rollback, errors, git: gitResult,
+    ...(!isSameDir(workRoot, ROOT) ? { cwd: workRoot } : {}),
     costUsd: Math.round(taskCost.usd * 10000) / 10000, costByAgent: taskCost.agents
   }, errors.map((e, i) => `===== cycle ${i + 1} =====\n${e}`).join('\n\n'));
   finishSession(task, plan, phase, usedCycles, errors, outputs, rollback, gitResult);
@@ -1269,12 +1313,15 @@ function finishSession(task, plan, result, cycles, errors, outputs, rollback = n
   }
   const mem = config.memory || {};
   const title = task.title || task.id || 'task';
+  const rawCwd = plan?.workRoot || (task?.cwd ? path.resolve(ROOT, String(task.cwd)) : ROOT);
+  const externalCwd = !isSameDir(rawCwd, ROOT) ? rawCwd : null;
   try {
     if (mem.recordSessions !== false) {
       recordSession({
         taskId: task.id || 'task', title, result, cycles, maxCycles: MAX_CYCLES, goal: task.goal,
         engine: plan?.engine || task.engine || '-', verifyCmd: plan?.verifyCmd || task.verifyCmd || '-', verifySource: plan?.verifySource,
         verifySuggestion: plan?.verifySuggestion, planner: plan?.planSummary, rollback, git: gitResult,
+        ...(externalCwd ? { cwd: externalCwd } : {}),
         team: plan?.team, costUsd: Math.round(taskCost.usd * 10000) / 10000, costByAgent: { ...taskCost.agents },
         subtasks: plan?.subtasks || task.subtasks || [], errors, outputs, finishedAt: new Date().toISOString()
       });

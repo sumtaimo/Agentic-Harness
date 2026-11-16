@@ -34,6 +34,9 @@
  *
  * --branch uat   build on its own git branches, verify, then merge into 'uat' only if the check passes
  *                (your working folder and main are not touched)
+ * --cwd <dir>    run workers, checks, backup/rollback, and auto-commit inside another working folder
+ *                (e.g. a child-session worktree) while keeping inbox, logs, config, and session notes here.
+ *                Cannot be combined with --branch or --resume-visible.
  * --model fast|medium|high   force a model tier for every agent of this job (default: the controller picks
  *                (or a model alias from config.json)  the cheapest tier that fits each agent's job; see docs/MULTI-MODEL-SETUP.md)
  * AI tools: a tool that is installed and logged in is used only after you allowed it once (asked here in a
@@ -59,6 +62,13 @@ if (process.env.HARNESS_WORKER === '1') {
   process.exit(2);
 }
 
+const realNorm = (p) => {
+  let r;
+  try { r = fs.realpathSync.native(p); } catch { r = path.resolve(p); }
+  return process.platform === 'win32' ? r.toLowerCase() : r;
+};
+const isSameDir = (a, b) => realNorm(a) === realNorm(b);
+
 const args = process.argv.slice(2);
 if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
   console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('*/')[0].replace(/^#!.*\n\/\*\*?/, '').replace(/^ \* ?/gm, ''));
@@ -75,6 +85,7 @@ let files = [];
 let wait = false;
 let autoPlan = !!config.planner?.defaultAutoPlan;
 let branch;
+let cwdArg;
 let hierarchy = false;
 let maxCost;
 let yes = process.env.HARNESS_YES === '1';
@@ -93,6 +104,14 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--wait') { wait = true; }
   else if (a === '--yes' || a === '-y') { yes = true; }
   else if (a === '--branch' && v !== undefined) { branch = args[++i].trim() || undefined; }
+  else if (a === '--cwd') {
+    if (v === undefined || !v.trim() || v.startsWith('--')) { console.error('--cwd requires a directory path'); process.exit(1); }
+    cwdArg = args[++i].trim();
+  }
+  else if (a.startsWith('--cwd=')) {
+    cwdArg = a.slice('--cwd='.length).trim();
+    if (!cwdArg) { console.error('--cwd requires a directory path'); process.exit(1); }
+  }
   else if (a === '--hierarchy') { hierarchy = true; explicitMode = true; }
   else if (a === '--resume-visible') { resumeVisible = (v !== undefined && !v.startsWith('-')) ? args[++i].trim() : 'LATEST'; }
   else if (a.startsWith('--resume-visible=')) { resumeVisible = a.slice('--resume-visible='.length).trim() || 'LATEST'; }
@@ -129,6 +148,37 @@ for (let i = 0; i < args.length; i++) {
 if (!engine || engine === 'auto') engine = undefined;
 if (engine && !config.profiles[engine]) {
   console.error(`Unknown engine '${engine}'. Choose one of: auto, ${Object.keys(config.profiles).join(', ')}`);
+  process.exit(1);
+}
+
+let workRoot = ROOT;
+if (cwdArg !== undefined) {
+  const resolved = path.resolve(cwdArg);
+  let st;
+  try { st = fs.statSync(resolved); } catch {
+    console.error(`--cwd folder does not exist: ${resolved}`);
+    process.exit(1);
+  }
+  if (!st.isDirectory()) {
+    console.error(`--cwd path is not a folder: ${resolved}`);
+    process.exit(1);
+  }
+  let realWork = resolved;
+  try { realWork = fs.realpathSync.native(resolved); } catch { /* resolved directory exists */ }
+  const blockedSeg = /(?:^|\/)\.(git|harness)(?:\/|$)/;
+  if (blockedSeg.test(resolved.replace(/\\/g, '/')) || blockedSeg.test(realWork.replace(/\\/g, '/'))) {
+    console.error(`Refusing --cwd inside .git or .harness: ${realWork}`);
+    process.exit(1);
+  }
+  workRoot = realWork;
+}
+const hasExternalCwd = !isSameDir(workRoot, ROOT);
+if (hasExternalCwd && branch) {
+  console.error('Cannot combine --cwd with --branch (the external worktree already defines its own branch).');
+  process.exit(1);
+}
+if (hasExternalCwd && resumeVisible) {
+  console.error('Cannot combine --cwd with --resume-visible (visible runs always target the main project root).');
   process.exit(1);
 }
 
@@ -233,7 +283,7 @@ if (!goal && subtasks.length === 0) goal = title;
 let checkLine;
 if (verifyCmd) checkLine = verifyCmd;
 else {
-  const d = detectVerifyCmd(ROOT, config);
+  const d = detectVerifyCmd(workRoot, config);
   checkLine = `${d.cmd}  (${d.source})${d.real ? '' : ' — WARNING: any result will "pass". Add --check "<command>" for a real gate.'}`;
 }
 
@@ -291,6 +341,7 @@ const job = {
   ...(engine ? { engine } : {}),
   ...(model ? { model } : {}),
   title,
+  ...(hasExternalCwd ? { cwd: workRoot } : {}),
   ...(verifyCmd ? { verifyCmd } : {}),
   ...(branch ? { integrationBranch: branch } : {}),
   createdAt: new Date().toISOString(),
@@ -321,6 +372,7 @@ if (resumedRun) {
   console.log(`Resuming visible run ${resumedRun.id} (origin: ${editorDisplayName(resumedRun.editor || 'claude-code')}, status: ${resumedRun.status})`);
 }
 console.log(`Dispatched [${(engine || config.activeProfile).toUpperCase()}] job ${job.id} (${job.hierarchy ? 'orchestrator → leads → workers, per team.json' : usePlanner ? 'AI planner will choose the workers' : `${job.subtasks.length} worker[s]`}) -> ${path.relative(ROOT, inboxPath)}`);
+if (hasExternalCwd) console.log(`Workdir: ${workRoot}`);
 console.log(`Check: ${checkLine}`);
 // One short line so the person always sees that this spends their AI quota (no AI call: read from the log).
 { const today = usageTodayLine(config); console.log(`AI: ${engine || 'auto'}, model picked per job (fast / medium / high)${today ? ` · used today: ${today}` : ''}`); }

@@ -5,6 +5,8 @@
  *
  *   node .harness/sessions.mjs new "Login page" [--type feat|bug|task]   register a child task → ID, clear name, branch, brief
  *   node .harness/sessions.mjs start <ID>                                 (in the CHILD session) put this worktree on the task branch
+ *   node .harness/sessions.mjs checkpoint <ID> [--message "…"]            commit uncommitted WIP (Harness-Wip) without marking done
+ *   node .harness/sessions.mjs handoff [ID] [--checkpoint] [--prompt|--json]   inspect child task + print cross-engine resume prompt / --cwd cmd
  *   node .harness/sessions.mjs report <ID> done --summary "…"            (in the CHILD session) record "done" as a commit on the branch
  *   node .harness/sessions.mjs board [--json]                             every task: status, last activity, HIGH RISK flags
  *   node .harness/sessions.mjs merge <ID>                                 (Session A, after the owner said yes) check + merge into the base
@@ -13,7 +15,7 @@
  * Rules (the owner's): a task counts as finished only when its branch is MERGED into the base branch (the check passed);
  * only then are its worktree and local branch removed. An unfinished or abandoned task is never deleted: it is shown as
  * HIGH RISK until the owner decides. Merging is never automatic: Session A asks the owner first.
- * Status comes from git (branches, commits, "Harness-Session: <ID> done" in a commit message), so it works for local
+ * Status comes from git (branches, commits, "Harness-Session: <ID> done" and "Harness-Wip: <ID>"), so it works for local
  * worktrees and for cloud sessions that push their branch. The board itself is kept in the repository's shared git folder,
  * so every worktree of the project sees the same board.
  */
@@ -22,14 +24,47 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { ROOT, loadConfig, readJsonSafe, atomicWriteJson, detectVerifyCmd, helpIfAsked } from './lib/common.mjs';
+import { usableEngines } from './lib/handoff.mjs';
 helpIfAsked(import.meta.url);
 
 const config = (() => { try { return loadConfig(); } catch { return {}; } })();
 const S = { maxActive: 4, staleHours: 24, notStartedHours: 2, ...(config.sessions || {}) };
 const args = process.argv.slice(2);
 const cmd = args[0] || 'board';
-const flag = (n) => { const i = args.indexOf(n); return i > -1 ? args[i + 1] : undefined; };
+const hasCheckpointFlag = args.includes('--checkpoint');
+const VALUE_FLAGS = new Set(['--type', '--summary', '--message', '--msg']);
+const flag = (n, ...aliases) => {
+  const names = [n, ...aliases];
+  for (let i = 0; i < args.length; i++) {
+    for (const name of names) {
+      if (args[i] === name) {
+        const val = args[i + 1];
+        return val !== undefined && !val.startsWith('--') ? val : '';
+      }
+      if (args[i].startsWith(`${name}=`)) return args[i].slice(name.length + 1);
+    }
+  }
+  return undefined;
+};
+const positional = (() => {
+  const out = [];
+  for (let i = 1; i < args.length; i++) {
+    const a = args[i];
+    if (VALUE_FLAGS.has(a)) {
+      if (args[i + 1] !== undefined && !args[i + 1].startsWith('--')) i++;
+      continue;
+    }
+    if (a.startsWith('--')) continue;
+    out.push(a);
+  }
+  return out;
+})();
 const die = (m, code = 1) => { console.error(m); process.exit(code); };
+
+const MUTATING = new Set(['new', 'start', 'report', 'checkpoint', 'merge', 'cleanup']);
+if (process.env.HARNESS_WORKER === '1' && (MUTATING.has(cmd) || (cmd === 'handoff' && hasCheckpointFlag))) {
+  die('Refusing to mutate the session board from inside a harness worker.', 2);
+}
 
 const git = (a, cwd = ROOT) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const gitOk = (a, cwd = ROOT) => { try { return git(a, cwd); } catch { return null; } };
@@ -39,12 +74,32 @@ const commonDir = path.resolve(ROOT, git(['rev-parse', '--git-common-dir']));
 const BOARD = path.join(commonDir, 'harness-sessions.json');
 const load = () => { const b = readJsonSafe(BOARD, null); return b && Array.isArray(b.tasks) ? b : { version: 1, tasks: [] }; };
 const save = (b) => atomicWriteJson(BOARD, b);
-const worktrees = () => (gitOk(['worktree', 'list', '--porcelain']) || '').split(/\n\n+/).map((blk) => ({ path: (blk.match(/^worktree (.+)$/m) || [])[1], branch: (blk.match(/^branch refs\/heads\/(.+)$/m) || [])[1] })).filter((w) => w.path);
+const worktrees = () => (gitOk(['worktree', 'list', '--porcelain']) || '')
+  .replace(/\r\n/g, '\n')
+  .split(/\n\n+/)
+  .map((blk) => ({ path: (blk.match(/^worktree (.+)$/m) || [])[1], branch: (blk.match(/^branch refs\/heads\/(.+)$/m) || [])[1] }))
+  .filter((w) => w.path);
+const activeWorktreeFor = (t) => worktrees().find((w) => w.branch === t.branch && fs.existsSync(w.path)) || null;
 const primary = () => worktrees()[0];
 const baseBranch = () => S.baseBranch || primary()?.branch || gitOk(['symbolic-ref', '--short', 'HEAD']) || 'main';
 const hasRemote = () => !!gitOk(['remote', 'get-url', 'origin']);
 const slug = (t) => String(t).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'task';
 const hoursAgo = (iso) => (Date.now() - new Date(iso).getTime()) / 3600000;
+const quoteShell = (p) => (/[\s"]/.test(p) ? `"${p.replace(/"/g, '\\"')}"` : p);
+
+function porcelainEntries(cwd) {
+  const r = spawnSync('git', ['status', '--porcelain', '-uall', '-z'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  if (r.status !== 0 || !r.stdout) return [];
+  const entries = r.stdout.split('\0').filter(Boolean);
+  const out = [];
+  for (let i = 0; i < entries.length; i++) {
+    const xy = entries[i].slice(0, 2);
+    const file = entries[i].slice(3);
+    if (xy.startsWith('R') || xy.startsWith('C')) i++;
+    if (file) out.push({ status: xy.trim() || 'M', file });
+  }
+  return out;
+}
 
 /** The branch as seen locally or on origin (cloud sessions push theirs): { ref, tip, time, log } or null. */
 function branchInfo(t) {
@@ -53,6 +108,18 @@ function branchInfo(t) {
     if (tip) return { ref, tip, time: gitOk(['log', '-1', '--format=%cI', ref]), log: gitOk(['log', '--format=%B', `${t.base || baseBranch()}..${ref}`]) || '' };
   }
   return null;
+}
+
+/** Commits on the task branch ahead of base, newest first. */
+function branchCommits(t, info) {
+  if (!info) return [];
+  const base = t.base || baseBranch();
+  const raw = gitOk(['log', '--format=%H%x00%s%x00%B%x1e', `${base}..${info.ref}`]) || '';
+  if (!raw) return [];
+  return raw.split('\x1e').map((rec) => rec.replace(/^\r?\n/, '')).filter(Boolean).map((rec) => {
+    const [sha = '', subject = '', ...rest] = rec.split('\x00');
+    return { sha: sha.trim(), subject: subject.trim(), body: rest.join('\x00') };
+  });
 }
 
 /** Status of one task, from git. */
@@ -64,17 +131,78 @@ function statusOf(t) {
     const late = hoursAgo(t.createdAt) > S.notStartedHours;
     return { status: 'NOT STARTED', risk: late, note: late ? `HIGH RISK: no branch ${Math.round(hoursAgo(t.createdAt))}h after it was created (was the child session started?)` : 'waiting for the child session to start' };
   }
-  const ahead = Number(gitOk(['rev-list', '--count', `${t.base || baseBranch()}..${b.ref}`]) || 0);
-  if (t.checkFailed && t.checkFailed.tip === b.tip) return { status: 'CHECK FAILED', risk: true, note: `HIGH RISK: ${t.checkFailed.reason} when merging; send it back to the child session to fix, then it reports done again` };
+  const commits = branchCommits(t, b);
+  const ahead = commits.length || Number(gitOk(['rev-list', '--count', `${t.base || baseBranch()}..${b.ref}`]) || 0);
+  const wt = activeWorktreeFor(t);
+  const dirty = wt ? porcelainEntries(wt.path) : [];
+  const dirtyNote = dirty.length ? `; ${dirty.length} uncommitted file(s)` : '';
+  const extra = { dirtyFiles: dirty.map((d) => d.file), worktree: wt?.path || null, ...(t.lastCheckpoint ? { lastCheckpoint: t.lastCheckpoint } : {}) };
+
+  if (t.checkFailed && t.checkFailed.tip === b.tip) {
+    return { status: 'CHECK FAILED', risk: true, note: `HIGH RISK: ${t.checkFailed.reason} when merging; send it back to the child session to fix, then it reports done again${dirtyNote}`, ...extra };
+  }
   const doneLine = `Harness-Session: ${t.id} done`;
-  if (b.log.split(/\r?\n/).some((l) => l.trim() === doneLine)) return { status: 'DONE', risk: false, note: `reported done (${ahead} commit(s)): ask the owner, then: node .harness/sessions.mjs merge ${t.id}` };
+  const wipLine = `Harness-Wip: ${t.id}`;
+  const hasLine = (c, needle) => c.body.split(/\r?\n/).some((l) => l.trim() === needle);
+  const lastDoneIdx = commits.findIndex((c) => hasLine(c, doneLine));
+  const lastWipIdx = commits.findIndex((c) => hasLine(c, wipLine));
+  const lastDone = lastDoneIdx > -1 ? commits[lastDoneIdx] : null;
+  const hasNewerWip = lastWipIdx > -1 && (lastDoneIdx === -1 || lastWipIdx < lastDoneIdx);
+
+  if (!hasNewerWip && lastDone && (!t.checkFailed || lastDone.sha !== t.checkFailed.tip)) {
+    return { status: 'DONE', risk: false, note: `reported done (${ahead} commit(s)): ask the owner, then: node .harness/sessions.mjs merge ${t.id}${dirtyNote}`, ...extra };
+  }
+  if (!hasNewerWip && t.checkFailed && lastDone && lastDone.sha === t.checkFailed.tip) {
+    return { status: 'CHECK FAILED', risk: true, note: `HIGH RISK: ${t.checkFailed.reason} when merging; finish fixing and report done again${dirtyNote}`, ...extra };
+  }
+
   const idle = b.time ? hoursAgo(b.time) : 0;
-  if (idle > S.staleHours) return { status: 'STALE', risk: true, note: `HIGH RISK: unfinished, no commit for ${Math.round(idle)}h (${ahead} commit(s) so far). Never deleted automatically: continue it or decide to drop it.` };
-  return { status: 'WORKING', risk: false, note: `${ahead} commit(s), last ${b.time ? `${Math.max(0, Math.round(idle * 60))} min ago` : 'unknown'}` };
+  if (idle > S.staleHours) {
+    return { status: 'STALE', risk: true, note: `HIGH RISK: unfinished, no commit for ${Math.round(idle)}h (${ahead} commit(s) so far)${dirtyNote}. Never deleted automatically: continue it or decide to drop it.`, ...extra };
+  }
+  return { status: 'WORKING', risk: false, note: `${ahead} commit(s), last ${b.time ? `${Math.max(0, Math.round(idle * 60))} min ago` : 'unknown'}${dirtyNote}`, ...extra };
 }
 
 const isOpen = (t) => !t.cleanedAt && !t.mergedAt;
 const find = (b, id) => b.tasks.find((t) => t.id.toLowerCase() === String(id || '').toLowerCase()) || die(`No task "${id}" on the board. See: node .harness/sessions.mjs board`);
+
+function resolveTaskForHandoff(b, idArg) {
+  if (idArg) return find(b, idArg);
+  const open = b.tasks.filter(isOpen);
+  if (!open.length) die('No open child tasks on the session board. See: node .harness/sessions.mjs board');
+  const curBranch = gitOk(['symbolic-ref', '--short', 'HEAD'], process.cwd()) || gitOk(['symbolic-ref', '--short', 'HEAD'], ROOT);
+  if (curBranch) {
+    const match = open.find((t) => t.branch === curBranch);
+    if (match) return match;
+  }
+  if (open.length === 1) return open[0];
+  die(`${open.length} open child tasks on the board (${open.map((t) => t.id).join(', ')}). Specify a task ID: node .harness/sessions.mjs handoff <ID>`);
+}
+
+function createWipCheckpoint(b, t, wt, msg) {
+  const cur = gitOk(['symbolic-ref', '--short', 'HEAD'], wt.path);
+  if (cur !== t.branch) die(`Worktree ${wt.path} is on ${cur || '(detached)'}, expected ${t.branch}.`);
+  const dirty = porcelainEntries(wt.path);
+  if (!dirty.length) {
+    const tip = gitOk(['rev-parse', '--verify', '-q', `refs/heads/${t.branch}`], wt.path) || null;
+    return { committed: false, tip, files: [] };
+  }
+  const identity = gitOk(['config', 'user.email'], wt.path)
+    ? []
+    : ['-c', 'user.name=Agentic Harness', '-c', 'user.email=harness@localhost'];
+  git(['add', '-A'], wt.path);
+  const staged = gitOk(['diff', '--cached', '--name-only'], wt.path);
+  if (!staged) {
+    const tip = gitOk(['rev-parse', '--verify', '-q', `refs/heads/${t.branch}`], wt.path) || null;
+    return { committed: false, tip, files: [] };
+  }
+  git([...identity, 'commit', '--no-verify', '-q', '-m', `${t.id}: wip - ${msg}`, '-m', `Harness-Wip: ${t.id}`], wt.path);
+  const tip = git(['rev-parse', 'HEAD'], wt.path);
+  const files = dirty.map((d) => d.file);
+  t.lastCheckpoint = { at: new Date().toISOString(), tip, message: msg, files };
+  save(b);
+  return { committed: true, tip, files };
+}
 
 function brief(t) {
   return [
@@ -85,6 +213,142 @@ function brief(t) {
     hasRemote() ? `4. Only in a cloud session (not on the owner's computer): push the branch so the main session can see it: git push -u origin ${t.branch}` : '4. (Local session: no push needed; the main session sees the branch directly.)',
     'Never merge into the base branch and never delete branches yourself: the main session does that after the owner says yes.',
   ].join('\n');
+}
+
+function inspectSessionHandoff(t, { checkpointResult = null } = {}) {
+  const st = statusOf(t);
+  const base = t.base || baseBranch();
+  const info = branchInfo(t);
+  const commits = branchCommits(t, info).map((c) => ({
+    sha: c.sha.slice(0, 7),
+    subject: c.subject,
+    isWip: c.body.split(/\r?\n/).some((l) => l.trim() === `Harness-Wip: ${t.id}`),
+    isDone: c.body.split(/\r?\n/).some((l) => l.trim() === `Harness-Session: ${t.id} done`)
+  }));
+  const diffStat = info ? (gitOk(['diff', '--stat', `${base}...${info.ref}`]) || '') : '';
+  const changedFiles = info ? (gitOk(['diff', '--name-only', `${base}...${info.ref}`]) || '').split(/\r?\n/).filter(Boolean) : [];
+  const wt = activeWorktreeFor(t);
+  const uncommitted = wt ? porcelainEntries(wt.path) : [];
+  const verifyDir = wt ? wt.path : ROOT;
+  const check = (() => {
+    try { return detectVerifyCmd(verifyDir, config); }
+    catch { return { cmd: config.defaultVerifyCmd || '(none)', source: 'default', real: false }; }
+  })();
+  const readyHeadlessEngines = usableEngines(config);
+  const suggestedEngine = readyHeadlessEngines[0] || null;
+  const checkpointNeededForWorktrees = Boolean(wt && uncommitted.length > 0 && config.useGitWorktrees);
+  const engArg = suggestedEngine ? ` --engine ${suggestedEngine}` : '';
+  const resumeCmd = (isOpen(t) && wt)
+    ? `node .harness/dispatch.mjs --cwd ${quoteShell(wt.path)} --goal "Finish ${t.id} (${t.title}) on branch ${t.branch}"${engArg} --wait`
+    : null;
+
+  const promptLines = [
+    `[HARNESS SESSION HANDOFF: ${t.id} | STATUS: ${st.status} | BRANCH: ${t.branch} (base ${base})]`,
+    `Continue child task ${t.id}: "${t.title}".`,
+    wt ? `Working folder (worktree): ${wt.path}` : `No local worktree found; check out branch "${t.branch}" (e.g. git fetch origin ${t.branch} && git checkout ${t.branch}).`,
+    `Verify command: ${check.cmd}  [${check.source}]`,
+    '',
+    'Progress so far on the branch:',
+    commits.length
+      ? commits.slice(0, 12).map((c) => `- ${c.sha} ${c.subject}${c.isWip ? ' [WIP]' : c.isDone ? ' [DONE MARKER]' : ''}`).join('\n')
+      : '- No commits ahead of base branch yet.',
+    changedFiles.length ? `Committed files vs ${base} (${changedFiles.length}): ${changedFiles.slice(0, 15).join(', ')}${changedFiles.length > 15 ? ', …' : ''}` : `Committed files vs ${base}: none`,
+    uncommitted.length
+      ? `Uncommitted files in worktree (${uncommitted.length}): ${uncommitted.slice(0, 15).map((u) => `${u.status} ${u.file}`).join(', ')}${uncommitted.length > 15 ? ', …' : ''}`
+      : 'Uncommitted files in worktree: clean',
+    ...(t.lastCheckpoint ? [`Last WIP checkpoint: ${t.lastCheckpoint.tip.slice(0, 7)} (${t.lastCheckpoint.at}) — ${t.lastCheckpoint.message}`] : []),
+    ...(t.checkFailed ? ['', `Last merge/check failure (${t.checkFailed.at}): ${t.checkFailed.reason}`] : []),
+    '',
+    'How to finish cleanly:',
+    wt
+      ? `1. Inspect the existing commits/changes in ${wt.path} on branch ${t.branch} and finish any remaining requirements.`
+      : `1. Open a worktree on branch ${t.branch} (e.g. node .harness/sessions.mjs start ${t.id}) and inspect existing commits.`,
+    `2. Run the check: ${check.cmd}`,
+    `3. Commit your changes on ${t.branch}, then run: node .harness/sessions.mjs report ${t.id} done --summary "<one line: what you did>"`,
+    hasRemote() ? `4. Only in a cloud session (not on the owner's computer): git push -u origin ${t.branch}` : '',
+    `Never merge into ${base} or delete ${t.branch} yourself: Session A merges after verification and owner approval.`
+  ].filter((x, i, a) => !(x === '' && a[i - 1] === ''));
+
+  const prompt = promptLines.join('\n');
+  const data = {
+    task: t,
+    status: st.status,
+    risk: st.risk,
+    note: st.note,
+    base,
+    worktree: wt?.path || null,
+    branchRef: info?.ref || null,
+    branchTip: info?.tip || null,
+    ahead: commits.length,
+    commits,
+    changedFiles,
+    diffStat,
+    uncommitted,
+    checkpointResult,
+    lastCheckpoint: t.lastCheckpoint || null,
+    lastCheckFailure: t.checkFailed || null,
+    check,
+    readyHeadlessEngines,
+    suggestedEngine,
+    checkpointNeededForWorktrees,
+    resumeCmd,
+    prompt
+  };
+  return data;
+}
+
+function formatSessionHandoffText(d) {
+  const lines = [
+    `SESSION HANDOFF — ${d.task.id} (${d.status})`,
+    '',
+    `Title:    ${d.task.title}`,
+    `Branch:   ${d.task.branch}  (base: ${d.base}${d.branchTip ? `, tip: ${d.branchTip.slice(0, 7)}` : ''})`,
+    `Worktree: ${d.worktree || 'none locally (remote/cloud or not started)'}`,
+    `Status:   ${d.note}`,
+    `Check:    ${d.check.cmd}  (${d.check.source})`,
+    ...(d.checkpointResult?.committed ? [`Checkpoint: committed ${d.checkpointResult.files.length} WIP file(s) @ ${d.checkpointResult.tip.slice(0, 7)}`] : []),
+    ...(d.lastCheckFailure ? [`Last fail: ${d.lastCheckFailure.reason} (${d.lastCheckFailure.at})`] : [])
+  ];
+
+  lines.push('', `Commits ahead of ${d.base} (${d.ahead}):`);
+  if (d.commits.length) {
+    for (const c of d.commits.slice(0, 10)) lines.push(`  • ${c.sha} ${c.subject}${c.isWip ? ' [WIP]' : c.isDone ? ' [DONE]' : ''}`);
+    if (d.commits.length > 10) lines.push(`  … (${d.commits.length - 10} more commit(s))`);
+  } else {
+    lines.push('  • none yet');
+  }
+
+  if (d.diffStat) {
+    lines.push('', 'Diff stat vs base:');
+    for (const l of d.diffStat.split(/\r?\n/).slice(0, 12)) lines.push(`  ${l}`);
+  }
+
+  lines.push('', `Uncommitted WIP in worktree (${d.uncommitted.length}): ${d.uncommitted.length ? d.uncommitted.slice(0, 12).map((u) => `${u.status} ${u.file}`).join(', ') : 'clean'}`);
+  if (d.checkpointNeededForWorktrees) {
+    lines.push(`  ⚠ useGitWorktrees is true: run \`node .harness/sessions.mjs checkpoint ${d.task.id}\` first so detached worker worktrees see uncommitted WIP.`);
+  }
+
+  lines.push('', 'Headless engines ready on this machine: ' + (d.readyHeadlessEngines.length ? d.readyHeadlessEngines.join(', ') : 'none allowed yet (run: node .harness/engines.mjs)'));
+  lines.push('', 'Ways to continue:');
+  if (d.resumeCmd) {
+    lines.push('  1. Run headless workers directly inside the child worktree:');
+    lines.push(`       ${d.resumeCmd}`);
+    if (d.readyHeadlessEngines.length > 1) {
+      lines.push(`     (or auto-route across ready engines: node .harness/dispatch.mjs --cwd ${quoteShell(d.worktree)} --goal "Finish ${d.task.id} (${d.task.title}) on branch ${d.task.branch}" --wait)`);
+    }
+    lines.push(`     After it passes, commit/checkpoint and run: node .harness/sessions.mjs report ${d.task.id} done`);
+  } else if (isOpen(d.task)) {
+    lines.push(`  1. Start/open a worktree on ${d.task.branch}: node .harness/sessions.mjs start ${d.task.id}`);
+  } else {
+    lines.push(`  • Task ${d.task.id} is ${d.status} (already merged).`);
+  }
+  lines.push('  2. Or paste the prompt below into another editor session (Claude, Antigravity, Cursor, Codex).');
+  if (d.worktree && d.uncommitted.length && isOpen(d.task)) {
+    lines.push(`  3. Save uncommitted WIP before switching tools: node .harness/sessions.mjs checkpoint ${d.task.id}`);
+  }
+
+  lines.push('', '----- [HANDOFF PROMPT FOR NEXT SESSION] -----', d.prompt, '----- [END HANDOFF PROMPT] -----');
+  return lines.join('\n');
 }
 
 /** Remove the worktree and local branch of tasks that are MERGED into the base. Never touches anything unmerged. */
@@ -112,7 +376,7 @@ function cleanup(b, only = null) {
 switch (cmd) {
   case 'new': {
     const type = String(flag('--type') || 'task').toLowerCase();
-    const title = args.slice(1).filter((a, i, all) => !a.startsWith('--') && all[i] !== flag('--type')).join(' ').trim();
+    const title = positional.join(' ').trim();
     if (!title) die('Usage: node .harness/sessions.mjs new "<what to build or fix>" [--type feat|bug|task]');
     if (!['feat', 'bug', 'task'].includes(type)) die('--type must be feat, bug or task');
     const b = load();
@@ -127,31 +391,68 @@ switch (cmd) {
     break;
   }
   case 'start': {
-    const b = load(); const t = find(b, args[1]);
-    const cur = gitOk(['symbolic-ref', '--short', 'HEAD']);
+    const b = load(); const t = find(b, positional[0]);
+    const here = gitOk(['rev-parse', '--show-toplevel'], process.cwd()) || ROOT;
+    const cur = gitOk(['symbolic-ref', '--short', 'HEAD'], here);
     if (cur !== t.branch) {
-      if (gitOk(['rev-parse', '--verify', '-q', `refs/heads/${t.branch}`])) git(['checkout', '-q', t.branch]);
-      else if (cur && cur !== t.base && cur !== primary()?.branch) git(['branch', '-m', t.branch]); // this session's own branch becomes the task branch
-      else git(['checkout', '-q', '-b', t.branch]);
+      if (gitOk(['rev-parse', '--verify', '-q', `refs/heads/${t.branch}`], here)) git(['checkout', '-q', t.branch], here);
+      else if (cur && cur !== t.base && cur !== primary()?.branch) git(['branch', '-m', t.branch], here); // this session's own branch becomes the task branch
+      else git(['checkout', '-q', '-b', t.branch], here);
     }
     t.startedAt = t.startedAt || new Date().toISOString(); save(b);
     console.log(`Task ${t.id} started on branch ${t.branch}.`);
     break;
   }
+  case 'checkpoint': {
+    const idArg = positional[0];
+    if (!idArg) die('Usage: node .harness/sessions.mjs checkpoint <ID> [--message "<note>"]');
+    const b = load(); const t = find(b, idArg);
+    if (!isOpen(t)) die(`${t.id} is already ${t.cleanedAt ? 'CLEANED' : 'MERGED'}; cannot create a WIP checkpoint.`);
+    const wt = activeWorktreeFor(t);
+    if (!wt) die(`No active local worktree found for ${t.id} (${t.branch}). Start or check out the branch in a worktree first.`);
+    const msg = String(flag('--message', '--msg') || '').trim() || 'checkpoint';
+    const cp = createWipCheckpoint(b, t, wt, msg);
+    if (!cp.committed) {
+      console.log(`CHECKPOINT ${t.id}: worktree is already clean at ${wt.path}${cp.tip ? ` (tip ${cp.tip.slice(0, 7)})` : ''}.`);
+    } else {
+      console.log(`CHECKPOINT ${t.id}: committed ${cp.files.length} WIP file(s) on ${t.branch} @ ${cp.tip.slice(0, 7)} in ${wt.path}`);
+      if (hasRemote()) console.log(`  Only in a cloud session: git push -u origin ${t.branch}`);
+    }
+    break;
+  }
+  case 'handoff': {
+    const b = load();
+    const t = resolveTaskForHandoff(b, positional[0]);
+    let cpResult = null;
+    if (hasCheckpointFlag) {
+      if (!isOpen(t)) die(`${t.id} is already ${t.cleanedAt ? 'CLEANED' : 'MERGED'}; cannot create a WIP checkpoint.`);
+      const wt = activeWorktreeFor(t);
+      if (!wt) die(`No active local worktree found for ${t.id} (${t.branch}); cannot --checkpoint.`);
+      const msg = String(flag('--message', '--msg') || '').trim() || 'handoff checkpoint';
+      cpResult = createWipCheckpoint(b, t, wt, msg);
+    }
+    const data = inspectSessionHandoff(t, { checkpointResult: cpResult });
+    if (args.includes('--json')) { console.log(JSON.stringify(data, null, 2)); break; }
+    if (args.includes('--prompt')) { console.log(data.prompt); break; }
+    console.log(formatSessionHandoffText(data));
+    break;
+  }
   case 'report': {
-    const b = load(); const t = find(b, args[1]);
-    if (args[2] !== 'done') die('Usage: node .harness/sessions.mjs report <ID> done --summary "<what you did>"');
-    const cur = gitOk(['symbolic-ref', '--short', 'HEAD']);
+    const b = load(); const t = find(b, positional[0]);
+    if (positional[1] !== 'done') die('Usage: node .harness/sessions.mjs report <ID> done --summary "<what you did>"');
+    const here = gitOk(['rev-parse', '--show-toplevel'], process.cwd()) || ROOT;
+    const cur = gitOk(['symbolic-ref', '--short', 'HEAD'], here);
     if (cur !== t.branch) die(`Run this in the child session on ${t.branch} (this folder is on ${cur}).`);
-    if (git(['status', '--porcelain'])) die('Commit your work first: "done" marks the tip of the branch.');
+    if (git(['status', '--porcelain'], here)) die('Commit your work first: "done" marks the tip of the branch.');
     const summary = String(flag('--summary') || '').trim() || 'done';
-    git(['commit', '--allow-empty', '-q', '-m', `${t.id}: done, ${summary}`, '-m', `Harness-Session: ${t.id} done`]);
-    t.doneAt = new Date().toISOString(); t.summary = summary; save(b);
+    const idArgs = gitOk(['config', 'user.email'], here) ? [] : ['-c', 'user.name=Agentic Harness', '-c', 'user.email=harness@localhost'];
+    git([...idArgs, 'commit', '--allow-empty', '-q', '-m', `${t.id}: done, ${summary}`, '-m', `Harness-Session: ${t.id} done`], here);
+    t.doneAt = new Date().toISOString(); t.summary = summary; delete t.checkFailed; save(b);
     console.log(`Reported ${t.id} done.${hasRemote() ? ` Only in a cloud session: git push -u origin ${t.branch}` : ''}`);
     break;
   }
   case 'merge': {
-    const b = load(); const t = find(b, args[1]); const st = statusOf(t);
+    const b = load(); const t = find(b, positional[0]); const st = statusOf(t);
     if (st.status !== 'DONE') die(`${t.id} is ${st.status}, not DONE: only a task its child reported done can be merged. ${st.note}`);
     const base = t.base || baseBranch(); const p = primary(); const info = branchInfo(t);
     const failed = (reason, detail) => { t.checkFailed = { at: new Date().toISOString(), tip: info.tip, reason }; save(b); console.error(detail); process.exitCode = 1; };
@@ -199,5 +500,5 @@ switch (cmd) {
     if (cleaned) console.log(`\n  (${cleaned} finished task(s) merged and cleaned)`);
     break;
   }
-  default: die('Usage: node .harness/sessions.mjs new | start | report | board | merge | cleanup   (--help for details)');
+  default: die('Usage: node .harness/sessions.mjs new | start | checkpoint | handoff | report | board | merge | cleanup   (--help for details)');
 }

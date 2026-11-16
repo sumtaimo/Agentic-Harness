@@ -66,6 +66,7 @@ their own worktrees, local or cloud. The board is `node .harness/sessions.mjs bo
 
 - Each task gets a clear name and branch: `FEAT-3 Login page` on `task/feat-3-login-page`.
 - The child reports done through git (`sessions.mjs report <ID> done`), so Session A sees it locally or after a push.
+- **WIP checkpoint & cross-engine handoff:** if a child stalls or switches tools mid-task, save uncommitted work on the child branch without marking it done (`node .harness/sessions.mjs checkpoint <ID> [--message "…"]`; any `Harness-Wip` commit newer than `Harness-Session` keeps/returns the task to `WORKING` until reported done again), inspect commits, dirty files, check command, and ready engines with `node .harness/sessions.mjs handoff [ID] [--checkpoint] [--prompt|--json]`, or finish the task headlessly inside its worktree via `node .harness/dispatch.mjs --cwd <worktree> --goal "…" --wait` (cannot combine `--cwd` with `--branch` or `--resume-visible`).
 - **Merging needs your yes.** `sessions.mjs merge <ID>` merges in a temporary worktree and runs the check first; only
   then does the base branch move. Then that child's worktree and branch are removed automatically.
 - **Nothing unfinished is ever deleted.** A child idle for 24 h, a failed check, or a task never started is shown as
@@ -98,7 +99,7 @@ is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
    - `BRIEFED` runs auto-select team hierarchy (`team.json`) or the AI planner.
    - If the headless resume halts or rejects after 3 cycles, only the failed headless edits are rolled back so your
      pre-handoff work stays intact and `node .harness/visible.mjs rollback <run>` still restores all the way to before the run started.
-3. **Interactive menu & quick status (any terminal or editor):** run `npm start` (`node .harness/start.mjs`, or `--summary` for just the overview banner) for `[1]`–`[6]` guided actions (handoff/resume, dispatch, tool consent, backlog approvals, session board, quota & memory), or run `node .harness/hook-session.mjs --brief` for a 4–8 line status snapshot in Antigravity, Cursor, VS Code, or any shell.
+3. **Interactive menu & quick status (any terminal or editor):** run `npm start` (`node .harness/start.mjs`, or `--summary` for just the overview banner) for `[1]`–`[6]` guided actions (handoff/resume, dispatch, tool consent, backlog approvals, session board + WIP checkpoint/handoff, quota & memory), or run `node .harness/hook-session.mjs --brief` for a 4–8 line status snapshot in Antigravity, Cursor, VS Code, or any shell. For a child task branch/worktree, use `node .harness/sessions.mjs handoff [ID] [--checkpoint]` and `node .harness/dispatch.mjs --cwd <worktree> --goal "…" --wait`.
 
 ## 4. What is NOT guaranteed (read this before trusting it with a real project)
 
@@ -125,8 +126,8 @@ is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
 
 `.claude/settings.json` ships with narrow rules, so the workflow runs without asking you for every command (the folder must be trusted):
 
-- **Allowed without asking:** only the workflow commands (`visible.mjs brief | assign | verify | handoff | propose | status | report`, `status`, `doctor`, `team`, `dispatch`, the read-only `backlog` and `memory` commands) and the two test commands the agents use to check their own work: `npm test` and `node --test`. Never a whole interpreter (`node`, `git`, `npm`).
-- **Always asks:** `visible.mjs rollback`, editing `.harness/team.json`, `.harness/charter.md` or `.harness/config.json`, `backlog import | ready | block`, `memory forget`, `daemon --autonomous`, `git push`.
+- **Allowed without asking:** only the workflow commands (`visible.mjs brief | assign | verify | handoff | propose | status | report`, `sessions.mjs board`, `status`, `doctor`, `team`, `dispatch`, the read-only `backlog` and `memory` commands) and the two test commands the agents use to check their own work: `npm test` and `node --test`. Never a whole interpreter (`node`, `git`, `npm`).
+- **Always asks:** `visible.mjs rollback`, `sessions.mjs merge`, editing `.harness/team.json`, `.harness/charter.md` or `.harness/config.json`, `backlog import | ready | block`, `memory forget`, `daemon --autonomous`, `git push`.
 - **Denied:** editing `.harness/releases/**`, force-pushing.
 
 For a project that already has its own `.claude/settings.json`, `node install.mjs <project>` **merges** these rules in (your rules stay; a rule you put in a stricter list is never loosened).

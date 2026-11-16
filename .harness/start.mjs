@@ -425,14 +425,24 @@ export async function menuSessions(_rl, ask, info) {
   console.log('\nSession board (child sessions):');
   console.log('  [1] View session board (sessions.mjs board)');
   console.log('  [2] Create new child task & branch brief (sessions.mjs new)');
-  console.log('  [3] Merge a DONE task into base after checks (sessions.mjs merge)');
-  console.log('  [4] Cleanup merged worktrees & branches (sessions.mjs cleanup)');
+  console.log('  [3] Inspect / handoff child task (sessions.mjs handoff)');
+  console.log('  [4] Save WIP checkpoint commit on child branch (sessions.mjs checkpoint)');
+  console.log('  [5] Merge a DONE task into base after checks (sessions.mjs merge)');
+  console.log('  [6] Cleanup merged worktrees & branches (sessions.mjs cleanup)');
   console.log('  [0] Back');
 
-  const sub = await ask('Choose [0-4]: ');
+  const sub = await ask('Choose [0-6]: ');
   if (sub === null) return;
   const choice = sub.trim();
   if (!choice || choice === '0') return;
+
+  const openIds = (info.sessions?.open || []).map((x) => x.id);
+  const pickOpenId = async (label) => {
+    if (openIds.length) console.log(`Open child tasks: ${openIds.join(', ')}`);
+    const idRaw = await ask(`${label}${openIds.length === 1 ? ` [${openIds[0]}]` : ''}: `);
+    if (idRaw === null) return null;
+    return idRaw.trim() || (openIds.length === 1 ? openIds[0] : '');
+  };
 
   if (choice === '1') { runScript('sessions.mjs', ['board']); return; }
   if (choice === '2') {
@@ -446,6 +456,23 @@ export async function menuSessions(_rl, ask, info) {
     return;
   }
   if (choice === '3') {
+    const id = await pickOpenId('Task ID to inspect/handoff (Enter = auto-detect)');
+    if (id === null) return;
+    const saveWip = await confirm(ask, 'Commit uncommitted WIP first (--checkpoint)? [y/N] ', false);
+    const args = ['handoff', ...(id ? [id] : []), ...(saveWip ? ['--checkpoint'] : [])];
+    runScript('sessions.mjs', args);
+    return;
+  }
+  if (choice === '4') {
+    const id = await pickOpenId('Task ID to checkpoint');
+    if (!id) { console.log('Cancelled.'); return; }
+    const msgRaw = await ask('WIP checkpoint note (Enter = "checkpoint"): ');
+    if (msgRaw === null) return;
+    const args = ['checkpoint', id, ...(msgRaw.trim() ? ['--message', msgRaw.trim()] : [])];
+    runScript('sessions.mjs', args);
+    return;
+  }
+  if (choice === '5') {
     const doneIds = (info.sessions?.done || []).map((x) => x.id);
     if (doneIds.length) console.log(`Tasks reported DONE: ${doneIds.join(', ')}`);
     const idRaw = await ask(`Task ID to merge${doneIds.length ? ` [${doneIds[0]}]` : ''}: `);
@@ -456,7 +483,7 @@ export async function menuSessions(_rl, ask, info) {
     runScript('sessions.mjs', ['merge', id]);
     return;
   }
-  if (choice === '4') { runScript('sessions.mjs', ['cleanup']); return; }
+  if (choice === '6') { runScript('sessions.mjs', ['cleanup']); return; }
   console.log(`Unknown option "${choice}".`);
 }
 
@@ -499,7 +526,7 @@ function printMainMenu(info) {
   console.log('  [2] Start a new task              dispatch (normal, parallel, or team)');
   console.log('  [3] Setup & AI tool permissions   doctor, allow/deny AI tools, team routing');
   console.log(`  [4] Backlog & Autopilot           overview, approve, add, tick, auto${heldHint}`);
-  console.log(`  [5] Session board                 child sessions, new, merge, cleanup${riskHint}`);
+  console.log(`  [5] Session board                 child sessions, new, handoff, checkpoint, merge${riskHint}`);
   console.log('  [6] Usage, status & memory        quota (7d/30d), logs, memory, --brief');
   console.log('  [0] Exit');
 }

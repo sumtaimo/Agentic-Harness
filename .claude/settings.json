@@ -26,11 +26,13 @@
       "Bash(node .harness/visible.mjs status:*)",
       "Bash(node .harness/visible.mjs report:*)",
       "Bash(node .harness/visible.mjs handoff:*)",
+      "Bash(node .harness/sessions.mjs board:*)",
       "Bash(npm test:*)",
       "Bash(node --test:*)"
     ],
     "ask": [
       "Bash(node .harness/visible.mjs rollback:*)",
+      "Bash(node .harness/sessions.mjs merge:*)",
       "Edit(.harness/team.json)",
       "Bash(node .harness/team.mjs auto-assign:*)",
       "Bash(node .harness/daemon.mjs --autonomous:*)",
