@@ -6,6 +6,7 @@
  *
  *   node .harness/hook-session.mjs          full SessionStart context for Claude Code
  *   node .harness/hook-session.mjs --brief  4–8 line summary for Antigravity, Cursor, VS Code, or terminal (read-only)
+ *   node .harness/hook-session.mjs --help   print this help and exit 0
  *
  * Silent for harness workers (HARNESS_WORKER=1) and on any problem: a hook must never block a session.
  */
@@ -14,12 +15,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 try {
-  if (process.env.HARNESS_WORKER === '1') process.exit(0);
-  const brief = process.argv.includes('--brief');
   const {
     FILES, DIRS, ROOT, readJsonSafe, loadConfig, listLessons, loadApprovals,
-    probeEngine, engineConsent, ROUTABLE_ENGINES, checkCore, usageTodayLine
+    probeEngine, engineConsent, ROUTABLE_ENGINES, checkCore, usageTodayLine, helpIfAsked
   } = await import('./lib/common.mjs');
+  helpIfAsked(import.meta.url);
+  if (process.env.HARNESS_WORKER === '1') process.exit(0);
+  const brief = process.argv.includes('--brief');
   const { readCharter, readBacklog, backlogCounts, nextReady } = await import('./lib/governance.mjs');
 
   let pid = 0;
@@ -28,10 +30,11 @@ try {
     if (Number.isInteger(rawPid) && rawPid > 0) { process.kill(rawPid, 0); pid = rawPid; }
   } catch { pid = 0; }
   const st = readJsonSafe(FILES.state, {});
-  const bl = readBacklog();
+  let configError = null;
+  const bl = (() => { try { return readBacklog(); } catch { return { tasks: [] }; } })();
   const c = backlogCounts(bl);
-  const charter = readCharter();
-  const cfg = loadConfig();
+  const charter = (() => { try { return readCharter(); } catch { return { autonomous: false, text: '' }; } })();
+  const cfg = (() => { try { return loadConfig(); } catch (e) { configError = e.message; return {}; } })();
   const count = (d) => { try { return fs.readdirSync(d).filter((f) => f.endsWith('.json')).length; } catch { return 0; } };
   const profile = (() => { try { return fs.readFileSync(FILES.profile, 'utf8'); } catch { return ''; } })();
   const git = cfg.git || {};
@@ -42,9 +45,9 @@ try {
   const open = runs.filter((r) => !['PASSED', 'HALTED_HITL_REQUIRED', 'ROLLED_BACK', 'ESCALATED'].includes(r.status));
   const stopped = runs.filter((r) => ['HALTED_HITL_REQUIRED', 'ESCALATED'].includes(r.status)).slice(-1);
   const held = bl.tasks.filter((t) => t.status === 'BLOCKED' && t.needsApproval);
-  const today = usageTodayLine(cfg);
-  const core = checkCore();
-  const taughtCount = listLessons(FILES.lessons).length;
+  const today = (() => { try { return usageTodayLine(cfg); } catch { return ''; } })();
+  const core = (() => { try { return checkCore(); } catch { return { manifest: null, changed: [], missing: [], added: [] }; } })();
+  const taughtCount = (() => { try { return listLessons(FILES.lessons).length; } catch { return 0; } })();
 
   if (brief) {
     const briefLines = [
@@ -123,20 +126,23 @@ try {
       if (cState === true) readyTools.push(label);
       else if (cState === undefined) awaitingTools.push(label);
     }
-    const toolsStr = readyTools.length
-      ? `ready (${readyTools.join(', ')})${awaitingTools.length ? `; awaiting consent (${awaitingTools.join(', ')})` : ''}`
-      : awaitingTools.length
-        ? `awaiting consent (${awaitingTools.join(', ')}) — node .harness/engines.mjs`
-        : 'none allowed yet (node .harness/engines.mjs)';
+    const toolsStr = configError
+      ? 'unavailable (config.json invalid)'
+      : readyTools.length
+        ? `ready (${readyTools.join(', ')})${awaitingTools.length ? `; awaiting consent (${awaitingTools.join(', ')})` : ''}`
+        : awaitingTools.length
+          ? `awaiting consent (${awaitingTools.join(', ')}) — node .harness/engines.mjs`
+          : 'none allowed yet (node .harness/engines.mjs)';
     briefLines.push(`- AI tools: ${toolsStr} | Quota today: ${today || 'none logged'}`);
 
     const notes = [];
+    if (configError) notes.push(`config.json invalid (${configError.slice(0, 60)})`);
     if (core.manifest && (core.changed.length || core.missing.length)) notes.push(`harness core edited (${[...core.changed, ...core.missing].join(', ')})`);
     if (stopped.length && open.length) notes.push(`stopped run ${stopped[0].id} awaits decision`);
     if (/^- .*\(fill me/im.test(profile)) notes.push('profile.md incomplete');
     if (notes.length) briefLines.push(`! Notice: ${notes.join(' | ')}`);
 
-    briefLines.push('- Menu: npm start (or node .harness/start.mjs) · Health: node .harness/doctor.mjs · Rules: AGENTS.md');
+    briefLines.push('- Menu: node .harness/start.mjs (template: npm start) · Health: node .harness/doctor.mjs · Rules: AGENTS.md');
     console.log(briefLines.join('\n'));
     process.exit(0);
   }
@@ -148,6 +154,7 @@ try {
     `- Autonomous mode: charter says ${charter.autonomous ? 'ON' : 'off'}${git.integrationBranch && git.integrationMode !== 'off' ? `; autonomous work lands on the '${git.integrationBranch}' branch, never main` : ''}`,
     `- Memory: ${taughtCount} taught rule(s) (already loaded via CLAUDE.md)`
   ];
+  if (configError) lines.push(`- WARNING: .harness/config.json is invalid (${configError}); fix its JSON syntax before running tasks.`);
   if (/^- .*\(fill me/im.test(profile)) lines.push('- profile.md is not filled in yet: ask the user a few simple questions and fill it (see AGENTS.md section 1).');
 
   // Editor workflow state: unfinished runs need a decision; AUTO MODE starts the workflow by itself.

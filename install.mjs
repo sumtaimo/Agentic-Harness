@@ -314,7 +314,7 @@ console.log(`
 Done. Your project now has the agentic harness. The workflow:
   human -> controller (task, charter, backlog, team) -> orchestrator (your editor session) -> named agents -> verify -> report to you
 Next steps:
-  1. Open the menu:    node .harness/start.mjs       (interactive launcher + live status; or: npm start)
+  1. Open the menu:    node .harness/start.mjs       (interactive launcher + live status)
      Check setup:      node .harness/doctor.mjs      (needs Node 18+ and one AI engine, e.g. Claude Code, logged in)
      Allow your AI tools once (headless runs use only allowed ones):  node .harness/engines.mjs     usage later:  node .harness/usage.mjs
                        several engines (claude, agy, codex)? see docs/MULTI-MODEL-SETUP.md in the harness repo, then  node .harness/team.mjs auto-assign
