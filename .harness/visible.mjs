@@ -85,12 +85,15 @@ function dirtyGitFiles() {
   return r.stdout.split('\n').map((l) => l.slice(3).split(' -> ').pop().trim()).filter((f) => f && !f.startsWith('.harness/'));
 }
 
-function snapshot(scope = []) {
+function snapshot(scope = [], baseFiles = null) {
   let { files: projectFiles, total } = listProjectFiles(ROOT, MAX_FILES);
+  let scopedMode = false;
   if (total > MAX_FILES && scope.length) {
     const scoped = listProjectFiles(ROOT, total).files.filter((f) => inside(f, scope) || matchesAny(f, scope));
-    const merged = [...new Set([...scoped, ...dirtyGitFiles()])];
-    if (merged.length <= MAX_FILES) { projectFiles = merged; total = merged.length; }
+    const dirty = dirtyGitFiles();
+    const merged = [...new Set([...scoped, ...(dirty.length <= MAX_FILES ? dirty : dirty.filter((f) => inside(f, scope) || matchesAny(f, scope)))])];
+    if (merged.length <= MAX_FILES) { projectFiles = merged; total = merged.length; scopedMode = true; }
+    if (baseFiles) for (const f of dirty) if (!(f in baseFiles) && !fs.existsSync(path.join(ROOT, f)) && spawnSync('git', ['cat-file', '-e', `HEAD:${f}`], { cwd: ROOT, stdio: 'ignore' }).status === 0) baseFiles[f] = 'HEAD';
   }
   if (total > MAX_FILES) die(`This project has ${total} files; the editor workflow can verify up to ${MAX_FILES} (pass --files to scope a smaller folder, or use node .harness/dispatch.mjs for larger runs).`);
   const files = [...new Set([...projectFiles, ...watchedRuleFiles()])];
@@ -99,7 +102,7 @@ function snapshot(scope = []) {
     const p = path.join(ROOT, f);
     try { const st = fs.statSync(p); if (!st.isFile()) continue; map[f] = sha(fs.readFileSync(p)); bytes += st.size; } catch { /* vanished */ }
   }
-  return { map, bytes };
+  return { map, bytes, scoped: scopedMode };
 }
 function diffSnapshots(base, cur) {
   const added = []; const modified = []; const deleted = [];
@@ -115,7 +118,11 @@ function restoreFiles(run, files) {
     try {
       const dest = path.join(ROOT, f);
       if (/^\.env/.test(f)) { failed.push(f); continue; } // never copied, so it cannot be restored automatically
-      if (f in run.baseline.files) { fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.copyFileSync(path.join(dir, f), dest); } else fs.rmSync(dest, { force: true });
+      if (f in run.baseline.files && run.baseline.files[f] !== 'HEAD') { fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.copyFileSync(path.join(dir, f), dest); }
+      else if (run.baseline.scoped && spawnSync('git', ['cat-file', '-e', `HEAD:${f}`], { cwd: ROOT, stdio: 'ignore' }).status === 0) {
+        const co = spawnSync('git', ['checkout', 'HEAD', '--', f], { cwd: ROOT, stdio: 'ignore' });
+        if (co.status !== 0) { failed.push(f); continue; }
+      } else fs.rmSync(dest, { force: true });
       restored.push(f);
     } catch { failed.push(f); }
   }
@@ -247,7 +254,7 @@ function brief() {
     charter: { allowedPaths: charter.allowedPaths, forbiddenPaths: charter.forbiddenPaths },
     orchestrator: orch.id, delegable: orch.canDelegateTo?.length ? orch.canDelegateTo : leads.map((l) => l.id),
     leads: leads.map((l) => ({ id: l.id, role: l.role, scope: l.scope, maxWorkers: l.maxWorkers ?? 3, skills: l.skills || [] })),
-    baseline: { files: snap.map, bytes: snap.bytes, rollbackAvailable, dir: rollbackAvailable ? baseDirRel : null }
+    baseline: { files: snap.map, bytes: snap.bytes, scoped: snap.scoped, rollbackAvailable, dir: rollbackAvailable ? baseDirRel : null }
   };
   saveRun(run);
   if (item) updateBacklogItem(item.id, { status: 'IN_PROGRESS', startedAt: new Date().toISOString(), visibleRun: id });
@@ -354,7 +361,7 @@ function verify() {
   let reports = {}; try { reports = flag('--reports') ? JSON.parse(flag('--reports')) : {}; } catch { /* ignore a malformed summary */ }
   run.cycles += 1;
   const scopeGlobs = run.userAllowed?.length ? run.userAllowed : (run.charter?.allowedPaths || []);
-  const snap = () => snapshot(scopeGlobs).map;
+  const snap = () => snapshot(scopeGlobs, run.baseline.files).map;
   const cur = snap();
   const d = diffSnapshots(run.baseline.files, cur);
   const violations = []; const violating = [];
@@ -423,7 +430,7 @@ function verify() {
 function rollback() {
   const run = loadRun(positional[0]);
   const scopeGlobs = run.userAllowed?.length ? run.userAllowed : (run.charter?.allowedPaths || []);
-  const d = diffSnapshots(run.baseline.files, snapshot(scopeGlobs).map);
+  const d = diffSnapshots(run.baseline.files, snapshot(scopeGlobs, run.baseline.files).map);
   const r = restoreFiles(run, d.all);
   if (r.failed.length || !run.baseline.rollbackAvailable) die(`Could not restore everything (${run.baseline.rollbackAvailable ? `${r.failed.length} file(s) failed` : 'no baseline copy was kept: the project was too large'}). Use git to undo: git status / git checkout -- <file>.`);
   run.status = 'ROLLED_BACK'; run.rolledBackAt = new Date().toISOString(); saveRun(run);
