@@ -2443,5 +2443,64 @@ await test('headless resume (dispatch.mjs --resume-visible): preserves partial w
   assert(r4.status === 1 && /forbidden path\(s\).*\.env/.test(r4.stderr), r4.stdout + r4.stderr);
 });
 
+await test('Windows backslash paths & cross-engine model guards: docs\\ trailing slash stays a folder, spaced dirty files are tracked, BRIEFED resume + ENGINE_FALLBACK drop incompatible aliases, and duplicate pending resume is blocked', () => {
+  const { d, g } = gitSandbox({ autonomous: false });
+  const tm = teamOf(d);
+  const leads = tm.members.filter((m) => m.level === 'lead');
+  const bsPlan = { assignments: [{ lead: 'lead-ba', goal: 'docs folder', files: ['docs\\'] }, { lead: 'lead-dev', goal: 'file', files: ['.\\src\\a.js'] }] };
+  gov.validateDelegation(bsPlan, { leads, delegable: new Set(leads.map((l) => l.id)) });
+  assert(bsPlan.assignments[0].files[0] === 'docs/' && bsPlan.assignments[1].files[0] === 'src/a.js', JSON.stringify(bsPlan.assignments));
+
+  const id = runIdOf(vis(d, 'brief', '--goal', 'win paths', '--files', 'docs\\,src\\a.js', '--check', PASS));
+  assert(vis(d, 'assign', id, deleg([{ lead: 'lead-ba', goal: 'docs', files: ['docs\\'] }, { lead: 'lead-dev', goal: 'code', files: ['.\\src\\a.js'] }])).status === 0, 'assign with Windows separators');
+  agentsWrite(d, [['docs/my spaced note.md', 'spaced'], ['src/a.js', 'ok']]);
+  const h = JSON.parse(vis(d, 'handoff', id, '--json').stdout);
+  assert(h.diff.added.includes('docs/my spaced note.md'), `spaced dirty file must not be quoted: ${JSON.stringify(h.diff)}`);
+  assert(h.byLead.find((l) => l.lead === 'lead-ba').missingFiles.length === 0, 'folder docs\\ must not be flagged as missing file');
+  assert(h.byLead.find((l) => l.lead === 'lead-dev').changed.includes('+ src/a.js'), JSON.stringify(h.byLead));
+  assert(!runJson(d, id).baseline.dir.includes('\\'), 'baseline.dir should use portable forward slashes');
+  assert(vis(d, 'rollback', id).status === 0, 'rollback win-path run');
+
+  // Pending-job guard: dispatching --resume-visible without --wait blocks a duplicate queue while pendingJobId is in inbox
+  const dPend = sandbox();
+  const idP = runIdOf(vis(dPend, 'brief', '--goal', 'pending guard', '--check', PASS));
+  assert(node(dPend, ['.harness/dispatch.mjs', '--resume-visible', idP]).status === 0, 'first queued resume');
+  const dup = node(dPend, ['.harness/dispatch.mjs', '--resume-visible', idP]);
+  assert(dup.status === 1 && /already has pending headless job/.test(dup.stderr), dup.stdout + dup.stderr);
+
+  // BRIEFED --resume-visible with --engine override drops incompatible orch/lead model aliases in hierDecompose
+  const dH = sandbox();
+  withProfiles(dH, {
+    claude: tieredProfile({ fast: 'cl-fast', medium: 'cl-med', high: 'cl-high' }),
+    antigravity: tieredProfile({ fast: 'ag-fast', medium: 'ag-med', high: 'ag-high' })
+  });
+  const tmH = teamOf(dH);
+  for (const m of tmH.members) { m.engine = 'claude'; m.model = m.level === 'orchestrator' ? 'cl-high' : 'cl-med'; }
+  fs.writeFileSync(path.join(dH, '.harness', 'team.json'), JSON.stringify(tmH, null, 2));
+  const hGoal = hierGoal({ assignments: [{ lead: 'lead-dev', files: ['src/h2.js'], goal: leadJson([{ id: 'w', targetFiles: ['src/h2.js'], prompt: 'WRITE src/h2.js ok' }]) }] });
+  const idH = runIdOf(vis(dH, 'brief', '--goal', hGoal, '--check', existsCheck('src/h2.js')));
+  const rH = node(dH, ['.harness/dispatch.mjs', '--resume-visible', idH, '--engine', 'antigravity', '--wait']);
+  assert(rH.status === 0 && read(dH, 'src/h2.js') === 'ok', rH.stdout + rH.stderr);
+  assert(modelArg(dH, 'orchestrator') === 'ag-high' && modelArg(dH, 'lead-dev') === 'ag-med' && modelArg(dH, 'lead-dev.w') === 'ag-fast',
+    `hierDecompose leaked claude alias: orch=${modelArg(dH, 'orchestrator')} lead=${modelArg(dH, 'lead-dev')} worker=${modelArg(dH, 'lead-dev.w')}`);
+
+  // ENGINE_FALLBACK without --engine: unavailable lead.engine drops incompatible lead.model alias when falling back to auto
+  const dFb = sandbox();
+  withProfiles(dFb, {
+    antigravity: tieredProfile({ fast: 'ag-fast', medium: 'ag-med', high: 'ag-high' }),
+    claude: { verified: true, binary: 'missing-claude-cli-xyz', args: [], promptVia: 'stdin', allowedTools: [], modelArgs: ['MODEL={model}'], models: { fast: 'cl-fast', medium: 'cl-med', high: 'cl-high' } }
+  });
+  { const cf = path.join(dFb, '.harness', 'config.json'); const c = json(cf); c.autoOrder = ['antigravity', 'claude']; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  const tmFb = teamOf(dFb);
+  tmFb.members.find((m) => m.id === 'lead-dev').engine = 'claude';
+  tmFb.members.find((m) => m.id === 'lead-dev').model = 'cl-med';
+  fs.writeFileSync(path.join(dFb, '.harness', 'team.json'), JSON.stringify(tmFb, null, 2));
+  const idFb = runIdOf(vis(dFb, 'brief', '--goal', 'fallback alias guard', '--check', existsCheck('src/fb.js')));
+  assert(vis(dFb, 'assign', idFb, deleg([{ lead: 'lead-dev', goal: 'WRITE src/fb.js fb-ok', files: ['src/fb.js'] }])).status === 0, 'assign fb');
+  const rFb = node(dFb, ['.harness/dispatch.mjs', '--resume-visible', idFb, '--wait']);
+  assert(rFb.status === 0 && read(dFb, 'src/fb.js') === 'fb-ok', rFb.stdout + rFb.stderr);
+  assert(modelArg(dFb, 'lead-dev') === 'ag-fast', `ENGINE_FALLBACK leaked claude alias: ${modelArg(dFb, 'lead-dev')}`);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

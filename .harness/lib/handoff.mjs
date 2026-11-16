@@ -53,10 +53,14 @@ export function editorUsageKey(editor = 'claude-code', config = null) {
 
 export const visibleRunDir = (id) => path.join(VISIBLE_DIR, String(id || ''));
 export const stripSlash = (f) => String(f).replace(/\/$/, '');
-export const insideTargets = (file, targets) => (targets || []).some((t) => {
-  const n = stripSlash(String(t).replace(/\\/g, '/').replace(/^\.\//, ''));
-  return file === n || file.startsWith(`${n}/`);
-});
+const normRel = (f) => String(f || '').replace(/\\/g, '/').replace(/^\.\//, '');
+export const insideTargets = (file, targets) => {
+  const fn = normRel(file);
+  return (targets || []).some((t) => {
+    const n = stripSlash(normRel(t));
+    return fn === n || fn.startsWith(`${n}/`);
+  });
+};
 
 export function readVisibleRun(id) {
   if (!id) return null;
@@ -109,9 +113,17 @@ export function watchedRuleFiles() {
 }
 
 export function dirtyGitFiles() {
-  const r = spawnSync('git', ['status', '--porcelain', '-uall'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const r = spawnSync('git', ['status', '--porcelain', '-uall', '-z'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   if (r.status !== 0 || !r.stdout) return [];
-  return r.stdout.split('\n').map((l) => l.slice(3).split(' -> ').pop().trim()).filter((f) => f && !f.startsWith('.harness/'));
+  const entries = r.stdout.split('\0').filter(Boolean);
+  const out = [];
+  for (let i = 0; i < entries.length; i++) {
+    const status = entries[i].slice(0, 2);
+    const file = entries[i].slice(3);
+    if (status.startsWith('R') || status.startsWith('C')) i++; // next NUL entry is the previous path
+    if (file && !file.startsWith('.harness/')) out.push(file);
+  }
+  return out;
 }
 
 export function captureSnapshot(scope = [], baseFiles = null, { maxFiles = MAX_VISIBLE_FILES } = {}) {
@@ -207,7 +219,7 @@ export function inspectVisibleRun(run, config) {
     const lead = leads.find((l) => l.id === a.lead);
     const mine = diff.all.filter((f) => insideTargets(f, a.files) && (!lead || !leads.length || leadOwns(lead, f, leads)));
     const changed = mine.map((f) => `${prefixOf(f)}${f}`);
-    const explicit = a.files.filter((t) => !t.endsWith('/') && !t.includes('*'));
+    const explicit = a.files.map(normRel).filter((t) => !t.endsWith('/') && !t.includes('*'));
     const missingFiles = explicit.filter((t) => !fs.existsSync(path.join(ROOT, t)));
     const untouchedFiles = explicit.filter((t) => fs.existsSync(path.join(ROOT, t)) && !mine.includes(t));
     return {

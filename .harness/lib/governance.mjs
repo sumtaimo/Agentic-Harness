@@ -6,7 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, HARNESS_DIR, DIRS, FILES, atomicWriteJson, readJsonSafe, ensureDirs, LESSONS_HEADER, AUTO_LESSONS_HEADER, safeTarget, loadConfig, memberModels } from './common.mjs';
+import { ROOT, HARNESS_DIR, DIRS, FILES, atomicWriteJson, readJsonSafe, ensureDirs, LESSONS_HEADER, AUTO_LESSONS_HEADER, normalizeTarget, loadConfig, memberModels } from './common.mjs';
 
 export const GOV = {
   charter: path.join(HARNESS_DIR, 'charter.md'),
@@ -409,7 +409,7 @@ export function validateDelegation(plan, { leads, delegable, userAllowed = [] })
     seenLeads.add(lead.id);
     if (typeof a.goal !== 'string' || !a.goal.trim()) throw new Error(`assignment to "${lead.id}" has no goal.`);
     if (!Array.isArray(a.files) || !a.files.length) throw new Error(`assignment to "${lead.id}" has no files.`);
-    a.files = a.files.map((f) => { const s = safeTarget(f); if (!s) throw new Error(`assignment to "${lead.id}" has an unsafe path "${f}".`); const base = s.replace(/\/+$/, ''); return String(f).endsWith('/') ? `${base}/` : base; });
+    a.files = a.files.map((f) => { const s = normalizeTarget(f); if (!s) throw new Error(`assignment to "${lead.id}" has an unsafe path "${f}".`); return s; });
     for (const f of a.files) {
       if (!leadOwns(lead, f, leads)) throw new Error(`file "${f}" is outside lead "${lead.id}"'s scope (${lead.scope.join(', ')})${withinAll(f, lead.scope) ? '; a more specific scope of another lead owns it (e.g. test files belong to the QA lead)' : ''}.`);
       if (userAllowed.length && !inside(strip(f), userAllowed)) throw new Error(`file "${f}" is outside the files the user allowed (${userAllowed.join(', ')}).`);

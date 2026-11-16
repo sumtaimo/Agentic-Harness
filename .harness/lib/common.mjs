@@ -352,6 +352,21 @@ export function resolveModel(profile, { tier = 'medium', override = null } = {})
 }
 
 /**
+ * Filter an explicit model override for `targetProfile`: tiers ("fast" | "medium" | "high") work on every engine,
+ * while an engine-specific alias from a different `sourceEngine` is dropped unless it also exists in `targetProfile.models`.
+ */
+export function compatibleModelFor(targetProfile, model, sourceEngine = null) {
+  if (!model) return null;
+  const s = String(model).trim();
+  if (!s) return null;
+  if (MODEL_TIERS.includes(s.toLowerCase())) return s;
+  const targetName = targetProfile?.name;
+  if (!sourceEngine || sourceEngine === 'auto' || !targetName || sourceEngine === targetName) return s;
+  const targetModels = Object.values(targetProfile?.models || {}).filter(Boolean);
+  return targetModels.includes(s) ? s : null;
+}
+
+/**
  * Never fall back to the CLI's default when the engine has a model for ANOTHER tier: an empty tier uses the nearest
  * configured one (cheaper first for fast/medium, then the next one up; high steps down). Only an engine with no
  * models at all (e.g. codex today) gets model null = the CLI's own default (doctor warns about it).
@@ -500,6 +515,14 @@ export function safeTarget(p) {
   if (n.split('/').includes('..')) return null;
   if (/^(\.git|\.harness)(\/|$)/.test(n)) return null;
   return n;
+}
+
+/** Normalise a target path and collapse redundant trailing slashes while keeping a single trailing "/" for folders (incl. Windows "\\"). */
+export function normalizeTarget(p) {
+  const s = safeTarget(p);
+  if (!s) return null;
+  const base = s.replace(/\/+$/, '');
+  return s.endsWith('/') ? `${base}/` : base;
 }
 
 // ───────────────────────────── Memory store ─────────────────────────────

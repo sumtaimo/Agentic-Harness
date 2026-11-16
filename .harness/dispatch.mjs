@@ -49,7 +49,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline/promises';
-import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable, aiUsageSince, usageLine, usageTodayLine, MODEL_TIERS } from './lib/common.mjs';
+import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable, detectEngines, compatibleModelFor, aiUsageSince, usageLine, usageTodayLine, MODEL_TIERS } from './lib/common.mjs';
 import { askEngineConsent } from './lib/consent.mjs';
 import { loadTeam } from './lib/governance.mjs';
 import { RESUMABLE_STATUSES, VISIBLE_TERMINAL, editorDisplayName, listVisibleRuns, readVisibleRun, writeVisibleRun, inspectVisibleRun } from './lib/handoff.mjs';
@@ -157,6 +157,10 @@ if (resumeVisible) {
     console.error(`Visible run ${resumedRun.id} is ${resumedRun.status} and cannot be resumed (resumable: ${[...RESUMABLE_STATUSES].join(', ')}).`);
     process.exit(1);
   }
+  if (resumedRun.pendingJobId && fs.existsSync(path.join(DIRS.inbox, `${resumedRun.pendingJobId}.json`))) {
+    console.error(`Visible run ${resumedRun.id} already has pending headless job ${resumedRun.pendingJobId} in .harness/inbox/. Wait for it to finish first.`);
+    process.exit(1);
+  }
   resumedInfo = inspectVisibleRun(resumedRun, config);
   if (resumedInfo.forbiddenEdits.length) {
     console.error(`Refusing to resume ${resumedRun.id}: forbidden path(s) were modified on disk (${resumedInfo.forbiddenEdits.join(', ')}). Inspect or restore them first.`);
@@ -185,6 +189,7 @@ if (resumeVisible) {
   if (resumedRun.assignments?.length > 0 && subtasks.length === 0 && !hierarchy && !explicitMode) {
     autoPlan = false;
     const members = teamDef?.members || [];
+    const usableFirst = detectEngines(config).usable[0];
     for (const a of resumedRun.assignments) {
       const leadDef = members.find((m) => m.id === a.lead);
       const infoLead = resumedInfo.byLead.find((x) => x.lead === a.lead);
@@ -198,13 +203,10 @@ if (resumeVisible) {
       ].filter(Boolean).join('\n');
       const rawEffEngine = engine || leadDef?.engine;
       const effEngine = (!rawEffEngine || rawEffEngine === 'auto')
-        ? (config.activeProfile && config.activeProfile !== 'auto' ? config.activeProfile : (config.autoOrder || [])[0])
+        ? (config.activeProfile && config.activeProfile !== 'auto' ? config.activeProfile : (usableFirst || (config.autoOrder || [])[0]))
         : rawEffEngine;
-      const keepLeadModel = leadDef?.model && (
-        MODEL_TIERS.includes(String(leadDef.model).toLowerCase()) ||
-        (leadDef.engine && leadDef.engine !== 'auto' && effEngine === leadDef.engine) ||
-        Object.values(config.profiles?.[effEngine]?.models || {}).includes(leadDef.model)
-      );
+      const effProfile = effEngine ? { name: effEngine, ...(config.profiles?.[effEngine] || {}) } : null;
+      const safeLeadModel = compatibleModelFor(effProfile, leadDef?.model, leadDef?.engine);
       subtasks.push({
         id: a.lead,
         lead: a.lead,
@@ -213,7 +215,7 @@ if (resumeVisible) {
         targetFiles: [...a.files],
         goal: resumedRun.goal,
         ...(leadDef?.engine ? { engine: leadDef.engine } : {}),
-        ...(keepLeadModel ? { model: leadDef.model } : {}),
+        ...(safeLeadModel ? { model: safeLeadModel, ...(leadDef?.engine ? { modelSourceEngine: leadDef.engine } : {}) } : {}),
         ...(leadDef?.budget?.maxCostUsd !== undefined ? { maxCostUsd: leadDef.budget.maxCostUsd } : {}),
         prompt: promptLines
       });

@@ -31,8 +31,8 @@ import { promisify } from 'node:util';
 import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd,
-  listProjectFiles, safeTarget,
-  winQuote, winCommandLine, needsWinShell, MODEL_TIERS, chooseModelTier, resolveModel, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
+  listProjectFiles, safeTarget, normalizeTarget,
+  winQuote, winCommandLine, needsWinShell, MODEL_TIERS, chooseModelTier, resolveModel, compatibleModelFor, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
 } from './lib/common.mjs';
 helpIfAsked(import.meta.url); // "--help" prints the usage; it must never start the controller
 
@@ -309,21 +309,23 @@ function spawnEngine(opts, tried = new Set()) {
     logTelemetry('QUOTA_FALLBACK', `${opts.id}: ${e.engineName} hit its usage limit → retrying on ${targetEngine}${nextModel ? ` (${nextModel})` : ''}`, { worker: opts.id, from: e.engineName, to: targetEngine, tier: e.tierUsed, model: nextModel });
     if (liveOn()) livePrint(opts.id, `⇄ ${e.engineName} usage limit → continuing on ${targetEngine}${nextModel ? ` (${nextModel})` : ''}`);
     writeState({ history: pushHistory(`⇄ ${e.engineName} limit → ${targetEngine} for ${opts.id}`) });
-    return spawnEngine({ ...opts, engine: targetEngine, tier: nextTier, model: nextModel }, tried);
+    return spawnEngine({ ...opts, engine: targetEngine, tier: nextTier, model: nextModel, modelSourceEngine: nextModel ? targetEngine : opts.modelSourceEngine }, tried);
   });
 }
 
 /** Spawn an AI engine with a prompt. Resolves { engine, output, denials }. Streams activity live when enabled. */
-function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallowedTools, tier = null, model: modelOverride = null }) {
+function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallowedTools, tier = null, model: modelOverride = null, modelSourceEngine = null }) {
   return new Promise((resolve, reject) => {
     let profile;
     try { profile = resolveProfile(config, engine); } catch (e) { return reject(e); }
+    const effectiveSource = profile.fallbackFrom || modelSourceEngine;
+    const safeOverride = compatibleModelFor(profile, modelOverride, effectiveSource);
     let t = tier || { tier: 'medium', reasons: ['no complexity info'] };
-    if (autoTierCap && t.tier === 'high' && !modelOverride) {
+    if (autoTierCap && t.tier === 'high' && !safeOverride) {
       t = { tier: 'medium', reasons: [...(t.reasons || []), 'capped high → medium: autonomous run, the high model needs your OK (node .harness/backlog.mjs approve <id>)'] };
       logTelemetry('AUTO_TIER_CAPPED', `${id}: high tier capped to medium (autonomous; high model not approved)`, { worker: id });
     }
-    const pick = resolveModel(profile, { tier: t.tier, override: modelOverride });
+    const pick = resolveModel(profile, { tier: t.tier, override: safeOverride });
     const over = dailyLimitReached(profile.name);
     if (over) {
       logTelemetry('DAILY_LIMIT', `${id}: ${profile.name} reached its daily cap (${over}); not started`, { worker: id, engine: profile.name });
@@ -538,7 +540,8 @@ function runWorker(subtask, cwd, errorContext, { cycle = 1, model = null } = {})
     allowedTools: subtask.resolvedTools || subtask.allowedTools, disallowedTools: subtask.deniedTools,
     // complexity is judged on the task itself (files, its own prompt, role, retry), not on the harness boilerplate around it
     tier: chooseModelTier({ kind: 'work', role: subtask.resolvedRole || subtask.role, targetFiles: subtask.targetFiles || [], prompt: subtask.prompt || '', cycle }),
-    model: model || subtask.model || null
+    model: model || subtask.model || null,
+    modelSourceEngine: model ? null : (subtask.modelSourceEngine || subtask.engine || null)
   }).then((r) => ({ id: subtask.id, role: subtask.resolvedRole, ...r }));
 }
 
@@ -684,9 +687,9 @@ function validateSubtasks(subtasks, { source = 'task', allowed = [], requireScop
     const raw = sub.targetFiles || (sub.targetFile ? [sub.targetFile] : []);
     if (!Array.isArray(raw)) throw fatal(`${source}: worker '${sub.id}' targetFiles must be a list.`);
     sub.targetFiles = raw.map((f) => {
-      const s = safeTarget(f);
+      const s = normalizeTarget(f);
       if (!s) throw fatal(`${source}: worker '${sub.id}' has an unsafe target path '${f}' (absolute, "..", ".", .git or .harness).`);
-      return s.replace(/\/$/, '') + (String(f).endsWith('/') ? '/' : '');
+      return s;
     });
     if (!sub.prompt && !sub.cliCommand) throw fatal(`${source}: worker '${sub.id}' has neither a prompt nor a cliCommand.`);
     if ((requireScope || subtasks.length > 1) && sub.targetFiles.length === 0) {
@@ -874,7 +877,7 @@ async function hierDecompose(task, gov) {
       feedback ? `\n[YOUR PREVIOUS PLAN WAS REJECTED — fix this]:\n${feedback}` : ''
     ].filter(Boolean).join('\n');
     logTelemetry('1_ORCHESTRATOR', `${orch.id} delegation attempt ${attempt}/${attempts}`, { goal: String(goalText).slice(0, 300) });
-    const { output } = await spawnEngine({ id: orch.id, engine: task.engine || orch.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(orch.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny, tier: chooseModelTier({ kind: 'plan', level: 'orchestrator', role: orch.role }), model: task.model || orch.model || null });
+    const { output } = await spawnEngine({ id: orch.id, engine: task.engine || orch.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(orch.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny, tier: chooseModelTier({ kind: 'plan', level: 'orchestrator', role: orch.role }), model: task.model || orch.model || null, modelSourceEngine: task.model ? null : (orch.engine || null) });
     try {
       let parsed;
       try { parsed = extractJson(output); } catch { throw new Error(`Reply was not valid JSON: ${output.slice(0, 300)}`); }
@@ -909,7 +912,7 @@ async function hierDecompose(task, gov) {
         fb ? `\n[YOUR PREVIOUS PLAN WAS REJECTED — fix this]:\n${fb}` : ''
       ].filter(Boolean).join('\n');
       logTelemetry('1_LEAD', `${lead.id} planning attempt ${attempt}/${attempts}`, { lead: lead.id });
-      const { output } = await spawnEngine({ id: lead.id, engine: task.engine || lead.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(lead.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny, tier: chooseModelTier({ kind: 'plan', level: 'lead', role: lead.role }), model: task.model || lead.model || null });
+      const { output } = await spawnEngine({ id: lead.id, engine: task.engine || lead.engine, prompt, cwd: ROOT, timeoutMs: minutesToMs(lead.budget?.maxMinutes, config.workerTimeoutMs), allowedTools: readOnly, disallowedTools: deny, tier: chooseModelTier({ kind: 'plan', level: 'lead', role: lead.role }), model: task.model || lead.model || null, modelSourceEngine: task.model ? null : (lead.engine || null) });
       try {
         let parsed;
         try { parsed = extractJson(output); } catch { throw new Error(`Reply was not valid JSON: ${output.slice(0, 300)}`); }
@@ -943,7 +946,7 @@ async function hierDecompose(task, gov) {
     const lead = leads.find((l) => l.id === a.lead);
     const mine = settled[i].value.map((s) => ({
       id: `${lead.id}.${s.id}`, lead: lead.id, role: lead.role, skills: Array.isArray(s.skills) ? s.skills : (lead.skills && lead.skills.length ? lead.skills : undefined),
-      targetFiles: s.targetFiles, prompt: String(s.prompt).trim(), engine: task.engine || lead.engine, model: lead.model, goal: a.goal,
+      targetFiles: s.targetFiles, prompt: String(s.prompt).trim(), engine: task.engine || lead.engine, model: lead.model, modelSourceEngine: lead.engine || null, goal: a.goal,
       timeoutMs: minutesToMs(lead.budget?.maxMinutes, undefined), maxCostUsd: lead.budget?.maxCostUsd
     }));
     subtasks.push(...mine);

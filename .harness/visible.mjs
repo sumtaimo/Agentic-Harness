@@ -25,7 +25,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, memoryContext, recordSession, remember, safeTarget, helpIfAsked, pendingCostReasons, aiUsageSince, usageTodayLine } from './lib/common.mjs';
+import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, memoryContext, recordSession, remember, normalizeTarget, helpIfAsked, pendingCostReasons, aiUsageSince, usageTodayLine } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor } from './lib/governance.mjs';
 import { VISIBLE_DIR, VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
@@ -189,7 +189,7 @@ function brief() {
   if (flag('--item')) { item = readBacklog().tasks.find((t) => t.id === flag('--item')); if (!item) die(`No backlog item ${flag('--item')}.`); if (item.status !== 'READY') die(`Backlog item ${item.id} is ${item.status}, not READY.`); }
 
   const goal = item ? (item.goal || item.title) : goalArg;
-  const userAllowed = (flag('--files') || '').split(',').map((s) => safeTarget(s.trim())).filter(Boolean);
+  const userAllowed = (flag('--files') || '').split(',').map((s) => normalizeTarget(s)).filter(Boolean);
   let check = flag('--check') ? { cmd: flag('--check'), source: 'given by the human', real: true } : item?.verifyCmd ? { cmd: item.verifyCmd, source: `backlog item ${item.id}`, real: true } : (() => { const d = detectVerifyCmd(ROOT, config); return { cmd: d.cmd, source: d.source, real: d.real }; })();
   if (!check.real && (auto || charter.requireRealCheck) && auto) die('This project has no real check (add a "test" script to package.json or a "verifyCmd" to the task). Autonomous work needs one (charter requireRealCheck).', 1);
 
@@ -197,7 +197,7 @@ function brief() {
   const scopeGlobs = userAllowed.length ? userAllowed : charter.allowedPaths;
   const snap = snapshot(scopeGlobs);
   const rollbackAvailable = snap.bytes <= MAX_BASELINE_BYTES;
-  const baseDirRel = path.join('.harness', 'visible', id, 'baseline');
+  const baseDirRel = path.posix.join('.harness', 'visible', id, 'baseline');
   // secrets (.env*) are compared by hash only: they are never copied into the baseline
   if (rollbackAvailable) for (const f of Object.keys(snap.map).filter((k) => !/^\.env/.test(k))) { const dest = path.join(ROOT, baseDirRel, f); fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.copyFileSync(path.join(ROOT, f), dest); }
   const run = {
@@ -431,7 +431,7 @@ function propose() {
       if (!t.title || !String(t.title).trim()) throw new Error('no title');
       if (have.has(norm(t.title))) throw new Error('duplicate of an existing backlog item');
       if (!Array.isArray(t.files) || !t.files.length) throw new Error('no files');
-      const files = t.files.map((f) => { const s = safeTarget(f); if (!s) throw new Error(`unsafe path "${f}"`); return s; });
+      const files = t.files.map((f) => { const s = normalizeTarget(f); if (!s) throw new Error(`unsafe path "${f}"`); return s; });
       for (const f of files) {
         if (!leads.some((l) => leadOwns(l, f, leads))) throw new Error(`"${f}" is not inside any lead's scope`);
         if (matchesAny(f, charter.forbiddenPaths)) throw new Error(`"${f}" is forbidden by the charter`);
