@@ -601,7 +601,7 @@ const DASHBOARD_HTML = `<!doctype html>
         { mono: true, node: el('span', null, r.id) },
         { node: el('span', { className: pillClassForStatus(r.status) }, r.status || '-') },
         el('span', null, r.editorLabel || r.editor || 'claude-code'),
-        { mono: true, node: el('span', null, String(r.cycle || 0)) },
+        { mono: true, node: el('span', null, String(r.cycles ?? r.cycle ?? 0)) },
         el('span', null, r.title || r.goal || '-')
       ])
     ));

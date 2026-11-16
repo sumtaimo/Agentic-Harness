@@ -95,7 +95,9 @@ const subtasks = [];
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i]; const v = args[i + 1];
-  if (a === '--engine' && v !== undefined) { engine = args[++i].trim().toLowerCase(); }
+  const normEng = (s) => { const k = String(s || '').trim().toLowerCase(); return k === 'agy' ? 'antigravity' : k; };
+  if (a === '--engine' && v !== undefined) { engine = normEng(args[++i]); }
+  else if (a.startsWith('--engine=')) { engine = normEng(a.slice('--engine='.length)); }
   else if (a === '--model' && v !== undefined) { model = args[++i].trim(); if (!/^[\w.:@/-]+$/.test(model)) { console.error('--model takes a tier (fast | medium | high) or a model alias'); process.exit(1); } }
   else if ((a === '--verify' || a === '--check') && v !== undefined) { verifyCmd = args[++i].trim(); }
   else if (a === '--goal' && v !== undefined) { goal = args[++i].trim(); }

@@ -59,15 +59,19 @@ export function readJsonSafe(file, fallback = {}) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 
+const pathDirs = (envPath = process.env.PATH) => String(envPath || '').split(path.delimiter)
+  .map((d) => d.trim().replace(/^"(.*)"$/, '$1'))
+  .filter(Boolean);
+const pathExts = (pathExt = process.env.PATHEXT) => (process.platform === 'win32'
+  ? [...new Set((pathExt || '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean).concat(['']))]
+  : ['']);
+
 /** Find an executable on PATH (cross-platform). Returns full path or null. */
-export function which(binary) {
+export function which(binary, envPath = process.env.PATH, pathExt = process.env.PATHEXT) {
   if (!binary) return null;
   if (binary.includes('/') || binary.includes('\\')) return fs.existsSync(binary) ? binary : null;
-  const exts = process.platform === 'win32'
-    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';').concat([''])
-    : [''];
-  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
-    if (!dir) continue;
+  const exts = pathExts(pathExt);
+  for (const dir of pathDirs(envPath)) {
     for (const ext of exts) {
       const full = path.join(dir, binary + ext);
       try { if (fs.statSync(full).isFile()) return full; } catch { /* keep looking */ }
@@ -87,13 +91,10 @@ export function findAllOnPath(binary, envPath = process.env.PATH, pathExt = proc
   if (binary.includes('/') || binary.includes('\\')) {
     try { return fs.statSync(binary).isFile() ? [binary] : []; } catch { return []; }
   }
-  const exts = process.platform === 'win32'
-    ? [...new Set((pathExt || '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean).concat(['']))]
-    : [''];
+  const exts = pathExts(pathExt);
   const out = [];
   const seen = new Set();
-  for (const dir of String(envPath || '').split(path.delimiter)) {
-    if (!dir) continue;
+  for (const dir of pathDirs(envPath)) {
     for (const ext of exts) {
       const full = path.join(dir, binary + ext);
       try {

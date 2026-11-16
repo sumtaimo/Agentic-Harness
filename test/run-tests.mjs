@@ -2866,9 +2866,9 @@ await test('Priority 3 UX & permissions integration: start.mjs menu [5][3] hando
 // ───────────── v1.0.12 (Priority 4): agy duplicate PATH guard & 80% quota warnings ─────────────
 
 await test('findAllOnPath & doctor.mjs: detects multiple agy binaries on PATH while deduplicating identical/symlinked paths', async () => {
-  const { findAllOnPath } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);
+  const { which, findAllOnPath } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-path-'));
-  const dir1 = path.join(tmp, 'bin1');
+  const dir1 = path.join(tmp, 'bin 1');
   const dir2 = path.join(tmp, 'bin2');
   const dirSym = path.join(tmp, 'binsym');
   fs.mkdirSync(dir1, { recursive: true });
@@ -2892,8 +2892,9 @@ await test('findAllOnPath & doctor.mjs: detects multiple agy binaries on PATH wh
 
   assert(findAllOnPath('').length === 0, 'empty binary should return []');
   assert(findAllOnPath('no-such-bin-xyz', `${dir1}${path.delimiter}${dir2}`).length === 0, 'missing binary');
-  const two = findAllOnPath('agy', `${dir1}${path.delimiter}${dir1}${path.delimiter}${dir2}`, '.CMD;.EXE');
-  assert(two.length === 2 && two[0].startsWith(dir1) && two[1].startsWith(dir2), `expected 2 ordered entries, got ${JSON.stringify(two)}`);
+  const two = findAllOnPath('agy', `"${dir1}"${path.delimiter}${dir1}${path.delimiter}${dir2}`, '.CMD;.EXE');
+  assert(two.length === 2 && two[0].startsWith(dir1) && two[1].startsWith(dir2), `expected 2 ordered quoted entries, got ${JSON.stringify(two)}`);
+  assert(which('agy', `"${dir1}"`, '.CMD;.EXE')?.startsWith(dir1), 'which() should strip Windows quotes around PATH directories');
   if (symOk) {
     const dedup = findAllOnPath('agy', `${dir1}${path.delimiter}${dirSym}`);
     assert(dedup.length === 1, `symlink to same realpath must deduplicate, got ${JSON.stringify(dedup)}`);
@@ -2982,6 +2983,12 @@ await test('quotaWarnings & CLI pre-flight: warns cleanly at >= 80% across commo
   assert(disp.status === 0, `dispatch failed: ${disp.stdout}\n${disp.stderr}`);
   assert(/! Quota warning: mock at 80% of daily calls limit \(8\/10 calls\) \(quotaFallback → claude configured\)/.test(disp.stdout), disp.stdout);
   assert(/RESULT: COMMITTED/.test(disp.stdout) && read(d, 'src/p4.txt') === 'ok', disp.stdout);
+
+  // dispatch --engine agy alias normalizes cleanly to antigravity
+  const dAgy = sandbox();
+  withProfiles(dAgy, { antigravity: tieredProfile({ fast: 'ag-fast', medium: 'ag-med', high: 'ag-high' }) });
+  const rAgy = node(dAgy, ['.harness/dispatch.mjs', '--goal', 'WRITE src/agy_alias.txt ok', '--files', 'src/agy_alias.txt', '--engine', 'agy', '--check', existsCheck('src/agy_alias.txt'), '--wait']);
+  assert(rAgy.status === 0 && /Dispatched \[ANTIGRAVITY\]/.test(rAgy.stdout) && read(dAgy, 'src/agy_alias.txt') === 'ok', rAgy.stdout + rAgy.stderr);
 });
 
 // ───────────── v1.0.13 (Priority 5): local read-only web UI (.harness/ui.mjs) ─────────────
@@ -3056,6 +3063,9 @@ await test('ui.mjs CLI guards & local HTTP dashboard (offline SPA, 127.0.0.1, re
     assert((htmlRes.headers.get('content-type') || '').includes('text/html'), 'expected text/html');
     const html = await htmlRes.text();
     assert(/Agentic Harness/.test(html) && !/<script[^>]+src=["']https?:|<link[^>]+href=["']https?:/i.test(html), 'dashboard HTML must be offline with no external CDN URLs');
+    const vm = await import('node:vm');
+    new vm.Script(html.match(/<script>([\s\S]*?)<\/script>/)[1]);
+    assert(html.includes('r.cycles ?? r.cycle ?? 0'), 'visible table should read r.cycles (plural)');
 
     // 2. API endpoints
     const fetchApi = async (p) => {
