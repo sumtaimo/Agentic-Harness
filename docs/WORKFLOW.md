@@ -116,7 +116,7 @@ is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
 |---|---|---|
 | who is on the team, what each may own, limits, default skills | `.harness/team.json` | `node .harness/team.mjs validate`, then `node .harness/team.mjs sync-agents`, restart the Claude Code session |
 | a role's persona or tools | `.harness/roles/*.json` | `node .harness/team.mjs sync-agents` |
-| rules injected into agents | `.harness/skills/<name>/SKILL.md` (or add Skill Foundry skills: `npx github:sumtaimo/Skill-Foundry add --all`) | `node .harness/doctor.mjs` |
+| rules injected into agents | `.harness/skills/<name>/SKILL.md` | |
 | what autonomous mode may touch / how much it may do | `.harness/charter.md` (section 0) | `node .harness/doctor.mjs` |
 | what the AIs should remember | `node .harness/memory.mjs remember "<rule>"` (or `/harness:teach`) | |
 

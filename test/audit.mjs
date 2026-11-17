@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok, detail }); console.log(`  ${ok ? '✔' : '✖'} ${name}${ok || !detail ? '' : `\n      ${String(detail).split('\n').join('\n      ')}`}`); };
-const run = (args, cwd, extra = {}) => spawnSync(process.execPath, args, { cwd, encoding: 'utf8', timeout: 120000, env: { ...process.env, HARNESS_SILENT: '1', ...extra } });
+const run = (args, cwd, extra = {}) => spawnSync(process.execPath, args, { cwd, encoding: 'utf8', timeout: 120000, env: { ...process.env, HARNESS_SILENT: '1', HARNESS_OFFLINE: '1', ...extra } });
 const read = (f) => fs.readFileSync(path.join(REPO, f), 'utf8');
 const walk = (dir, out = []) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { if (['node_modules', '.git', 'dist', 'worktrees', 'demo-project'].includes(e.name)) continue; const p = path.join(dir, e.name); e.isDirectory() ? walk(p, out) : out.push(p); } return out; };
 
