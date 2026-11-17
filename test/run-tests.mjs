@@ -3599,13 +3599,19 @@ await test('bug-hunter Batch 4 (ui, charter, settings): ui.mjs skipSessions/usag
 // A stand-in for the Skill Foundry CLI that follows the shared file contract (.claude/skills/<n>/.foundry.json +
 // .harness/skills/<n>/SKILL.md pointer with the "installed-by: skill-foundry" marker). No network.
 const FAKE_FOUNDRY = `import fs from 'node:fs'; import path from 'node:path';
-const p = process.cwd(); const a = process.argv.slice(2); const n = a[0] === 'add' && a[1] && !a[1].startsWith('--') ? a[1] : 'fx-engine'; const eng = n === 'fx-engine';
-const d = path.join(p, '.claude', 'skills', n); fs.mkdirSync(eng ? path.join(d, 'engine') : d, { recursive: true });
-fs.writeFileSync(path.join(d, 'SKILL.md'), '# fx'); if (eng) fs.writeFileSync(path.join(d, 'engine', 'run.mjs'), '');
-fs.writeFileSync(path.join(d, '.foundry.json'), JSON.stringify({ name: n, version: '1.2.0', source: 'github:sumtaimo/Skill-Foundry', files: {} }));
-const h = path.join(p, '.harness', 'skills');
-if (fs.existsSync(h)) { fs.mkdirSync(path.join(h, n), { recursive: true }); fs.writeFileSync(path.join(h, n, 'SKILL.md'), '---\\nname: ' + n + '\\ndescription: fx\\nroles: ' + (eng ? '["DEV_ENGINEER","QA_AUDITOR"]' : '["BA_ANALYST"]') + '\\n' + (eng ? 'allowedTools: ["Edit","Write","Bash"]\\n' : '') + 'keywords: []\\nautoApply: true\\ninstalled-by: skill-foundry 1.2.0\\n---\\n# fx\\n'); }
-fs.writeFileSync(path.join(p, 'foundry-ran.txt'), process.argv.slice(2).join(' '));`;
+const p = process.cwd(); const a = process.argv.slice(2);
+if (a.includes('--default') && process.env.FAKE_DEFAULT !== '1') { console.error('usage: add <skill…> | add --all | add --role <ROLE>'); process.exit(1); }
+const names = a.includes('--default') ? ['spec-writer', 'test-planner', 'ux-review'] : (a[0] === 'add' && a[1] && !a[1].startsWith('--') ? [a[1]] : ['fx-engine']);
+const ROLES = { 'spec-writer': '["BA_ANALYST","PO_ARCHITECT"]', 'test-planner': '["QA_AUDITOR","BA_ANALYST"]', 'ux-review': '["UX_DESIGNER","QA_AUDITOR"]', 'fx-engine': '["DEV_ENGINEER","QA_AUDITOR"]' };
+for (const n of names) {
+  const eng = n === 'fx-engine';
+  const d = path.join(p, '.claude', 'skills', n); fs.mkdirSync(eng ? path.join(d, 'engine') : d, { recursive: true });
+  fs.writeFileSync(path.join(d, 'SKILL.md'), '# fx'); if (eng) fs.writeFileSync(path.join(d, 'engine', 'run.mjs'), '');
+  fs.writeFileSync(path.join(d, '.foundry.json'), JSON.stringify({ name: n, version: '1.2.0', source: 'github:sumtaimo/Skill-Foundry', files: {} }));
+  const h = path.join(p, '.harness', 'skills');
+  if (fs.existsSync(h)) { fs.mkdirSync(path.join(h, n), { recursive: true }); fs.writeFileSync(path.join(h, n, 'SKILL.md'), '---\\nname: ' + n + '\\ndescription: fx\\nroles: ' + (ROLES[n] || '["BA_ANALYST"]') + '\\n' + (eng ? 'allowedTools: ["Edit","Write","Bash"]\\n' : '') + 'keywords: []\\nautoApply: true\\ninstalled-by: skill-foundry 1.2.0\\n---\\n# fx\\n'); }
+}
+fs.writeFileSync(path.join(p, 'foundry-ran.txt'), a.join(' '));`;
 const fakeFoundry = () => { const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-foundry-')), 'foundry.mjs'); fs.writeFileSync(f, FAKE_FOUNDRY); return f; };
 const fxSkill = { name: 'fx-engine', roles: ['DEV_ENGINEER', 'QA_AUDITOR'], allowedTools: ['Edit', 'Write', 'Bash'], toolsByRole: {}, keywords: [], autoApply: true, installedBy: 'skill-foundry 1.2.0' };
 
@@ -3667,18 +3673,29 @@ await test('AH-6 re-installing never duplicates AGENTS.md / CLAUDE.md / GEMINI.m
   assert(fs.readFileSync(path.join(u, 'AGENTS.md'), 'utf8').includes('<!-- agentic-harness -->'), 'own AGENTS.md not merged');
 });
 
-await test('Skill Foundry default: every install gets ONE skill (spec-writer), --with-skills all, --no-skills none; offline/failure never fails the install and nothing is advertised', () => {
+await test('Skill Foundry default: every install gets Skill Foundry\'s default skills (spec-writer fallback), --with-skills all, --no-skills none; offline/failure never fails the install and nothing is advertised', async () => {
   const foundry = fakeFoundry();
   const inst = (p, args, extra = {}) => spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), p, '--no-auto-assign', ...args], { encoding: 'utf8', env: { ...process.env, HARNESS_FOUNDRY_CMD: foundry, ...extra } });
   const ran = (p) => { try { return fs.readFileSync(path.join(p, 'foundry-ran.txt'), 'utf8'); } catch { return null; } };
   const a = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-sf-'));
   const r0 = inst(a, []);
-  assert(r0.status === 0 && ran(a) === 'add spec-writer --quiet' && /added  skill spec-writer/.test(r0.stdout), r0.stdout);
+  assert(r0.status === 0 && ran(a) === 'add spec-writer --quiet' && /added  skill spec-writer/.test(r0.stdout), r0.stdout); // a Skill Foundry without --default: one-skill fallback
   assert(/installed-by: skill-foundry/.test(fs.readFileSync(path.join(a, '.harness', 'skills', 'spec-writer', 'SKILL.md'), 'utf8')), 'default skill not wired');
   fs.rmSync(path.join(a, 'foundry-ran.txt'));
   inst(a, []); assert(ran(a) === null, 're-install pulled the default skill again');
   const r1 = inst(a, ['--with-skills']);
   assert(r1.status === 0 && ran(a) === 'add --all --quiet', r1.stdout);
+  // a Skill Foundry that knows --default decides the set: several skills, each fitting a role, no fallback
+  const dflt = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-sf-'));
+  const rd = inst(dflt, [], { FAKE_DEFAULT: '1' });
+  assert(rd.status === 0 && ran(dflt) === 'add --default --quiet' && /added  the default Skill Foundry skills/.test(rd.stdout), rd.stdout);
+  const got = fs.readdirSync(path.join(dflt, '.claude', 'skills')).sort();
+  assert(got.join() === 'spec-writer,test-planner,ux-review', got.join());
+  const gov = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
+  const pc = path.join(dflt, '.harness', 'skills');
+  const loaded = Object.fromEntries(got.map((nm) => [nm, { name: nm, roles: (/roles: (\[.*\])/.exec(fs.readFileSync(path.join(pc, nm, 'SKILL.md'), 'utf8')) || [, '[]'])[1] }]));
+  const fits = (role) => got.filter((nm) => JSON.parse(loaded[nm].roles).includes(role));
+  assert(fits('BA_ANALYST').length >= 1 && fits('QA_AUDITOR').length >= 2 && fits('UX_DESIGNER').length >= 1, 'a role got no fitting default skill'); // more than one skill for a role
   const n = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-sf-'));
   assert(inst(n, ['--no-skills']).status === 0 && ran(n) === null && !fs.existsSync(path.join(n, '.claude', 'skills')), '--no-skills still installed a skill');
   // the real npx path is network: HARNESS_OFFLINE=1 skips it (a local stand-in is not network, so it still runs)

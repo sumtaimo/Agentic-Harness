@@ -3,7 +3,7 @@
  * install.mjs — copy this harness into another project, without overwriting that project's files.
  *
  *   node install.mjs /path/to/your/project [--autonomous off] [--no-auto-assign] [--with-skills | --no-skills]
- *     default: also installs one Skill Foundry skill (spec-writer); --with-skills all of them; --no-skills none; skipped with HARNESS_OFFLINE=1
+ *     default: also installs Skill Foundry's default skills (it decides the set; spec-writer if it has none yet); --with-skills all of them; --no-skills none; skipped with HARNESS_OFFLINE=1
  *   node install.mjs --reset [/path/to/your/project] [--autonomous off]   (clean a "Use this template" copy)
  *
  * - .harness/ is copied (your existing memory, inbox and logs are kept if already there).
@@ -315,22 +315,29 @@ if (optI > -1) {
   }
 }
 
-// Skill Foundry (github:sumtaimo/Skill-Foundry), owner decisions: every install gets ONE default skill (DEFAULT_SKILL);
-// --with-skills installs all of them, --no-skills none. Anyone who wants more takes it with Skill Foundry's own npx.
-// It never fails the install (offline, no npx, network error). HARNESS_OFFLINE=1 skips the network call (tests set it);
-// HARNESS_FOUNDRY_CMD=<script.mjs> runs a local foundry CLI instead of npx (offline tests, forks).
+// Skill Foundry (github:sumtaimo/Skill-Foundry), owner decisions: every install gets Skill Foundry's own DEFAULT skills
+// (`add --default`: Skill Foundry decides the set, one or more fitting skills per role). A Skill Foundry that does not know
+// `--default` yet answers with its usage line, and we fall back to ONE skill (FALLBACK_SKILL). --with-skills installs all of
+// them, --no-skills none; anyone who wants more takes it with Skill Foundry's own npx. It never fails the install (offline,
+// no npx, network error). HARNESS_OFFLINE=1 skips the network call (tests set it); HARNESS_FOUNDRY_CMD=<script.mjs> runs a
+// local foundry CLI instead of npx (offline tests, forks). Skipped when a Skill Foundry skill is already installed.
 const FOUNDRY = 'npx github:sumtaimo/Skill-Foundry';
-const DEFAULT_SKILL = 'spec-writer';
+const FALLBACK_SKILL = 'spec-writer';
 {
   const all = ARGS.includes('--with-skills');
   const local = process.env.HARNESS_FOUNDRY_CMD;
-  const done = fs.existsSync(path.join(target, '.claude', 'skills', DEFAULT_SKILL, '.foundry.json'));
+  const csk0 = path.join(target, '.claude', 'skills');
+  const done = fs.existsSync(csk0) && fs.readdirSync(csk0).some((n) => fs.existsSync(path.join(csk0, n, '.foundry.json')));
   if (!ARGS.includes('--no-skills') && (all || !done) && (local || process.env.HARNESS_OFFLINE !== '1')) {
     const win = process.platform === 'win32';
-    const what = all ? ['add', '--all', '--quiet'] : ['add', DEFAULT_SKILL, '--quiet'];
-    const [cmd, args] = local ? [process.execPath, [path.resolve(local), ...what]] : [win ? 'npx.cmd' : 'npx', ['--yes', 'github:sumtaimo/Skill-Foundry', ...what]];
-    const r = spawnSync(cmd, args, { cwd: target, encoding: 'utf8', timeout: 180000, shell: win && !local });
-    if (r.status === 0) report.push(all ? 'added  Skill Foundry skills (.claude/skills/ + .harness/skills/ pointers)' : `added  skill ${DEFAULT_SKILL} (.claude/skills/ + .harness/skills/ pointer)`);
+    const go = (what) => {
+      const [cmd, args] = local ? [process.execPath, [path.resolve(local), ...what]] : [win ? 'npx.cmd' : 'npx', ['--yes', 'github:sumtaimo/Skill-Foundry', ...what]];
+      return spawnSync(cmd, args, { cwd: target, encoding: 'utf8', timeout: 180000, shell: win && !local });
+    };
+    let r = go(all ? ['add', '--all', '--quiet'] : ['add', '--default', '--quiet']);
+    let how = all ? 'all Skill Foundry skills' : 'the default Skill Foundry skills';
+    if (!all && r.status !== 0 && /usage:/i.test(`${r.stderr}${r.stdout}`)) { r = go(['add', FALLBACK_SKILL, '--quiet']); how = `skill ${FALLBACK_SKILL}`; }
+    if (r.status === 0) report.push(`added  ${how} (.claude/skills/ + .harness/skills/ pointers)`);
     else report.push(`! Skill Foundry skill not installed (${(r.error?.message || r.stderr || `exit ${r.status}`).trim().split('\n').pop()}); the harness itself is installed`);
   }
   // Skill Foundry installed before the harness: its skills have no harness pointers yet, so workers do not get them.
