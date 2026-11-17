@@ -3825,5 +3825,134 @@ await test('SKILL_MATCH end to end: a Skill Foundry-style pointer (autoApply fal
   assert(!/### contrast-check/.test(miss), 'injected without a keyword');
 });
 
+
+// ───────────── Skill Foundry check at session start (report only, never updates, never blocks) ─────────────
+
+const FAKE_CHECK = `import fs from 'node:fs';
+fs.appendFileSync(process.env.FAKE_CALLS, process.argv.slice(2).join(' ') + '\\n');
+const m = process.env.FAKE_MODE || 'current';
+const e = (name, current = true, modified = []) => ({ name, installed: '1.0.0', latest: current ? '1.0.0' : '1.1.0', current, modified });
+if (m === 'fail') process.exit(3);
+const code = Number(process.env.FAKE_EXIT || 0);
+if (m === 'hang') setInterval(() => {}, 1000);
+else if (m === 'badjson') console.log('not json {');
+else if (m === 'nonarray') console.log('{"a":1}');
+else if (m === 'outdated') console.log(JSON.stringify([e('spec-writer', false), e('ux-review')]));
+else if (m === 'modified') console.log(JSON.stringify([e('spec-writer', true, ['SKILL.md', 'notes.md']), e('ux-review')]));
+else if (m === 'many') console.log(JSON.stringify([e('a', false), e('b', true, ['x']), e('c', true, ['x']), e('d', true, ['x']), e('f', true, ['x'])]));
+else console.log(JSON.stringify([e('spec-writer'), e('ux-review')]));
+if (m !== 'hang') process.exitCode = code;`;
+
+function foundryProject({ stamps = true } = {}) {
+  const d = sandbox();
+  const cmd = path.join(d, 'fake-check.mjs'); fs.writeFileSync(cmd, FAKE_CHECK);
+  const calls = path.join(d, 'calls.txt');
+  if (stamps) for (const n of ['spec-writer', 'ux-review']) {
+    fs.mkdirSync(path.join(d, '.claude', 'skills', n), { recursive: true });
+    fs.writeFileSync(path.join(d, '.claude', 'skills', n, 'SKILL.md'), `# ${n}\n`);
+    fs.writeFileSync(path.join(d, '.claude', 'skills', n, '.foundry.json'), JSON.stringify({ name: n, version: '1.0.0', hash: 'h-' + n, source: 'github:sumtaimo/Skill-Foundry', files: {} }));
+  }
+  const fenv = (mode, extra = {}) => ({ HARNESS_OFFLINE: '0', HARNESS_FOUNDRY_CMD: cmd, FAKE_CALLS: calls, FAKE_MODE: mode, HARNESS_NO_FETCH: '1', ...extra });
+  const callCount = () => { try { return fs.readFileSync(calls, 'utf8').split('\n').filter(Boolean).length; } catch { return 0; } };
+  return { d, fenv, callCount, cache: path.join(d, '.harness', 'foundry-check.json') };
+}
+const sfLines = (out) => out.split('\n').filter((l) => /Skill Foundry:/.test(l));
+
+await test('Skill Foundry check: quiet when all current; names outdated skills; names edited skills (hook, full and --brief)', () => {
+  let p = foundryProject();
+  let r = node(p.d, ['.harness/hook-session.mjs'], p.fenv('current'));
+  assert(r.status === 0 && !/Skill Foundry/.test(r.stdout) && p.callCount() === 1, `current: ${r.stdout}`);
+  p = foundryProject();
+  r = node(p.d, ['.harness/hook-session.mjs'], p.fenv('outdated'));
+  assert(r.status === 0 && sfLines(r.stdout).length === 1 && /1 skill\(s\) have an update \(spec-writer\)\. To update, ask the user to run: npx github:sumtaimo\/Skill-Foundry update/.test(r.stdout), `outdated: ${r.stdout}`);
+  p = foundryProject();
+  r = node(p.d, ['.harness/hook-session.mjs'], p.fenv('modified'));
+  assert(sfLines(r.stdout).length === 1 && /skill spec-writer was edited in \.claude\/skills \(modified files: SKILL\.md, notes\.md\)\. Tell the user; do not edit skills\./.test(r.stdout), `modified: ${r.stdout}`);
+  p = foundryProject();
+  r = node(p.d, ['.harness/hook-session.mjs', '--brief'], p.fenv('outdated'));
+  assert(r.status === 0 && /^! Skill Foundry: 1 skill\(s\) have an update/m.test(r.stdout), `brief: ${r.stdout}`);
+  assert(!fs.existsSync(path.join(p.d, '.claude', 'skills', 'spec-writer', 'SKILL.md.orig')) && fs.readFileSync(path.join(p.d, '.claude', 'skills', 'spec-writer', 'SKILL.md'), 'utf8') === '# spec-writer\n', 'the check changed a skill');
+});
+
+await test('Skill Foundry check: exit 2 (what check --json returns for outdated or edited skills) is a normal answer; other exit codes, timeouts and bad JSON say nothing', () => {
+  let p = foundryProject();
+  let r = node(p.d, ['.harness/hook-session.mjs'], p.fenv('outdated', { FAKE_EXIT: '2' }));
+  assert(r.status === 0 && sfLines(r.stdout).length === 1 && /1 skill\(s\) have an update \(spec-writer\)/.test(r.stdout), `exit 2 outdated: ${r.stdout}`);
+  assert(json(p.cache).ok === true, 'exit 2 not cached as an answer');
+  p = foundryProject();
+  r = node(p.d, ['.harness/hook-session.mjs'], p.fenv('modified', { FAKE_EXIT: '2' }));
+  assert(r.status === 0 && sfLines(r.stdout).length === 1 && /skill spec-writer was edited in \.claude\/skills \(modified files: SKILL\.md, notes\.md\)/.test(r.stdout), `exit 2 modified: ${r.stdout}`);
+  for (const [mode, extra] of [['outdated', { FAKE_EXIT: '1' }], ['outdated', { FAKE_EXIT: '3' }], ['modified', { FAKE_EXIT: '127' }], ['hang', { HARNESS_FOUNDRY_TIMEOUT_MS: '600' }], ['badjson', { FAKE_EXIT: '2' }]]) {
+    p = foundryProject();
+    r = node(p.d, ['.harness/hook-session.mjs'], p.fenv(mode, extra));
+    assert(r.status === 0 && !/Skill Foundry/.test(r.stdout) && /Agentic Harness/.test(r.stdout), `${mode} ${JSON.stringify(extra)}: ${r.status} ${r.stdout}`);
+    assert(json(p.cache).ok === false, `${mode} ${JSON.stringify(extra)}: failure not cached as a failure`);
+  }
+  p = foundryProject();
+  r = node(p.d, ['.harness/hook-session.mjs', '--brief'], p.fenv('outdated', { FAKE_EXIT: '2' }));
+  assert(/^! Skill Foundry: 1 skill\(s\) have an update/m.test(r.stdout), `brief exit 2: ${r.stdout}`);
+});
+
+await test('Skill Foundry check: at most 3 lines, however many skills are outdated or edited', async () => {
+  const fc = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'foundry-check.mjs')).href);
+  const many = fc.foundryLines([{ name: 'a', current: false, modified: [] }, ...['b', 'c', 'd', 'f'].map((name) => ({ name, current: true, modified: ['x'] }))]);
+  assert(many.length === 3 && /have an update \(a\)/.test(many[0]) && /skill b was edited/.test(many[1]) && /3 more skill\(s\) were edited .*c, d, f/.test(many[2]), many.join('\n'));
+  assert(fc.foundryLines([{ name: 'a', current: true, modified: [] }]).length === 0 && fc.foundryLines('nope').length === 0 && fc.foundryLines(null).length === 0, 'not quiet');
+  assert(fc.foundryLines(['b', 'c', 'd', 'e'].map((name) => ({ name, current: true, modified: ['x'] }))).length === 3, 'edited only: more than 3 lines');
+});
+
+await test('Skill Foundry check: a missing/failing/hanging/garbage command never blocks the hook and says nothing', () => {
+  for (const mode of ['fail', 'badjson', 'nonarray', 'hang']) {
+    const p = foundryProject();
+    const r = node(p.d, ['.harness/hook-session.mjs'], p.fenv(mode, { HARNESS_FOUNDRY_TIMEOUT_MS: '600' }));
+    assert(r.status === 0 && !/Skill Foundry/.test(r.stdout) && /Agentic Harness/.test(r.stdout), `${mode}: ${r.status} ${r.stdout}`);
+    assert(json(p.cache).ok === false, `${mode}: failure not cached`);
+  }
+  const p = foundryProject();
+  const r = node(p.d, ['.harness/hook-session.mjs'], p.fenv('current', { HARNESS_FOUNDRY_CMD: path.join(p.d, 'does-not-exist.mjs') }));
+  assert(r.status === 0 && !/Skill Foundry/.test(r.stdout) && /Agentic Harness/.test(r.stdout), `missing command: ${r.stdout}`);
+});
+
+await test('Skill Foundry check: 24 h cache (1 h after a failure), dropped when the skills change; offline and no-skills folders never call it', async () => {
+  const fc = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'foundry-check.mjs')).href);
+  const p = foundryProject(); const t0 = Date.now(); const H = 3600 * 1000;
+  const run = (mode, now, extra = {}) => fc.foundryCheck({ root: p.d, env: { ...process.env, ...p.fenv(mode), ...extra }, now });
+  let r = run('outdated', t0);
+  assert(r.source === 'live' && r.lines.length === 1 && p.callCount() === 1, JSON.stringify(r));
+  r = run('outdated', t0 + 23 * H); // still fresh: no new call, same answer
+  assert(r.source === 'cache' && r.lines.length === 1 && p.callCount() === 1, JSON.stringify(r));
+  r = run('current', t0 + 25 * H); // older than 24 h: asks again and sees the new answer
+  assert(r.source === 'live' && r.lines.length === 0 && p.callCount() === 2, JSON.stringify(r));
+  // the user updated or edited a skill: the stamp changes, so the old answer is dropped at once
+  run('outdated', t0 + 26 * H); assert(p.callCount() === 2, 'cache not used');
+  fs.writeFileSync(path.join(p.d, '.claude', 'skills', 'spec-writer', '.foundry.json'), JSON.stringify({ name: 'spec-writer', version: '1.1.0', hash: 'new', files: {} }));
+  r = run('current', t0 + 26 * H);
+  assert(r.source === 'live' && p.callCount() === 3, `stamp change: ${JSON.stringify(r)}`);
+  // failures are remembered for 1 hour only
+  const q = foundryProject(); const runQ = (mode, now) => fc.foundryCheck({ root: q.d, env: { ...process.env, ...q.fenv(mode) }, now });
+  assert(runQ('fail', t0).source === 'failed' && q.callCount() === 1, 'fail');
+  assert(runQ('current', t0 + H / 2).source === 'cache' && q.callCount() === 1, 'a failure was not remembered');
+  assert(runQ('current', t0 + 2 * H).source === 'live' && q.callCount() === 2, 'an old failure was not retried');
+  // HARNESS_OFFLINE=1 skips everything (no call, no cache file)
+  const o = foundryProject();
+  const ro = fc.foundryCheck({ root: o.d, env: { ...process.env, ...o.fenv('outdated', { HARNESS_OFFLINE: '1' }) } });
+  assert(ro.source === 'offline' && ro.lines.length === 0 && o.callCount() === 0 && !fs.existsSync(o.cache), JSON.stringify(ro));
+  // no .claude/skills folder, or one without a .foundry.json: no call
+  const n = foundryProject({ stamps: false });
+  assert(fc.foundryCheck({ root: n.d, env: { ...process.env, ...n.fenv('outdated') } }).source === 'none' && n.callCount() === 0, 'called without skills');
+  fs.mkdirSync(path.join(n.d, '.claude', 'skills', 'mine'), { recursive: true }); fs.writeFileSync(path.join(n.d, '.claude', 'skills', 'mine', 'SKILL.md'), '# mine\n');
+  assert(fc.foundryCheck({ root: n.d, env: { ...process.env, ...n.fenv('outdated') } }).source === 'none' && n.callCount() === 0, 'called for a skill Skill Foundry did not install');
+  assert(/^\.harness\/foundry-check\.json$/m.test(fs.readFileSync(path.join(REPO, '.gitignore'), 'utf8')), 'cache file not git-ignored');
+});
+
+await test('Skill Foundry check: doctor shows the same lines as a note (not a failure)', () => {
+  const p = foundryProject();
+  const r = node(p.d, ['.harness/doctor.mjs'], p.fenv('outdated'));
+  assert(/ℹ Skill Foundry: 1 skill\(s\) have an update \(spec-writer\)/.test(r.stdout), r.stdout.split('\n').filter((l) => /Skill Foundry/.test(l)).join('|'));
+  const q = foundryProject();
+  const r2 = node(q.d, ['.harness/doctor.mjs'], q.fenv('current'));
+  assert(!/have an update|was edited/.test(r2.stdout) && r.status === r2.status, 'doctor result changed because of the check');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

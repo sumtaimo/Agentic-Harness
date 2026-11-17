@@ -57,6 +57,8 @@ try {
   const coreEdited = [...(core.changed || []), ...(core.missing || [])];
   const coreAdded = core.added || [];
   const taughtCount = (() => { try { return listLessons(FILES.lessons).length; } catch { return 0; } })();
+  // Installed Skill Foundry skills that are outdated or were edited: report only (never updates anything). Silent when all is fine.
+  const foundryLines = await (async () => { try { return (await import('./lib/foundry-check.mjs')).foundryCheck({ root: ROOT }).lines; } catch { return []; } })();
 
   if (brief) {
     const briefLines = [
@@ -159,6 +161,7 @@ try {
     if (/^- .*\(fill me/im.test(profile)) notes.push('profile.md incomplete');
     if (notes.length) briefLines.push(`! Notice: ${notes.join(' | ')}`);
 
+    for (const l of foundryLines) briefLines.push(`! ${l}`);
     briefLines.push('- Menu: node .harness/start.mjs (template: npm start) · Web UI: node .harness/ui.mjs · Health: node .harness/doctor.mjs · Rules: AGENTS.md');
     console.log(briefLines.join('\n'));
     process.exit(0);
@@ -240,6 +243,7 @@ try {
     if (coreAdded.length) lines.push(`- WARNING: unmanifested core file(s) found in .harness/ (${coreAdded.join(', ')}). Tell the user; core files belong to the template.`);
   }
   if (newestStopped && !newestOpen) lines.push(`- A previous editor run stopped and needs a human decision: ${newestStopped.id} ("${newestStopped.title}", ${newestStopped.status}). Report it to the user if they have not seen it.`);
+  for (const l of foundryLines) lines.push(`- ${l}`);
   lines.push('- To run work with visible named agents: use /harness:run <goal>. Autonomous: /harness:auto. Team: /harness:team. Status: /harness:status. Health check: /harness:doctor. Teach a rule: /harness:teach <rule>. Several sessions at once (Session A + up to 4 child sessions): /harness:sessions.');
   console.log(lines.join('\n'));
 } catch { /* never block the session */ }

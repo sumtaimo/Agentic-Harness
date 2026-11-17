@@ -187,6 +187,7 @@ for (const s of Object.values(skills)) {
         if (engine && !(role.allowedTools || []).some((t) => t === 'Bash(node:*)' || t === 'Bash(*)' || t === 'Bash')) { warn(`Skill Foundry: ${n} runs engine/*.mjs scripts, but role ${r} may not run node. Let DEV_ENGINEER run that step, or (project owner's choice) add "Bash(node:*)" to .harness/roles/${role.file}`); issues++; }
       }
     }
+    try { const { foundryCheck } = await import('./lib/foundry-check.mjs'); for (const l of foundryCheck({ root: ROOT }).lines) note(l); } catch { /* the check is a courtesy: never fail the doctor */ }
     issues ? note(`Skill Foundry: ${stamps.length} skill(s), ${issues} finding(s) above. Deeper check: ${FCLI} doctor`) : ok(`Skill Foundry: ${stamps.length} skill(s) wired to the harness (${stamps.join(', ')})`);
   }
 }
