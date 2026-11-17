@@ -11,7 +11,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
-import { readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
+import { SKILL_MATCH, readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
 
 ensureDirs();
 const ok = (m) => console.log(`  ✔ ${m}`);
@@ -177,7 +177,8 @@ for (const s of Object.values(skills)) {
       if (!p.installedBy.startsWith('skill-foundry')) { warn(`Skill Foundry: .harness/skills/${n}/SKILL.md is the project's own skill, not the foundry pointer, so the foundry skill is not wired. Fix: ${FCLI} update ${n} --sync-harness (keeps yours as SKILL.md.orig) or keep yours`); issues++; continue; }
       const pv = p.installedBy.split(/\s+/)[1];
       if (st.version && pv && pv !== st.version) { warn(`Skill Foundry: ${n} pointer is for ${pv} but ${st.version} is installed. Fix: ${FCLI} update ${n}`); issues++; }
-      if (!p.autoApply) { warn(`Skill Foundry: ${n} pointer has autoApply off, so it reaches only members that list it in team.json "skills". Fix: ${FCLI} update ${n}`); issues++; }
+      // With SKILL_MATCH keywords inject for every member, so autoApply off is normal; only a pointer with no keywords is stuck.
+      if (!p.autoApply && (!SKILL_MATCH || !p.keywords.length)) { warn(`Skill Foundry: ${n} pointer has autoApply off${SKILL_MATCH ? ' and no keywords' : ''}, so it reaches only members that list it in team.json "skills". Fix: ${FCLI} update ${n}`); issues++; }
       const engine = fs.existsSync(path.join(csk, n, 'engine'));
       for (const r of p.roles) {
         const role = roles[r]; if (!role) continue;

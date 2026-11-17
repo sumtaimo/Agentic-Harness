@@ -3739,7 +3739,10 @@ await test('Dual order (fake Skill Foundry): harness→foundry and foundry→har
   const ptr = path.join(b, '.harness', 'skills', 'fx-engine', 'SKILL.md');
   fs.writeFileSync(ptr, fs.readFileSync(ptr, 'utf8').replace('skill-foundry 1.2.0', 'skill-foundry 1.1.0').replace('autoApply: true', 'autoApply: false'));
   const out = doc(b);
-  assert(/pointer is for 1\.1\.0 but 1\.2\.0 is installed/.test(out) && /autoApply off/.test(out), out.split('Skill Foundry').slice(1).join('|'));
+  assert(/pointer is for 1\.1\.0 but 1\.2\.0 is installed/.test(out) && /autoApply off and no keywords/.test(out), out.split('Skill Foundry').slice(1).join('|'));
+  // autoApply off WITH keywords is normal under SKILL_MATCH: no warning
+  fs.writeFileSync(ptr, fs.readFileSync(ptr, 'utf8').replace('keywords: []', 'keywords: ["contrast"]'));
+  assert(!/autoApply off/.test(doc(b)), 'stale autoApply warning with keywords');
 });
 
 
