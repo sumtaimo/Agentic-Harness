@@ -31,8 +31,8 @@ function safeLoadConfig() {
   try { return loadConfig(); } catch { return {}; }
 }
 
-export function readStatusData() {
-  const status = collectStatus();
+export function readStatusData({ skipSessions = false } = {}) {
+  const status = collectStatus({ skipSessions });
   const state = readJsonSafe(FILES.state, {});
   return {
     ts: new Date().toISOString(),
@@ -52,12 +52,11 @@ export function readStatusData() {
 }
 
 export function readLogsData(limit = 100) {
-  let live = [];
+  let allLive = [];
   try {
-    live = fs.readFileSync(FILES.live, 'utf8')
+    allLive = fs.readFileSync(FILES.live, 'utf8')
       .split(/\r?\n/)
-      .filter((l) => l.trim().length > 0)
-      .slice(-limit);
+      .filter((l) => l.trim().length > 0);
   } catch { /* no live log yet */ }
 
   const telemetry = [];
@@ -74,7 +73,9 @@ export function readLogsData(limit = 100) {
 
   return {
     ts: new Date().toISOString(),
-    live,
+    liveTotal: allLive.length,
+    live: allLive.slice(-limit),
+    telemetryTotal: telemetry.length,
     telemetry: telemetry.slice(-limit)
   };
 }
@@ -85,7 +86,7 @@ export function readUsageData(days = 7) {
   const today = aiUsageSince(todayIso);
   for (const row of Object.values(today)) row.usd = Math.round((Number(row.usd) || 0) * 1e6) / 1e6;
 
-  const spanDays = Math.max(1, Number(days) || 7);
+  const spanDays = Math.max(1, Math.min(365, Number(days) || 7));
   const since = new Date(Date.now() - (spanDays - 1) * 86400000).toISOString().slice(0, 10);
   const rows = [];
   try {
@@ -136,6 +137,7 @@ export function readUsageData(days = 7) {
 
   return {
     ts: new Date().toISOString(),
+    rangeDays: spanDays,
     dailyLimits,
     today,
     days7: { since, days: spanDays, byDay, totals },
@@ -278,6 +280,9 @@ const DASHBOARD_HTML = `<!doctype html>
     cursor: pointer;
   }
   button:hover { border-color: var(--accent); }
+  button.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .seg-btn { padding: 3px 8px; font-size: 0.75rem; }
+  .pill-group { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .pill {
     display: inline-block;
     padding: 2px 8px;
@@ -321,6 +326,7 @@ const DASHBOARD_HTML = `<!doctype html>
     justify-content: space-between;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
   }
   .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 10px; font-size: 0.86rem; }
   .kv .k { color: var(--muted); }
@@ -357,6 +363,7 @@ const DASHBOARD_HTML = `<!doctype html>
   <div class="brand">
     <div class="brand-row">
       <h1>Agentic Harness</h1>
+      <span id="version-pill" class="pill">--</span>
       <span class="pill info">READ-ONLY · 127.0.0.1</span>
       <span id="conn-pill" class="pill ok">Live</span>
     </div>
@@ -379,9 +386,14 @@ const DASHBOARD_HTML = `<!doctype html>
     </section>
 
     <section class="card">
-      <h2><span>AI Engines &amp; Daily Quota</span><span id="mem-pill" class="pill">--</span></h2>
+      <h2><span>AI Engines &amp; Daily Quota</span><span id="engines-pill" class="pill">--</span></h2>
       <div id="engines-badges" class="badge-row"></div>
       <div id="usage-today" class="kv"></div>
+    </section>
+
+    <section class="card">
+      <h2><span>Governance, Team &amp; Git</span><span id="mem-pill" class="pill">--</span></h2>
+      <div id="gov-kv" class="kv"></div>
     </section>
 
     <section class="card">
@@ -391,7 +403,14 @@ const DASHBOARD_HTML = `<!doctype html>
     </section>
 
     <section class="card">
-      <h2><span>7-Day Quota &amp; Usage</span><span id="usage-since" class="pill">--</span></h2>
+      <h2>
+        <span id="usage-title">7-Day Quota &amp; Usage</span>
+        <span class="pill-group">
+          <button id="usage-7d" type="button" class="seg-btn active">7d</button>
+          <button id="usage-30d" type="button" class="seg-btn">30d</button>
+          <span id="usage-since" class="pill">--</span>
+        </span>
+      </h2>
       <div id="usage-body" class="table-wrap"></div>
     </section>
 
@@ -451,9 +470,12 @@ const DASHBOARD_HTML = `<!doctype html>
 
   let liveRefresh = true;
   let inFlight = false;
+  let selectedDays = 7;
   const connPill = document.getElementById('conn-pill');
   const toggleBtn = document.getElementById('toggle-live');
   const refreshBtn = document.getElementById('refresh-now');
+  const usage7dBtn = document.getElementById('usage-7d');
+  const usage30dBtn = document.getElementById('usage-30d');
 
   toggleBtn.addEventListener('click', () => {
     liveRefresh = !liveRefresh;
@@ -462,13 +484,29 @@ const DASHBOARD_HTML = `<!doctype html>
     connPill.textContent = liveRefresh ? 'Live' : 'Paused';
   });
 
+  usage7dBtn.addEventListener('click', () => {
+    if (selectedDays === 7) return;
+    selectedDays = 7;
+    usage7dBtn.classList.add('active');
+    usage30dBtn.classList.remove('active');
+    refresh();
+  });
+
+  usage30dBtn.addEventListener('click', () => {
+    if (selectedDays === 30) return;
+    selectedDays = 30;
+    usage30dBtn.classList.add('active');
+    usage7dBtn.classList.remove('active');
+    refresh();
+  });
+
   async function fetchJson(url) {
     const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) throw new Error(url + ' -> HTTP ' + res.status);
     return res.json();
   }
 
-  function renderAlerts(status, usage) {
+  function renderAlerts(status, usage, sessions) {
     const box = document.getElementById('alerts');
     const items = [];
     if (status.configError) {
@@ -477,6 +515,11 @@ const DASHBOARD_HTML = `<!doctype html>
     if (Array.isArray(status.coreModified) && status.coreModified.length) {
       items.push(el('div', { className: 'alert err' }, 'Harness core files differ from MANIFEST.json: ' + status.coreModified.join(', ')));
     }
+    if (status.team && !status.team.valid) {
+      items.push(el('div', { className: 'alert err' }, 'Team configuration invalid: ' + (status.team.errors || []).join('; ')));
+    } else if (status.team && Array.isArray(status.team.staleAgents) && status.team.staleAgents.length) {
+      items.push(el('div', { className: 'alert' }, 'Editor agent files out of sync with team.json: ' + status.team.staleAgents.join(', ') + ' — run: node .harness/team.mjs sync-agents'));
+    }
     for (const w of (usage.warnings || status.quotaWarnings || [])) {
       items.push(el('div', { className: w.over ? 'alert err' : 'alert' }, w.message || ('Quota warning: ' + w.label + ' at ' + w.pct + '%')));
     }
@@ -484,11 +527,48 @@ const DASHBOARD_HTML = `<!doctype html>
       const desc = status.backlog.held.map((h) => h.id + ' ("' + h.title + '") — run: node .harness/backlog.mjs approve ' + h.id).join(' | ');
       items.push(el('div', { className: 'alert' }, 'Needs your OK (' + status.backlog.held.length + ' held): ' + desc));
     }
+    if (status.visible && Array.isArray(status.visible.open) && status.visible.open.length) {
+      const desc = status.visible.open.slice(0, 3).map((r) => r.id + ' (' + r.status + ': "' + r.title + '")').join(', ');
+      const firstId = status.visible.open[0].id;
+      items.push(el('div', { className: 'alert' }, 'Open editor run(s): ' + desc + ' — inspect: node .harness/visible.mjs handoff ' + firstId + ' | resume: node .harness/dispatch.mjs --resume-visible ' + firstId + ' --wait'));
+    }
+    if (status.visible && Array.isArray(status.visible.stopped) && status.visible.stopped.length) {
+      const desc = status.visible.stopped.slice(0, 3).map((r) => r.id + ' (' + r.status + ': "' + r.title + '")').join(', ');
+      const firstId = status.visible.stopped[0].id;
+      items.push(el('div', { className: 'alert err' }, 'Stopped editor run(s) need human decision: ' + desc + ' — inspect: node .harness/visible.mjs handoff ' + firstId));
+    }
+    if (sessions && sessions.status === 'ok' && Array.isArray(sessions.tasks)) {
+      const active = sessions.tasks.filter((t) => !['MERGED', 'CLEANED'].includes(t.status));
+      const risky = active.filter((t) => t.risk);
+      const done = active.filter((t) => t.status === 'DONE' && !t.risk);
+      if (risky.length) {
+        const desc = risky.map((t) => t.id + ' (' + t.status + ': ' + (t.note || t.title || '') + ')').join(' | ');
+        items.push(el('div', { className: 'alert err' }, 'Child session HIGH RISK: ' + desc + ' — run: node .harness/sessions.mjs handoff ' + risky[0].id));
+      }
+      if (done.length) {
+        items.push(el('div', { className: 'alert' }, 'Child session(s) DONE and waiting for your merge approval: ' + done.map((t) => t.id).join(', ') + ' — run: node .harness/sessions.mjs merge ' + done[0].id));
+      }
+    }
+    const warns = status.warnings || {};
+    if (Array.isArray(warns.stagingLeftovers) && warns.stagingLeftovers.length) {
+      items.push(el('div', { className: 'alert' }, 'Staging backup leftovers in .harness/staging/: ' + warns.stagingLeftovers.join(', ')));
+    }
+    if (Array.isArray(warns.staleInProgress) && warns.staleInProgress.length) {
+      items.push(el('div', { className: 'alert' }, 'Stale IN_PROGRESS backlog task(s) with no active controller: ' + warns.staleInProgress.join(', ') + ' — reset: node .harness/backlog.mjs ready ' + warns.staleInProgress[0]));
+    }
     box.replaceChildren(...items);
   }
 
   function renderStatus(status) {
     document.getElementById('root-path').textContent = status.root || '';
+    const vPill = document.getElementById('version-pill');
+    if (status.version) {
+      vPill.textContent = 'v' + status.version;
+      vPill.style.display = 'inline-block';
+    } else {
+      vPill.style.display = 'none';
+    }
+
     const ctrlPill = document.getElementById('ctrl-pill');
     const c = status.controller || {};
     ctrlPill.className = c.running ? 'pill ok' : 'pill';
@@ -499,13 +579,21 @@ const DASHBOARD_HTML = `<!doctype html>
       : '(unknown)';
     const st = status.state || {};
     const q = status.queues || {};
+    const cycleInfo = st.cycle ? ' (cycle ' + st.cycle + '/' + (st.maxCycles || 3) + ')' : '';
+    const rawPhase = c.phase || st.phase || 'idle';
+    const phaseText = c.running
+      ? (rawPhase + cycleInfo)
+      : (st.phase ? ('Stopped (last: ' + st.phase + ')' + cycleInfo) : 'Stopped / idle');
     const rows = [
-      ['Phase', (c.phase || st.phase || 'idle') + (st.cycle ? ' (cycle ' + st.cycle + '/' + (st.maxCycles || 3) + ')' : '')],
+      ['Phase', phaseText],
       ['Task', c.taskTitle || '(none)'],
-      ['Autopilot', status.autonomous ? 'ON' : 'off'],
+      ['Engine / Mode', (st.engine || '-') + ' / ' + (st.mode || '-')],
+      ['Workers', st.workerSummary || '-'],
+      ['Autopilot', status.autonomous ? ('ON' + (st.autoStatus && st.autoStatus !== 'off' ? ' (' + st.autoStatus + ')' : '')) : 'off'],
       ['Verify cmd', verifyStr],
       ['Last gate', st.lastGateStatus || '-'],
-      ['Queues', 'inbox ' + (q.inbox || 0) + ' · completed ' + (q.completed || 0) + ' · failed ' + (q.failed || 0)]
+      ['Queues', 'inbox ' + (q.inbox || 0) + ' · completed ' + (q.completed || 0) + ' · failed ' + (q.failed || 0)],
+      ['Updated', st.updatedAt || '-']
     ];
     const kv = document.getElementById('ctrl-kv');
     kv.replaceChildren(...rows.flatMap(([k, v]) => [
@@ -513,9 +601,13 @@ const DASHBOARD_HTML = `<!doctype html>
       el('div', { className: 'v' }, v)
     ]));
 
-    document.getElementById('mem-pill').textContent = (status.taughtCount || 0) + ' taught rule(s)';
-    const engBox = document.getElementById('engines-badges');
     const engines = status.engines || [];
+    const readyCount = engines.filter((e) => e.status === 'ready').length;
+    const engPill = document.getElementById('engines-pill');
+    engPill.className = readyCount > 0 ? 'pill ok' : 'pill warn';
+    engPill.textContent = readyCount + '/' + engines.length + ' ready';
+
+    const engBox = document.getElementById('engines-badges');
     engBox.replaceChildren(...(engines.length
       ? engines.map((e) => el('span', { className: pillClassForStatus(e.status) }, e.name + ': ' + e.status))
       : [el('span', { className: 'muted' }, 'No engines configured')]));
@@ -525,11 +617,39 @@ const DASHBOARD_HTML = `<!doctype html>
       el('div', { className: 'k' }, 'Today summary'),
       el('div', { className: 'v' }, status.usageToday || 'No AI calls logged today (UTC)')
     );
+
+    const warns = status.warnings || {};
+    document.getElementById('mem-pill').textContent = (status.taughtCount || 0) + ' taught · ' + (warns.autoLessonsCount || 0) + ' auto';
+    const ch = status.charter || {};
+    const chStr = ch.exists
+      ? ('autonomous: ' + (ch.autonomous ? 'ON' : 'off') + ', maxAuto: ' + (ch.maxAutoTasksPerRun ?? 3) + ', realCheck: ' + (ch.requireRealCheck !== false ? 'yes' : 'no') + (ch.hasPlaceholder ? ' [placeholder goals]' : ''))
+      : 'not found';
+    const tm = status.team;
+    const tmStr = !tm
+      ? 'no team.json'
+      : tm.valid
+        ? ('valid (' + tm.leadCount + ' leads, ' + tm.routedCount + ' routed; agents ' + (tm.agentsInSync ? 'in sync' : tm.staleAgents.length + ' stale') + ')')
+        : ('INVALID (' + tm.errorCount + ' err)');
+    const gt = status.git || {};
+    const gtStr = !gt.isRepo
+      ? 'not a git repository'
+      : (gt.branch + (gt.dirtyCount ? ' (' + gt.dirtyCount + ' dirty)' : ' (clean)') + (gt.uatExists ? ' · ' + (gt.integrationBranch || 'uat') + '@' + gt.uatTip : '') + (gt.workerBranches ? ' · ' + gt.workerBranches + ' worker branch(es)' : ''));
+    const govRows = [
+      ['Charter', chStr],
+      ['Team', tmStr],
+      ['Git', gtStr],
+      ['Profile', warns.profileIncomplete ? 'incomplete ("fill me" placeholders)' : 'ready']
+    ];
+    document.getElementById('gov-kv').replaceChildren(...govRows.flatMap(([k, v]) => [
+      el('div', { className: 'k' }, k),
+      el('div', { className: 'v' }, v)
+    ]));
   }
 
   function renderBacklog(bl) {
     const c = bl.counts || {};
-    const total = (bl.tasks || []).length;
+    const allTasks = Array.isArray(bl.tasks) ? bl.tasks : [];
+    const total = allTasks.length;
     document.getElementById('backlog-pill').textContent = total + ' task(s)';
     const countsBox = document.getElementById('backlog-counts');
     countsBox.replaceChildren(
@@ -540,12 +660,18 @@ const DASHBOARD_HTML = `<!doctype html>
       el('span', { className: 'pill' }, 'BACKLOG ' + (c.BACKLOG || 0))
     );
     const body = document.getElementById('backlog-body');
-    const tasks = (bl.tasks || []).slice(0, 25);
+    const rank = { IN_PROGRESS: 0, READY: 1, BLOCKED: 2, BACKLOG: 3, DONE: 4 };
+    const tasks = [...allTasks].sort((a, b) => {
+      const ra = rank[a.status || 'BACKLOG'] ?? 3;
+      const rb = rank[b.status || 'BACKLOG'] ?? 3;
+      if (ra !== rb) return ra - rb;
+      return (a.priority ?? 99) - (b.priority ?? 99);
+    }).slice(0, 25);
     if (!tasks.length) {
       body.replaceChildren(el('div', { className: 'muted' }, 'Backlog is empty.'));
       return;
     }
-    body.replaceChildren(makeTable(
+    const table = makeTable(
       ['ID', 'Status', 'Role', 'Title'],
       tasks.map((t) => [
         { mono: true, node: el('span', null, t.id) },
@@ -553,23 +679,30 @@ const DASHBOARD_HTML = `<!doctype html>
         { mono: true, node: el('span', null, t.role || '-') },
         el('span', null, (t.title || t.goal || '-') + (t.blockedReason ? ' [' + t.blockedReason + ']' : ''))
       ])
-    ));
+    );
+    const nodes = [table];
+    if (allTasks.length > 25) nodes.push(el('div', { className: 'muted' }, 'Showing top 25 of ' + allTasks.length + ' tasks.'));
+    body.replaceChildren(...nodes);
   }
 
   function renderUsage(usage) {
     const d7 = usage.days7 || {};
+    const span = usage.rangeDays || d7.days || 7;
+    document.getElementById('usage-title').textContent = span + '-Day Quota & Usage';
     document.getElementById('usage-since').textContent = 'Since ' + (d7.since || '-');
     const body = document.getElementById('usage-body');
-    const totals = Object.entries(d7.totals || {});
-    if (!totals.length) {
-      body.replaceChildren(el('div', { className: 'muted' }, 'No AI usage logged in the last 7 days.'));
-      return;
-    }
     const todayMap = usage.today || {};
     const limits = usage.dailyLimits || {};
+    const periodTotals = d7.totals || {};
+    const engines = [...new Set([...Object.keys(periodTotals), ...Object.keys(todayMap), ...Object.keys(limits)])];
+    if (!engines.length) {
+      body.replaceChildren(el('div', { className: 'muted' }, 'No AI usage or daily limits configured yet.'));
+      return;
+    }
     body.replaceChildren(makeTable(
-      ['Engine', 'Today Calls / Cap', 'Today USD', '7d Calls', '7d Tokens', '7d USD'],
-      totals.map(([eng, row]) => {
+      ['Engine', 'Today Calls / Cap', 'Today USD', span + 'd Calls', span + 'd Tokens', span + 'd USD'],
+      engines.map((eng) => {
+        const row = periodTotals[eng] || { calls: 0, failed: 0, tokens: 0, usd: 0 };
         const td = todayMap[eng] || { calls: 0, usd: 0 };
         const cap = limits[eng] || {};
         const capStr = td.calls + (typeof cap.calls === 'number' ? ' / ' + cap.calls : '');
@@ -631,21 +764,28 @@ const DASHBOARD_HTML = `<!doctype html>
         { mono: true, node: el('span', null, t.id) },
         { node: el('span', { className: t.risk ? 'pill err' : pillClassForStatus(t.status) }, t.status + (t.risk ? ' · HIGH RISK' : '')) },
         el('span', null, t.title || '-'),
-        el('span', null, t.note || t.risk || '-')
+        el('span', null, t.note || (typeof t.risk === 'string' ? t.risk : t.risk ? 'HIGH RISK' : '-'))
       ])
     ));
   }
 
   function renderLogs(logs) {
     const live = logs.live || [];
-    document.getElementById('live-count').textContent = live.length + ' line(s)';
+    const liveTotal = logs.liveTotal ?? live.length;
+    document.getElementById('live-count').textContent = liveTotal > live.length
+      ? (live.length + ' of ' + liveTotal + ' line(s)')
+      : (live.length + ' line(s)');
     const pre = document.getElementById('live-log');
     const atBottom = Math.abs(pre.scrollHeight - pre.clientHeight - pre.scrollTop) < 24;
     pre.textContent = live.length ? live.join('\\n') : 'No live events yet (.harness/live.log).';
     if (atBottom) pre.scrollTop = pre.scrollHeight;
 
-    const tel = (logs.telemetry || []).slice(-40).reverse();
-    document.getElementById('tel-count').textContent = (logs.telemetry || []).length + ' event(s)';
+    const telAll = logs.telemetry || [];
+    const telTotal = logs.telemetryTotal ?? telAll.length;
+    const tel = telAll.slice(-40).reverse();
+    document.getElementById('tel-count').textContent = telTotal > tel.length
+      ? (tel.length + ' of ' + telTotal + ' event(s)')
+      : (telAll.length + ' event(s)');
     const telBody = document.getElementById('tel-body');
     if (!tel.length) {
       telBody.replaceChildren(el('div', { className: 'muted' }, 'No telemetry events logged yet.'));
@@ -666,14 +806,14 @@ const DASHBOARD_HTML = `<!doctype html>
     inFlight = true;
     try {
       const [status, logs, usage, backlog, visible, sessions] = await Promise.all([
-        fetchJson('/api/status'),
+        fetchJson('/api/status?skipSessions=1'),
         fetchJson('/api/logs'),
-        fetchJson('/api/usage'),
+        fetchJson('/api/usage?days=' + selectedDays),
         fetchJson('/api/backlog'),
         fetchJson('/api/visible'),
         fetchJson('/api/sessions')
       ]);
-      renderAlerts(status, usage);
+      renderAlerts(status, usage, sessions);
       renderStatus(status);
       renderBacklog(backlog);
       renderUsage(usage);
@@ -742,13 +882,14 @@ export function createUiHandler() {
       return;
     }
     const headOnly = method === 'HEAD';
-    let pathname = '/';
+    let parsedUrl;
     try {
-      pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+      parsedUrl = new URL(req.url || '/', 'http://127.0.0.1');
     } catch {
       sendJson(res, 400, { error: 'Invalid request URL' }, headOnly);
       return;
     }
+    const pathname = parsedUrl.pathname;
 
     if (pathname === '/' || pathname === '/index.html') {
       res.writeHead(200, {
@@ -766,9 +907,25 @@ export function createUiHandler() {
       return;
     }
 
-    if (pathname === '/api/status') { sendJson(res, 200, readStatusData(), headOnly); return; }
+    if (pathname === '/api/status') {
+      const skipSessions = parsedUrl.searchParams.get('skipSessions') === '1';
+      sendJson(res, 200, readStatusData({ skipSessions }), headOnly);
+      return;
+    }
     if (pathname === '/api/logs') { sendJson(res, 200, readLogsData(), headOnly); return; }
-    if (pathname === '/api/usage') { sendJson(res, 200, readUsageData(), headOnly); return; }
+    if (pathname === '/api/usage') {
+      const rawDays = parsedUrl.searchParams.get('days');
+      let days = 7;
+      if (rawDays !== null) {
+        if (!/^\d+$/.test(rawDays) || Number(rawDays) < 1 || Number(rawDays) > 365) {
+          sendJson(res, 400, { error: `Invalid days "${rawDays}": expected integer 1..365` }, headOnly);
+          return;
+        }
+        days = Number(rawDays);
+      }
+      sendJson(res, 200, readUsageData(days), headOnly);
+      return;
+    }
     if (pathname === '/api/backlog') { sendJson(res, 200, readBacklogData(), headOnly); return; }
     if (pathname === '/api/sessions') { sendJson(res, 200, readSessionsData(), headOnly); return; }
     if (pathname === '/api/visible') { sendJson(res, 200, readVisibleData(), headOnly); return; }

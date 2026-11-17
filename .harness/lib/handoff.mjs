@@ -79,12 +79,19 @@ export function hasVisibleBaseline(run) {
   return Boolean(run?.baseline?.rollbackAvailable && run.baseline.dir && fs.existsSync(path.join(ROOT, run.baseline.dir)));
 }
 
+export function compareVisibleRuns(a, b) {
+  const ta = String(a?.createdAt || '');
+  const tb = String(b?.createdAt || '');
+  if (ta && tb && ta !== tb) return ta.localeCompare(tb);
+  return String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+
 export function listVisibleRuns() {
   try {
     return fs.readdirSync(VISIBLE_DIR)
       .map((d) => readJsonSafe(path.join(VISIBLE_DIR, d, 'run.json'), null))
       .filter(Boolean)
-      .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      .sort(compareVisibleRuns);
   } catch {
     return [];
   }

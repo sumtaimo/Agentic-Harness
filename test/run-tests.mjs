@@ -3331,6 +3331,266 @@ await test('Priority 2 lost-session guards: hook-session --help & corrupt config
   assert(vis(d2, 'rollback', open2).status === 0, 'cleanup open2');
 });
 
+await test('bug-hunter Batch 4 (daemon, usage, visible): concurrent --tick preserves running daemon state, SIGTERM writes STOPPED, dailyLimitReached skips broken lines, usage --days guards, visible brief guards', async () => {
+  const d = sandbox();
+  const cfgFile = path.join(d, '.harness', 'config.json');
+  const cfg = json(cfgFile);
+  cfg.dailyLimits = { mock: { calls: 100 } };
+  fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2));
+
+  const today = new Date().toISOString().slice(0, 10);
+  fs.writeFileSync(path.join(d, '.harness', 'telemetry.log'), [
+    `{broken json line "AGENT_USAGE" ${today}`,
+    JSON.stringify({ ts: `${today}T00:01:00.000Z`, phase: 'AGENT_USAGE', engine: 'mock', model: 'fast', ok: true, usd: 0.01, tokens: 10 })
+  ].join('\n') + '\n');
+  setCharter(d, { autonomous: 'on' });
+  setBacklog(d, [{
+    id: 'T1', title: 'Concurrent tick job', priority: 1, status: 'READY',
+    verifyCmd: existsCheck('src/tick-ok.txt'),
+    subtasks: [{ id: 'wt', role: 'DEV_ENGINEER', targetFiles: ['src/tick-ok.txt'], prompt: 'WRITE src/tick-ok.txt ok' }]
+  }]);
+
+  const daemon = spawn(process.execPath, ['.harness/daemon.mjs', '--watch'], { cwd: d, env, stdio: 'ignore' });
+  try {
+    assert(await waitFor(() => fs.existsSync(path.join(d, '.harness', 'daemon.pid')) && fs.existsSync(path.join(d, '.harness', 'state.json')) && stateOf(d).phase === 'IDLE_WATCHING', 10000), 'daemon did not enter IDLE_WATCHING');
+    const daemonPid = Number(fs.readFileSync(path.join(d, '.harness', 'daemon.pid'), 'utf8').trim());
+    const tickRes = node(d, ['.harness/daemon.mjs', '--tick']);
+    assert(tickRes.status === 0 && /JOB_ID=T1-run/.test(tickRes.stdout) && /running daemon \(PID/.test(tickRes.stdout), tickRes.stdout + tickRes.stderr);
+    assert(stateOf(d).pid === daemonPid, `concurrent --tick overwrote running daemon state: ${JSON.stringify(stateOf(d))}`);
+    assert(await waitFor(() => byId(d, 'T1')?.status === 'DONE' && stateOf(d).phase === 'IDLE_WATCHING', 15000), `task did not finish & return to IDLE_WATCHING: ${JSON.stringify(byId(d, 'T1'))}`);
+    assert(read(d, 'src/tick-ok.txt') === 'ok', 'dailyLimitReached should skip malformed line and execute task');
+  } finally {
+    if (daemon.exitCode === null && daemon.signalCode === null) {
+      daemon.kill('SIGTERM');
+      await new Promise((r) => daemon.on('close', r));
+    }
+  }
+  if (process.platform !== 'win32') {
+    assert(!fs.existsSync(path.join(d, '.harness', 'daemon.pid')), 'SIGTERM cleanup must remove daemon.pid');
+    const stopped = stateOf(d);
+    assert(stopped.phase === 'STOPPED' && stopped.pid === null && Array.isArray(stopped.activeLocks) && stopped.activeLocks.length === 0 && stopped.currentTaskFile === null, `expected clean STOPPED state after SIGTERM, got ${JSON.stringify(stopped)}`);
+  }
+
+  const uOk = node(d, ['.harness/usage.mjs', '--days=30', '--json']);
+  assert(uOk.status === 0 && JSON.parse(uOk.stdout).days === 30, uOk.stdout + uOk.stderr);
+  for (const bad of [['--days', '0'], ['--days=-1'], ['--days', 'abc'], ['--days']]) {
+    assert(node(d, ['.harness/usage.mjs', ...bad]).status === 1, `expected exit 1 for usage.mjs ${bad.join(' ')}`);
+  }
+
+  const dV = sandbox();
+  setBacklog(dV, [{ id: 'NOCHK', title: 'No check task', status: 'READY' }]);
+  assert(vis(dV, 'brief', '--next', '--item', 'NOCHK').status === 1, '--next + --item must fail');
+  assert(vis(dV, 'brief', '--goal', 'g', '--next').status === 1, '--goal + --next must fail');
+  assert(vis(dV, 'brief', '--goal', 'g', '--item', 'NOCHK').status === 1, '--goal + --item must fail');
+  assert(vis(dV, 'brief', '--goal', 'g', '--files', '').status === 1, 'empty --files must fail');
+  assert(vis(dV, 'brief', '--goal', 'g', '--files', '../evil').status === 1, 'unsafe --files must fail');
+  const rNoCheck = vis(dV, 'brief', '--next');
+  assert(rNoCheck.status === 1 && /no real check/.test(rNoCheck.stderr) && byId(dV, 'NOCHK').status === 'READY', rNoCheck.stderr);
+});
+
+await test('bug-hunter Batch 4 (sdk, status, hook-session): sdk.mjs wrappers & cwd/resumeVisible, status.mjs stale/malformed/--json, and hook-session --no-fetch/unmanifested/ordered runs', async () => {
+  // 1. sdk.mjs wrappers + git worktree cwd + resumeVisible
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-sdk4-'));
+  const { d, g } = gitSandbox({ autonomous: false });
+  realTest(d); g('add', 'package.json'); g('commit', '-q', '-m', 'pkg');
+  const wt = path.join(base, 'wt-sdk');
+  g('worktree', 'add', '-q', '-b', 'task/feat-1-sdk', wt, 'main');
+  assert(node(d, ['.harness/sessions.mjs', 'new', 'SDK task', '--type', 'feat'], { HARNESS_ROOT: d }).status === 0, 'sessions new');
+  assert(node(wt, ['.harness/sessions.mjs', 'start', 'FEAT-1'], { HARNESS_ROOT: wt }).status === 0, 'sessions start');
+  const visId = runIdOf(vis(d, 'brief', '--goal', 'Build src/sdk-vis.txt', '--check', existsCheck('src/sdk-vis.txt')));
+  assert(vis(d, 'assign', visId, deleg([{ lead: 'lead-dev', goal: 'WRITE src/sdk-vis.txt vis-ok', files: ['src/sdk-vis.txt'] }])).status === 0, 'assign visId');
+
+  const sdkDriver = `
+    import { run, status, statusJson, statusBrief, statusSummary, usage, visibleStatus, visibleHandoff, sessionsBoard, teamShow } from ${JSON.stringify(pathToFileURL(path.join(d, '.harness', 'sdk.mjs')).href)};
+    const rWorkers = await run({ workers: [{ id: 'sw1', files: ['src/sdk-worker.txt'], prompt: 'WRITE src/sdk-worker.txt w-ok' }], title: 'SDK workers', check: ${JSON.stringify(existsCheck('src/sdk-worker.txt'))}, model: 'fast', projectRoot: ${JSON.stringify(d)} });
+    const rCwd = await run({ goal: 'WRITE src/sdk-cwd.txt cwd-ok', files: ['src/sdk-cwd.txt'], check: ${JSON.stringify(existsCheck('src/sdk-cwd.txt'))}, cwd: ${JSON.stringify(wt)}, projectRoot: ${JSON.stringify(d)} });
+    const vh = await visibleHandoff({ json: true });
+    const rVis = await run({ resumeVisible: true, projectRoot: ${JSON.stringify(d)} });
+    const st = await status({ log: 5 });
+    const sj = await statusJson();
+    const sb = await statusBrief({ noFetch: true });
+    const ss = await statusSummary();
+    const us = await usage({ days: 30, json: true });
+    const vs = await visibleStatus();
+    const bd = await sessionsBoard({ json: true });
+    const tm = await teamShow();
+    console.log(JSON.stringify({ rWorkers: rWorkers.ok, rCwd: rCwd.ok, vhId: vh.data?.run?.id, rVis: rVis.ok, st: st.ok, sjHasCtrl: Boolean(sj.data?.controller), sbLines: sb.stdout.trim().split(/\\r?\\n/).length, ss: ss.ok, usDays: us.data?.days, vsHasId: vs.stdout.includes(${JSON.stringify(visId)}), bdTasks: bd.data?.tasks?.length, tm: tm.ok }));
+  `;
+  const sdkRes = spawnSync(process.execPath, ['--input-type=module', '-e', sdkDriver], { cwd: d, env, encoding: 'utf8', timeout: 60000 });
+  assert(sdkRes.status === 0, sdkRes.stderr + sdkRes.stdout);
+  const sdkOut = JSON.parse(sdkRes.stdout.trim().split(/\r?\n/).pop());
+  assert(sdkOut.rWorkers && sdkOut.rCwd && sdkOut.vhId === visId && sdkOut.rVis && sdkOut.st && sdkOut.sjHasCtrl && sdkOut.sbLines >= 4 && sdkOut.sbLines <= 8 && sdkOut.ss && sdkOut.usDays === 30 && sdkOut.vsHasId && sdkOut.bdTasks === 1 && sdkOut.tm, JSON.stringify(sdkOut));
+  assert(read(d, 'src/sdk-worker.txt') === 'w-ok' && read(wt, 'src/sdk-cwd.txt') === 'cwd-ok' && !fs.existsSync(path.join(d, 'src', 'sdk-cwd.txt')) && read(d, 'src/sdk-vis.txt') === 'vis-ok', 'sdk outputs incorrect');
+
+  // 2. status.mjs edge cases & --json
+  const dSt = sandbox();
+  const sMissing = node(dSt, ['.harness/status.mjs']);
+  assert(sMissing.status === 0 && /idle \(no state\.json recorded yet\)/.test(sMissing.stdout), sMissing.stdout);
+  for (const badLog of [['--log', '0'], ['--log='], ['--log', '-1']]) {
+    assert(node(dSt, ['.harness/status.mjs', ...badLog]).status === 1, `expected exit 1 for status.mjs ${badLog.join(' ')}`);
+  }
+  fs.writeFileSync(path.join(dSt, '.harness', 'state.json'), JSON.stringify({ phase: '2_EXECUTOR_SWARM', cycle: 1, maxCycles: 3 }));
+  fs.mkdirSync(path.join(dSt, '.harness', 'staging', 'stale-dir'), { recursive: true });
+  setBacklog(dSt, [{ id: 'STALE-1', title: 'Stale item', status: 'IN_PROGRESS' }]);
+  fs.writeFileSync(path.join(dSt, '.harness', 'MANIFEST.json'), JSON.stringify({ template: 'agentic-harness', version: '1.0.0', files: { '.harness/dispatch.mjs': 'bad-hash' } }));
+  fs.writeFileSync(path.join(dSt, '.harness', 'telemetry.log'), `{malformed\n${JSON.stringify({ ts: new Date().toISOString(), phase: 'OK_EVENT', message: 'valid event line' })}\n`);
+  const sStale = node(dSt, ['.harness/status.mjs', '--log=5']);
+  assert(sStale.status === 0 && /2_EXECUTOR_SWARM \(stale — controller stopped\)/.test(sStale.stdout) && /Staging leftovers/.test(sStale.stdout) && /Stale IN_PROGRESS/.test(sStale.stdout) && /valid event line/.test(sStale.stdout), sStale.stdout);
+  const sJson = JSON.parse(node(dSt, ['.harness/status.mjs', '--json']).stdout);
+  assert(sJson.backlog.staleInProgress.includes('STALE-1') && sJson.stagingLeftovers.includes('stale-dir') && sJson.coreModified.includes('.harness/dispatch.mjs') && sJson.team?.valid === true, JSON.stringify(sJson));
+
+  // 3. hook-session.mjs: --no-fetch, HARNESS_ENGINES=none, extra unmanifested core file, leftovers/stale, newest-first open/stopped runs
+  const remote = path.join(base, 'remote.git'); fs.mkdirSync(remote);
+  const G = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  G(remote, 'init', '-q', '--bare', '-b', 'lab');
+  const mRepo = path.join(base, 'mrepo'); fs.cpSync(sandbox(), mRepo, { recursive: true });
+  G(mRepo, 'init', '-q', '-b', 'lab'); G(mRepo, 'add', '-A'); G(mRepo, 'commit', '-q', '-m', 'init'); G(mRepo, 'remote', 'add', 'origin', remote); G(mRepo, 'push', '-q', '-u', 'origin', 'lab');
+  const clone = path.join(base, 'clone'); G(base, 'clone', '-q', '-b', 'lab', remote, clone);
+  fs.writeFileSync(path.join(clone, 'ahead.txt'), '1'); G(clone, 'add', '-A'); G(clone, 'commit', '-q', '-m', 'ahead'); G(clone, 'push', '-q');
+
+  const noFetchBrief = node(mRepo, ['.harness/hook-session.mjs', '--brief', '--no-fetch'], { HARNESS_ROOT: mRepo, HARNESS_ENGINES: 'none' });
+  assert(noFetchBrief.status === 0 && !/Git behind remote/.test(noFetchBrief.stdout) && /AI tools: none allowed yet \(node \.harness\/engines\.mjs\)/.test(noFetchBrief.stdout), noFetchBrief.stdout);
+
+  // Add valid manifest for all existing core files, plus an unmanifested extra file, leftover staging dir, stale backlog task, and ordered open + stopped runs
+  const { hashCore } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);
+  fs.writeFileSync(path.join(mRepo, '.harness', 'MANIFEST.json'), JSON.stringify({ template: 'agentic-harness', version: '1.0.0', files: hashCore(mRepo) }));
+  fs.writeFileSync(path.join(mRepo, '.harness', 'extra.mjs'), '// unmanifested\n');
+  fs.mkdirSync(path.join(mRepo, '.harness', 'staging', 'old-bk'), { recursive: true });
+  setBacklog(mRepo, [{ id: 'INP-1', title: 'In prog', status: 'IN_PROGRESS' }]);
+  const mkVis = (id, status, title) => {
+    const dir = path.join(mRepo, '.harness', 'visible', id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'run.json'), JSON.stringify({ id, status, title, editor: 'antigravity', cycles: 1 }));
+  };
+  mkVis('V-20260101000001-aaa', 'BRIEFED', 'Older open');
+  mkVis('V-20260102000001-bbb', 'DELEGATED', 'Newest open');
+  mkVis('V-20260101000002-ccc', 'HALTED_HITL_REQUIRED', 'Older halted');
+  mkVis('V-20260103000001-ddd', 'HALTED_HITL_REQUIRED', 'Newest halted');
+
+  const hkOrd = node(mRepo, ['.harness/hook-session.mjs', '--brief'], { HARNESS_ROOT: mRepo, HARNESS_NO_FETCH: '1', HARNESS_ENGINES: 'none' });
+  const hkLines = hkOrd.stdout.trim().split(/\r?\n/).filter(Boolean);
+  assert(hkLines.length >= 4 && hkLines.length <= 8, `expected 4-8 brief lines, got ${hkLines.length}:\n${hkOrd.stdout}`);
+  assert(/Open run V-20260102000001-bbb/.test(hkOrd.stdout) && /stopped run V-20260103000001-ddd awaits decision/.test(hkOrd.stdout), hkOrd.stdout);
+  assert(/extra core file\(s\): \.harness\/extra\.mjs/.test(hkOrd.stdout) && !/harness core edited/.test(hkOrd.stdout), hkOrd.stdout);
+  assert(/staging leftovers \(old-bk\)/.test(hkOrd.stdout) && /stale IN_PROGRESS \(INP-1\)/.test(hkOrd.stdout), hkOrd.stdout);
+
+  const hkFull = node(mRepo, ['.harness/hook-session.mjs'], { HARNESS_ROOT: mRepo, HARNESS_NO_FETCH: '1' });
+  assert(/unmanifested core file\(s\).*\.harness\/extra\.mjs/.test(hkFull.stdout) && /WARNING: \.harness\/staging\//.test(hkFull.stdout) && /WARNING: 1 backlog task\(s\) still marked IN_PROGRESS/.test(hkFull.stdout), hkFull.stdout);
+});
+
+await test('bug-hunter Batch 4 (start.mjs): newest-first visible runs, HARNESS_ENGINES=none status, menuContinue [6] report, menuSetup [7] validate, menuBacklog [7][8][9], menuSessions [7] --cwd, menuUsageAndStatus [5][7], and menuDispatch targets/--model', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-start4-'));
+  const { d, g } = gitSandbox({ autonomous: false });
+  realTest(d); g('add', 'package.json'); g('commit', '-q', '-m', 'pkg');
+
+  // Setup open run (no report yet) and halted run (with report) + verify newest-first order in collectStatus
+  const openOlder = runIdOf(vis(d, 'brief', '--goal', 'Older open run', '--check', PASS));
+  const haltedRun = runIdOf(vis(d, 'brief', '--goal', 'Halted report run', '--check', FAIL_VERIFY, '--force'));
+  assert(vis(d, 'assign', haltedRun, deleg([{ lead: 'lead-dev', goal: 'x', files: ['src/'] }])).status === 0, 'assign halted');
+  agentsWrite(d, [['src/h.js', 'bad']]);
+  for (let i = 0; i < 3; i++) assert(vis(d, 'verify', haltedRun).status === 1, `halted verify ${i + 1}`);
+  const openNewer = runIdOf(vis(d, 'brief', '--goal', 'Newer open run', '--check', PASS, '--editor', 'antigravity', '--force'));
+  assert(openOlder && haltedRun && openNewer, 'expected all 3 visible runs to be created');
+
+  const stMod = await import(pathToFileURL(path.join(REPO, '.harness', 'start.mjs')).href);
+  const jNone = JSON.parse(node(d, ['.harness/start.mjs', '--json'], { HARNESS_ENGINES: 'none' }).stdout);
+  assert(jNone.engines.every((e) => e.status === 'not installed'), `HARNESS_ENGINES=none must mark all not installed: ${JSON.stringify(jNone.engines)}`);
+  assert(jNone.visible.open[0].id === openNewer && jNone.visible.open[1].id === openOlder, 'visible.open should be newest-first');
+  assert(jNone.visible.stopped[0].id === haltedRun && jNone.visible.stopped[0].hasReport === true && jNone.visible.open[0].hasReport === false, JSON.stringify(jNone.visible));
+  assert(typeof stMod.formatSummary === 'function', 'formatSummary exported');
+
+  // Create backlog items + child session worktree for interactive menu flows
+  setBacklog(d, [{ id: 'BL-1', title: 'Block pop task', status: 'READY', verifyCmd: PASS, subtasks: [{ id: 'w1', targetFiles: ['src/bl.js'], prompt: 'WRITE src/bl.js ok' }] }]);
+  assert(node(d, ['.harness/sessions.mjs', 'new', 'Menu Cwd Task', '--type', 'feat'], { HARNESS_ROOT: d }).status === 0, 'sessions new');
+  const wt = path.join(base, 'wt-menu');
+  g('worktree', 'add', '-q', '-b', 'claude/m1', wt, 'main');
+  assert(node(wt, ['.harness/sessions.mjs', 'start', 'FEAT-1'], { HARNESS_ROOT: wt }).status === 0, 'sessions start');
+
+  fs.mkdirSync(path.join(d, '.harness', 'memory'), { recursive: true });
+  fs.writeFileSync(path.join(d, '.harness', 'memory', 'auto-lessons.md'), '# Auto\n\n- [L1] (2026-01-01) Temp auto lesson\n');
+  assert(node(d, ['.harness/memory.mjs', 'remember', 'Keep functions pure']).status === 0, 'remember');
+
+  const runMenu = (input) => spawnSync(process.execPath, ['.harness/start.mjs'], {
+    cwd: d, env: { ...env, HARNESS_ROOT: d }, input, encoding: 'utf8', timeout: 45000
+  });
+
+  // [1] Continue -> openNewer -> [6] report (refused); then haltedRun -> [6] report (prints report); [3] Setup -> [7] validate; [4] Backlog -> [7] block, [6] ready, [8] pop, [9] releases
+  const m1 = runMenu(`1\n${openNewer}\n6\n1\n${haltedRun}\n6\n3\n7\n4\n7\nBL-1\nQA paused\n4\n6\nBL-1\n4\n8\ny\n4\n9\n0\n`);
+  assert(m1.status === 0, m1.stderr + m1.stdout);
+  assert(/No verification report for run/.test(m1.stdout) && /HARNESS REPORT — run .* — STOPPED/.test(m1.stdout), `menuContinue [6] failed:\n${m1.stdout}`);
+  assert(/Team is valid\./.test(m1.stdout), `menuSetup [7] failed:\n${m1.stdout}`);
+  assert(/BL-1 → BLOCKED/.test(m1.stdout) && /BL-1 → READY/.test(m1.stdout) && /Promoted BL-1 to inbox/.test(m1.stdout) && ls(d, 'inbox').length === 1 && byId(d, 'BL-1').status === 'IN_PROGRESS', `menuBacklog [7]/[8] failed:\n${m1.stdout}`);
+  fs.readdirSync(path.join(d, '.harness', 'inbox')).filter((f) => f.endsWith('.json')).forEach((f) => fs.rmSync(path.join(d, '.harness', 'inbox', f)));
+
+  // [5] Sessions -> [7] dispatch --cwd inside FEAT-1 worktree; [6] Usage/Memory -> [5] context + forget-auto L1 + [7] invalid port 99999
+  const m2 = runMenu(`5\n7\nFEAT-1\nWRITE src/sess-menu.txt sess-ok\n\ny\n6\n5\ncontext\n6\n5\nforget-auto L1\n6\n7\n99999\n0\n`);
+  assert(m2.status === 0, m2.stderr + m2.stdout);
+  assert(read(wt, 'src/sess-menu.txt') === 'sess-ok' && !fs.existsSync(path.join(d, 'src', 'sess-menu.txt')), 'menuSessions [7] did not write strictly inside worktree');
+  assert(/Keep functions pure/.test(m2.stdout) && /Forgot L1\./.test(m2.stdout) && /Invalid port "99999"/.test(m2.stdout), m2.stdout);
+
+  // [2] Dispatch -> --branch uat + --model fast, and cwd:<wt> + --model fast
+  const m3 = runMenu(`2\nWRITE src/disp-uat.txt uat-ok\n1\nsrc/disp-uat.txt\n${existsCheck('src/disp-uat.txt')}\n\nuat\nfast\ny\n2\nWRITE src/disp-cwd.txt dcwd-ok\n1\nsrc/disp-cwd.txt\n${existsCheck('src/disp-cwd.txt')}\n\ncwd:${wt}\nfast\ny\n0\n`);
+  assert(m3.status === 0, m3.stderr + m3.stdout);
+  assert(onBranch(g, 'uat', 'src/disp-uat.txt') === 'uat-ok' && !fs.existsSync(path.join(d, 'src', 'disp-uat.txt')), 'menuDispatch uat target failed');
+  assert(read(wt, 'src/disp-cwd.txt') === 'dcwd-ok' && !fs.existsSync(path.join(d, 'src', 'disp-cwd.txt')), 'menuDispatch cwd target failed');
+
+  assert(vis(d, 'rollback', openOlder).status === 0 && vis(d, 'rollback', openNewer).status === 0, 'cleanup open visible runs');
+});
+
+await test('bug-hunter Batch 4 (ui, charter, settings): ui.mjs skipSessions/usage days/log totals/governance HTML + charter roles & settings permissions parity', async () => {
+  const { d, g } = gitSandbox({ autonomous: false });
+  realTest(d); g('add', 'package.json'); g('commit', '-q', '-m', 'pkg');
+  assert(node(d, ['.harness/sessions.mjs', 'new', 'UI Governance task', '--type', 'feat'], { HARNESS_ROOT: d }).status === 0, 'sessions new');
+  const today = new Date().toISOString().slice(0, 10);
+  const liveLines = Array.from({ length: 105 }, (_, i) => `[00:00:00] line-${i}`).join('\n') + '\n';
+  const telLines = Array.from({ length: 105 }, (_, i) => JSON.stringify({ ts: `${today}T00:00:00.000Z`, phase: 'AGENT_USAGE', engine: 'mock', model: 'fast', ok: true, message: `e-${i}` })).join('\n') + '\n';
+  fs.writeFileSync(path.join(d, '.harness', 'live.log'), liveLines);
+  fs.writeFileSync(path.join(d, '.harness', 'telemetry.log'), telLines);
+
+  const srv = await startUiProcess(d);
+  try {
+    const baseUrl = srv.url.replace(/\/$/, '');
+    const html = await (await fetch(srv.url)).text();
+    assert(html.includes('id="gov-kv"') && html.includes("typeof t.risk === 'string' ? t.risk : t.risk ? 'HIGH RISK' : '-'"), 'ui.mjs missing Governance card or t.risk type guard');
+    const vm = await import('node:vm');
+    new vm.Script(html.match(/<script>([\s\S]*?)<\/script>/)[1]);
+
+    const stSkip = await (await fetch(`${baseUrl}/api/status?skipSessions=1`)).json();
+    const stFull = await (await fetch(`${baseUrl}/api/status`)).json();
+    assert(stSkip.sessions === null && stFull.sessions && Array.isArray(stFull.sessions.open) && stFull.sessions.open.length === 1, 'skipSessions behavior mismatch');
+
+    const logs = await (await fetch(`${baseUrl}/api/logs`)).json();
+    assert(logs.live.length === 100 && logs.liveTotal === 105 && logs.telemetry.length === 100 && logs.telemetryTotal === 105, JSON.stringify({ lt: logs.liveTotal, ll: logs.live.length, tt: logs.telemetryTotal, tl: logs.telemetry.length }));
+
+    const u30 = await (await fetch(`${baseUrl}/api/usage?days=30`)).json();
+    assert(u30.rangeDays === 30 && u30.days7.days === 30, JSON.stringify(u30));
+    for (const badDays of ['0', 'bad', '366']) {
+      const rb = await fetch(`${baseUrl}/api/usage?days=${badDays}`);
+      assert(rb.status === 400, `expected 400 for days=${badDays}, got ${rb.status}`);
+    }
+  } finally {
+    await srv.stop();
+  }
+
+  const charter = fs.readFileSync(path.join(REPO, '.harness', 'charter.md'), 'utf8');
+  for (const role of ['COORDINATOR', 'UX_DESIGNER', 'REVIEWER', 'SECURITY']) {
+    assert(new RegExp(`\\*\\*${role}\\*\\*`).test(charter), `charter.md missing role ${role}`);
+  }
+  const settings = json(path.join(REPO, '.claude', 'settings.json')).permissions;
+  for (const rule of [
+    'Bash(node .harness/start.mjs --json:*)',
+    'Bash(node .harness/usage.mjs:*)',
+    'Bash(node .harness/sessions.mjs new:*)',
+    'Bash(node .harness/sessions.mjs start:*)',
+    'Bash(node .harness/sessions.mjs checkpoint:*)',
+    'Bash(node .harness/sessions.mjs handoff:*)',
+    'Bash(node .harness/sessions.mjs report:*)'
+  ]) assert(settings.allow.includes(rule), `settings.json allow missing ${rule}`);
+  for (const rule of [
+    'Bash(node .harness/backlog.mjs approve:*)',
+    'Bash(node .harness/sessions.mjs cleanup:*)'
+  ]) assert(settings.ask.includes(rule), `settings.json ask missing ${rule}`);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
-

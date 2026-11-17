@@ -62,6 +62,7 @@ const startTime = Date.now();
 const queue = [];
 const queued = new Set();
 let draining = false;
+let ownsState = false;
 let state = {};
 let lastFinished = null; // { autonomous, backlogId, title, ok } of the last job
 
@@ -79,12 +80,14 @@ function writeState(patch) {
     maxCycles: MAX_CYCLES,
     activeLocks: Array.from(activeFileLocks),
     queueLength: queue.length,
-    pid: process.pid,
-    uptimeSec: Math.floor((Date.now() - startTime) / 1000),
+    pid: ownsState ? process.pid : (state.pid ?? null),
+    uptimeSec: ownsState ? Math.floor((Date.now() - startTime) / 1000) : (state.uptimeSec ?? 0),
     updatedAt: new Date().toISOString()
   };
-  atomicWriteJson(FILES.state, state); // atomic: temp file + rename
-  renderHUD(state);
+  if (ownsState || selfTestMode) {
+    atomicWriteJson(FILES.state, state); // atomic: temp file + rename
+    renderHUD(state);
+  }
   return state;
 }
 
@@ -266,8 +269,10 @@ function dailyLimitReached(engine) {
   let calls = 0; let tokens = 0; let usd = 0;
   try {
     for (const line of fs.readFileSync(FILES.log, 'utf8').split('\n')) {
-      if (!line.includes('"AGENT_USAGE"') || !line.startsWith(`{"ts":"${day}`)) continue;
-      const e = JSON.parse(line); if (e.engine !== engine) continue;
+      if (!line.includes('"AGENT_USAGE"') || !line.includes(day)) continue;
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      if (!String(e.ts || '').startsWith(day) || e.engine !== engine) continue;
       calls++; tokens += Number(e.tokens) || 0; usd += Number(e.usd) || 0;
     }
   } catch { return null; }
@@ -1347,8 +1352,9 @@ async function drain() {
     }
   } finally {
     draining = false;
+    if (!lastFinished?.ok && lastFinished?.autonomous && !auto.enabled) refreshAutoStatus();
     if (auto.enabled) { refreshAutoStatus(); setTimeout(() => autonomousTick('queue-empty').catch((e) => logTelemetry('AUTO_ERROR', e.message)), 1000); }
-    if (!onceMode && !selfTestMode) setTimeout(() => !draining && !auto.ticking && writeState({ phase: 'IDLE_WATCHING', mode: 'SQUARE + SWARM', cycle: 0, workerSummary: 'Idle — waiting for the next task', activeLocks: [] }), 1500);
+    if (!onceMode && !selfTestMode) setTimeout(() => !draining && !auto.ticking && writeState({ phase: 'IDLE_WATCHING', mode: 'SQUARE + SWARM', cycle: 0, taskId: null, taskTitle: '', planSummary: '-', currentTaskFile: null, workerSummary: 'Idle — waiting for the next task', activeLocks: [] }), 1500);
   }
 }
 
@@ -1368,7 +1374,7 @@ function daemonAlive() {
 // Any autonomous task that fails pauses autonomy for the rest of the run: a human decides.
 
 const AUTO_STATE_FILE = path.join(path.dirname(FILES.state), 'auto-state.json'); // survives restarts and separate --tick runs
-const auto = { enabled: false, intervalSec: 300, used: 0, paused: null, ticking: false, lastTick: null, lastResult: '-' };
+const auto = { enabled: false, intervalSec: 300, used: 0, paused: null, ticking: false, lastTick: null, lastResult: '-', lastJobId: null };
 
 function inboxCount() { return fs.readdirSync(DIRS.inbox).filter((f) => f.endsWith('.json')).length; }
 
@@ -1493,9 +1499,9 @@ async function poFingerprint(gov) {
 /** One controller tick. Returns a short result code. */
 async function autonomousTick(reason = 'interval') {
   if (auto.ticking) return 'busy';
-  auto.ticking = true; auto.lastTick = new Date().toISOString();
+  auto.ticking = true; auto.lastTick = new Date().toISOString(); auto.lastJobId = null;
   try {
-    if (draining || queue.length || inboxCount() > 0) return 'busy';
+    if (draining || queue.length || inboxCount() > 0) { auto.lastResult = 'queue or inbox is busy'; return 'busy'; }
     const gov = loadGov();
     if (!gov.charter.autonomous) { refreshAutoStatus('charter says autonomous: off'); return 'off'; }
     if (auto.paused) { refreshAutoStatus(`paused: ${auto.paused}`); return 'paused'; }
@@ -1547,6 +1553,7 @@ async function autonomousTick(reason = 'interval') {
     fs.writeFileSync(`${file}.tmp`, JSON.stringify(job, null, 2));
     fs.renameSync(`${file}.tmp`, file);
     auto.used++;
+    auto.lastJobId = job.id;
     logTelemetry('AUTO_DISPATCH', `Promoted backlog ${item.id} → inbox (${auto.used}/${gov.charter.maxAutoTasksPerRun})`, { backlogId: item.id, jobId: job.id, trigger: reason });
     refreshAutoStatus(`dispatched ${item.id}`);
     writeState({ history: pushHistory(`▶ AUTO  ${item.id} ${item.title || ''}`) });
@@ -1608,7 +1615,7 @@ if (selfTestMode) {
   if (tickMode && other) {
     // A daemon owns the inbox: this tick only promotes/generates one task; the daemon runs it.
     const r = await autonomousTick('manual-tick');
-    console.log(`Autonomous tick: ${r}. ${auto.lastResult}. The running daemon (PID ${other}) will process it.`);
+    console.log(`Autonomous tick: ${r}. ${auto.lastResult}. The running daemon (PID ${other}) will process it.${auto.lastJobId ? `\nJOB_ID=${auto.lastJobId}` : ''}`);
     process.exit(0);
   }
   if (other) {
@@ -1616,8 +1623,30 @@ if (selfTestMode) {
     process.exit(0);
   }
   fs.writeFileSync(FILES.pid, String(process.pid));
+  ownsState = true;
   try { fs.writeFileSync(FILES.live, ''); } catch { /* ignore */ }
-  const cleanup = () => { try { if (Number(fs.readFileSync(FILES.pid, 'utf8')) === process.pid) fs.rmSync(FILES.pid); } catch { /* ignore */ } };
+  const cleanup = () => {
+    try {
+      const pidOnDisk = fs.existsSync(FILES.pid) ? Number(fs.readFileSync(FILES.pid, 'utf8')) : 0;
+      if (pidOnDisk === process.pid) {
+        if (ownsState && !onceMode && !selfTestMode) {
+          const cur = readJsonSafe(FILES.state, state) || state;
+          const nextPhase = !cur.phase || cur.phase === 'IDLE_WATCHING' || /^[0123]_/.test(cur.phase) ? 'STOPPED' : cur.phase;
+          atomicWriteJson(FILES.state, {
+            ...cur,
+            phase: nextPhase,
+            pid: null,
+            activeLocks: [],
+            queueLength: 0,
+            currentTaskFile: null,
+            workerSummary: nextPhase === 'STOPPED' ? 'Daemon stopped' : cur.workerSummary,
+            updatedAt: new Date().toISOString()
+          });
+        }
+        fs.rmSync(FILES.pid, { force: true });
+      }
+    } catch { /* ignore */ }
+  };
   process.on('exit', cleanup);
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process.exit(0));
   if (await isGitRepo()) await execFileAsync('git', ['worktree', 'prune'], { cwd: ROOT }).catch(() => {});
@@ -1645,7 +1674,7 @@ if (selfTestMode) {
       const r = await autonomousTick('manual-tick');
       while (draining || queue.length) await new Promise((res) => setTimeout(res, 100));
       const c = backlogCounts(readBacklog());
-      console.log(`Autonomous tick: ${r} — ${auto.lastResult}. Backlog now: READY ${c.READY}, IN_PROGRESS ${c.IN_PROGRESS}, DONE ${c.DONE}, BLOCKED ${c.BLOCKED}.`);
+      console.log(`Autonomous tick: ${r} — ${auto.lastResult}. Backlog now: READY ${c.READY}, IN_PROGRESS ${c.IN_PROGRESS}, DONE ${c.DONE}, BLOCKED ${c.BLOCKED}.${auto.lastJobId ? `\nJOB_ID=${auto.lastJobId}` : ''}`);
     }
     process.exit(0);
   }

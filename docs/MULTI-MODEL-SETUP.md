@@ -42,7 +42,7 @@ Run these yourself in a terminal, one at a time. Each one is read-only.
    **Put `agy` on your PATH (once).** `agy.exe` is installed in `%LOCALAPPDATA%\agy\bin` (or `~/.gemini/bin`), which may not be on PATH by default.
    Windows (PowerShell, adds it for your user only), then open a NEW terminal:
    ```powershell
-   [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ";$HOME\.gemini\bin", 'User')
+   [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ";$env:LOCALAPPDATA\agy\bin;$HOME\.gemini\bin", 'User')
    ```
    macOS/Linux (zsh; use `~/.bashrc` for bash):
    ```bash
@@ -84,7 +84,7 @@ node .harness/team.mjs auto-assign              # write it into .harness/team.js
 
 It detects which of `claude`, `agy` and `codex` pass the doctor's check on this machine, then routes by role:
 
-| Engines usable on this machine | Planning / research<br>(`orchestrator` PO_ARCHITECT, `lead-ba` BA_ANALYST) | Coding<br>(`lead-dev` DEV_ENGINEER) | QA / review<br>(`lead-qa` QA_AUDITOR) |
+| Engines usable on this machine | Planning / research<br>(`orchestrator` PO_ARCHITECT, `lead-ba` BA_ANALYST) | Coding & UI styles<br>(`lead-dev` DEV_ENGINEER, `lead-ux` UX_DESIGNER) | QA / review<br>(`lead-qa` QA_AUDITOR) |
 |---|---|---|---|
 | 3 or more (e.g. agy + claude + codex) | `agy` | `claude` | `codex` (else `claude`) |
 | 2 (e.g. agy + claude) | the research engine (`agy`) | the other one | same as coding |

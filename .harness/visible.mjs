@@ -28,12 +28,11 @@ import { spawnSync } from 'node:child_process';
 import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, memoryContext, recordSession, remember, normalizeTarget, helpIfAsked, pendingCostReasons, aiUsageSince, usageTodayLine } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor } from './lib/governance.mjs';
-import { VISIBLE_DIR, VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
+import { VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, listVisibleRuns, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
 
 if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must not use the editor workflow.'); process.exit(2); }
 ensureDirs();
 
-const VIS = VISIBLE_DIR;
 const TERMINAL = VISIBLE_TERMINAL;
 const MAX_FILES = MAX_VISIBLE_FILES;
 const MAX_BASELINE_BYTES = 25 * 1024 * 1024;
@@ -63,9 +62,7 @@ function loadRun(id) {
   return JSON.parse(fs.readFileSync(f, 'utf8'));
 }
 const saveRun = (r) => { fs.mkdirSync(runDir(r.id), { recursive: true }); atomicWriteJson(path.join(runDir(r.id), 'run.json'), r); };
-function allRuns() {
-  try { return fs.readdirSync(VIS).map((d) => readJsonSafe(path.join(VIS, d, 'run.json'), null)).filter(Boolean).sort((a, b) => a.id.localeCompare(b.id)); } catch { return []; }
-}
+const allRuns = () => listVisibleRuns();
 
 function snapshot(scope = [], baseFiles = null) {
   try { return captureSnapshot(scope, baseFiles, { maxFiles: MAX_FILES }); }
@@ -150,8 +147,11 @@ function brief() {
   const { team, roles, charter, orch, leads } = teamOrDie();
   const sid = flag('--auto-session');
   const wantNext = has('--next');
+  const itemArg = flag('--item');
   const goalArg = flag('--goal');
-  if (!wantNext && !flag('--item') && !goalArg) die('Give --goal "<what to build>", or --item <backlog id>, or --next.');
+  if (!wantNext && !itemArg && !goalArg) die('Give --goal "<what to build>", or --item <backlog id>, or --next.');
+  if (wantNext && itemArg) die('Cannot combine --next and --item: choose either --next or --item <id>.');
+  if ((wantNext || itemArg) && goalArg) die('Cannot combine --goal with --next or --item: the backlog item provides the goal.');
   const editorFlag = flag('--editor');
   if ((has('--editor') || rest.some((a) => a.startsWith('--editor='))) && !editorFlag) {
     die('Give an editor name after --editor (for example: --editor antigravity or --editor cursor).');
@@ -159,6 +159,18 @@ function brief() {
   let editor = 'claude-code';
   if (editorFlag !== undefined) {
     try { editor = normalizeEditor(editorFlag) || 'claude-code'; } catch (e) { die(e.message); }
+  }
+
+  const rawFiles = flag('--files');
+  if (has('--files') && !rawFiles) die('Give comma-separated paths after --files (for example: --files "src/,docs/").');
+  const userAllowed = [];
+  if (rawFiles) {
+    for (const part of rawFiles.split(',').map((s) => s.trim()).filter(Boolean)) {
+      const norm = normalizeTarget(part);
+      if (!norm) die(`Invalid --files entry "${part}": must be a safe relative project path outside .git and .harness.`);
+      userAllowed.push(norm);
+    }
+    if (!userAllowed.length) die('--files gave no valid relative paths.');
   }
 
   const open = allRuns().filter((r) => !TERMINAL.has(r.status));
@@ -186,12 +198,11 @@ function brief() {
     if (held.length) console.log(`HELD for the human's OK (big runs; tell the user, approve only after a clear yes): ${held.join(', ')}. Approve one with: node .harness/backlog.mjs approve <id>`);
     if (!item) die('Nothing is READY in the backlog.', 6);
   }
-  if (flag('--item')) { item = readBacklog().tasks.find((t) => t.id === flag('--item')); if (!item) die(`No backlog item ${flag('--item')}.`); if (item.status !== 'READY') die(`Backlog item ${item.id} is ${item.status}, not READY.`); }
+  if (itemArg) { item = readBacklog().tasks.find((t) => t.id === itemArg); if (!item) die(`No backlog item ${itemArg}.`); if (item.status !== 'READY') die(`Backlog item ${item.id} is ${item.status}, not READY.`); }
 
   const goal = item ? (item.goal || item.title) : goalArg;
-  const userAllowed = (flag('--files') || '').split(',').map((s) => normalizeTarget(s)).filter(Boolean);
   let check = flag('--check') ? { cmd: flag('--check'), source: 'given by the human', real: true } : item?.verifyCmd ? { cmd: item.verifyCmd, source: `backlog item ${item.id}`, real: true } : (() => { const d = detectVerifyCmd(ROOT, config); return { cmd: d.cmd, source: d.source, real: d.real }; })();
-  if (!check.real && (auto || charter.requireRealCheck) && auto) die('This project has no real check (add a "test" script to package.json or a "verifyCmd" to the task). Autonomous work needs one (charter requireRealCheck).', 1);
+  if (auto && charter.requireRealCheck && !check.real) die('This project has no real check (add a "test" script to package.json or a "verifyCmd" to the task). Autonomous work needs one (charter requireRealCheck).', 1);
 
   const id = `V-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 5)}`;
   const scopeGlobs = userAllowed.length ? userAllowed : charter.allowedPaths;

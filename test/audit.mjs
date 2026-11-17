@@ -65,7 +65,45 @@ for (const f of docFiles) {
   for (const m of t.matchAll(/npm run ([\w:-]+)/g)) if (!pkg.scripts[m[1]] && !f.startsWith('docs/MAINTAINING')) broken.push(`${f}: npm run ${m[1]}`);
   for (const m of t.matchAll(/\]\(((?!https?:|mailto:)[^)#\s]+)(#[^)]*)?\)/g)) if (!fs.existsSync(path.join(path.dirname(path.join(REPO, f)), m[1]))) broken.push(`${f}: link ${m[1]}`);
 }
-check('no broken command, script or link in the docs', !broken.length, broken.join('\n'));
+for (const wf of ['website/src/components/CommandReference.tsx', 'website/src/components/UseCasePlaybooks.tsx']) {
+  const wt = read(wf);
+  for (const m of wt.matchAll(/node (\.harness\/[\w/.-]+\.mjs)/g)) if (!fs.existsSync(path.join(REPO, m[1]))) broken.push(`${wf}: ${m[1]}`);
+}
+check('no broken command, script or link in the docs or website', !broken.length, broken.join('\n'));
+{
+  const cmdRef = read('website/src/components/CommandReference.tsx');
+  const i18nSrc = read('website/src/data/i18n.ts');
+  const i18nErrs = [];
+  const cmdKeys = [...cmdRef.matchAll(/key:\s*'([^']+)'/g)].map((m) => m[1]);
+  const seenCmdKeys = new Set();
+  for (const k of cmdKeys) {
+    if (seenCmdKeys.has(k)) i18nErrs.push(`CommandReference.tsx: duplicate key "${k}"`);
+    seenCmdKeys.add(k);
+  }
+  let dicts = null;
+  try {
+    const enMatch = i18nSrc.match(/\nconst en = (\{[\s\S]*?\n\});\s*\nexport type Dict/);
+    const khMatch = i18nSrc.match(/\nconst kh: Dict = (\{[\s\S]*?\n\});\s*\nexport const DICTS/);
+    if (!enMatch || !khMatch) throw new Error('could not locate en/kh dictionary blocks');
+    dicts = new Function(`const en = ${enMatch[1]}; const kh = ${khMatch[1]}; return { en, kh };`)();
+  } catch (e) {
+    i18nErrs.push(`failed to parse i18n.ts dictionaries: ${e.message}`);
+  }
+  if (dicts) {
+    const enCmdKeys = new Set(Object.keys(dicts.en.cmd?.items || {}));
+    const khCmdKeys = new Set(Object.keys(dicts.kh.cmd?.items || {}));
+    for (const k of enCmdKeys) if (!khCmdKeys.has(k)) i18nErrs.push(`kh.cmd.items missing key "${k}"`);
+    for (const k of khCmdKeys) if (!enCmdKeys.has(k)) i18nErrs.push(`en.cmd.items missing key "${k}"`);
+    for (const k of seenCmdKeys) {
+      if (!enCmdKeys.has(k)) i18nErrs.push(`en.cmd.items missing CommandReference key "${k}"`);
+      if (!khCmdKeys.has(k)) i18nErrs.push(`kh.cmd.items missing CommandReference key "${k}"`);
+    }
+    const enRows = (dicts.en.task?.rows || []).map((r) => r.cmd);
+    const khRows = (dicts.kh.task?.rows || []).map((r) => r.cmd);
+    if (enRows.join('|') !== khRows.join('|')) i18nErrs.push(`task.rows mismatch: en=[${enRows.join(',')}] vs kh=[${khRows.join(',')}]`);
+  }
+  check('website CommandReference & i18n (en/kh) keys and task rows are in parity', !i18nErrs.length, i18nErrs.join('; '));
+}
 
 // 4. Owner rules for the repository
 console.log('\nRepository rules');
@@ -88,19 +126,26 @@ const giCopy = (read('install.mjs').match(/^const GITIGNORE_BLOCK = (".*");$/m) 
 const toMain = [...docFiles, 'website/src/site.ts', 'website/src/components/UseCasePlaybooks.tsx', 'website/src/components/CommandReference.tsx', '.harness/doctor.mjs']
   .filter((f) => /github:sumtaimo\/Agentic-Harness(?!#release)/.test(read(f)));
 check('every install command points at the tested template (#release), not the lab', !toMain.length, toMain.join(', '));
+const staleMain = [...docFiles, 'website/src/data/i18n.ts']
+  .filter((f) => /main is the lab|from main\b|ពី main\b/.test(read(f)));
+check('no stale "main is the lab" or "from main" instructions in docs or website copy', !staleMain.length, staleMain.join(', '));
 check('the landing page deploys from the release branch', /branches: \[release\]/.test(read('.github/workflows/deploy-website.yml')));
 check('installer copy of .gitignore matches .gitignore', !!giCopy && JSON.parse(giCopy) === read('.gitignore'));
 {
   const tasksCfg = (() => { try { return JSON.parse(read('.vscode/tasks.json')); } catch { return null; } })();
   const inputIds = new Set((tasksCfg?.inputs || []).map((i) => i.id));
+  const seenLabels = new Set();
   const badTasks = !tasksCfg || !Array.isArray(tasksCfg.tasks) ? ['invalid JSON'] : tasksCfg.tasks.flatMap((t) => {
     const errs = [];
+    if (!t.label) errs.push('task missing label');
+    else if (seenLabels.has(t.label)) errs.push(`duplicate label "${t.label}"`);
+    else seenLabels.add(t.label);
     const cmdStr = `${t.command || ''} ${(t.args || []).join(' ')}`;
     for (const m of cmdStr.matchAll(/(\.harness\/[a-z-]+\.mjs)/g)) if (!fs.existsSync(path.join(REPO, m[1]))) errs.push(`${t.label}: missing ${m[1]}`);
     for (const m of cmdStr.matchAll(/\$\{input:([\w-]+)\}/g)) if (!inputIds.has(m[1])) errs.push(`${t.label}: missing input "${m[1]}"`);
     return errs;
   });
-  check('VS Code tasks (.vscode/tasks.json) are valid JSON with real scripts and inputs', !badTasks.length, badTasks.join('; '));
+  check('VS Code tasks (.vscode/tasks.json) are valid JSON with unique labels, real scripts, and inputs', !badTasks.length, badTasks.join('; '));
 }
 
 // 5. Website (optional)

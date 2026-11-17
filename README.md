@@ -135,7 +135,7 @@ Pick one:
 ### Hand it to another team (5 minutes, nothing installed globally)
 This repo is a template any team can drop into **their own project**. Everything is plain files in the project:
 ```bash
-git clone -b release <this repo> agentic-harness   # release = the tested template; main is the lab
+git clone -b release <this repo> agentic-harness   # release = the tested template; lab is the lab
 node agentic-harness/install.mjs /path/to/their/project     # safe to re-run; never overwrites their files
 cd /path/to/their/project && node .harness/doctor.mjs         # checks Node, the AI engine, git, the team, the rules
 ```
@@ -199,24 +199,33 @@ One developer and a team of people get the same harness: the full AI agent team 
 
 ## 3. Everyday use — no coding needed
 
-Start in one step from any terminal (**`npm start`** or `node .harness/start.mjs`, `--summary` for the live overview banner) for an interactive numbered menu `[1]`–`[6]`, or use **Command Palette → Tasks: Run Task**:
+Start in one step from any terminal (**`npm start`** or `node .harness/start.mjs`, `--summary` for overview only, `--json` for scripts) for an interactive numbered menu `[1]`–`[6]` (`[1]` Continue unfinished work incl. `handoff`/`resume`/`verify`/`rollback`/`report`; `[2]` New task incl. `--branch uat`, `--cwd`, and `--model`; `[3]` Setup & Team incl. `engines`, `auto-assign`, `sync-agents`, and `validate`; `[4]` Backlog & Autopilot incl. `approve`, `ready`/`block`/`pop`/`releases`, `tick`, and loop; `[5]` Session board incl. `checkpoint`, `handoff`, `--cwd`, `merge`, `cleanup`; `[6]` Usage 7d/30d, status, memory rules/context/auto-lessons, `--brief`, and Web UI `[7]`), or use **Command Palette → Tasks: Run Task**:
 
 | Task | What it does |
 |---|---|
 | **Harness: Start Menu (interactive)** | Opens the live overview banner and `[1]`–`[6]` menu (`node .harness/start.mjs`). |
 | **Harness: 1. Start (live screen)** | Starts the background harness and shows the live screen (auto-starts on folder open). |
+| **Harness: Run (normal, one task now)** | Runs one direct worker (`--mode normal`) with no planner — fastest and cheapest, with rollback on failure. |
 | **Harness: 2. New task (type what you want)** | Asks: *what to do*, *which files/folders it may change* (optional), *how to check it* (optional), *which AI*, and *split into parallel workers?* Then runs it and tells you **COMMITTED ✔** or **NOT DONE ✖**. |
-| **Harness: 3. Teach the AI something** | Saves a rule, e.g. *"Always explain changes in simple English"*. Every AI in this folder follows it from then on. |
+| **Harness: 3. Teach the AI something (remember)** | Saves a rule, e.g. *"Always explain changes in simple English"*. Every AI in this folder follows it from then on. |
 | **Harness: 4. Show memory** | Lists what the AI remembers. |
 | **Harness: 5. Status + recent events** | What is happening now and the last events. |
-| **Harness: 6. Start Autonomous Controller** | Works through the backlog on a schedule (see section 4). Stop task 1 first: one controller per folder. |
+| **Harness: Doctor (check my setup)** | Checks Node.js, git, charter/team validity, core files, and probes installed AI CLIs. |
+| **Harness: 6. Start Autonomous Controller (acts on charter.md)** | Works through the backlog on a schedule (see section 4). Stop task 1 first: one controller per folder. |
 | **Harness: 7. Run Autonomous Controller Tick** | Does one autonomous step now (works with or without task 1 running). |
 | **Harness: 8. View Backlog & Releases** | The backlog by status, and the saved release snapshots. |
 | **Harness: 9. Import New Goal/Backlog with Snapshot** | Replace the backlog (.json), charter (.md) or skills (folder). The old one is saved first. |
 | **Harness: 10. Add a goal to the backlog** | Add one item, READY to run or as an idea. |
+| **Harness: AI tools (allow once)** | Lists and allows or blocks installed AI CLIs (`claude`, `agy`, `codex`) on this machine. |
+| **Harness: Usage (calls, tokens, cost)** | Shows 7-day AI calls, tokens, cost, and daily cap warnings (paired with **Usage (last 30 days)**). |
 | **Harness: Handoff / Inspect unfinished run** | Inspects an open/stopped editor run, partial edits, and prints a continuation prompt. |
 | **Harness: Resume unfinished run in terminal** | Finishes an unfinished editor run headlessly with your chosen AI engine, keeping partial edits. |
 | **Harness: Session Board (child sessions)** | Shows child task branches, DONE items ready to merge, and HIGH RISK warnings. |
+| **Harness: Session Checkpoint (save WIP)** | Commits dirty non-secret WIP on a child branch without marking it DONE. |
+| **Harness: Session Handoff / Inspect** | Inspects a child branch/worktree and prints a continuation prompt and `--cwd` command. |
+| **Harness: Session Merge DONE task** | Runs the project check in a temp worktree, merges a DONE child task, and cleans up its branch/worktree. |
+| **Harness: Team (show setup & budgets)** · **Team validate** | Shows team roles/scopes/budgets or validates `.harness/team.json` guardrails (`exit 0` = valid). |
+| **Harness: Team auto-assign (route AI engines)** · **Team sync-agents** | Detects installed AI CLIs to route team roles or regenerates `.claude/agents/lead-*.md`. |
 | **Harness: Approve held backlog item** | Approves a big backlog task held as "Needs OK" so Autopilot can run it. |
 | **Harness: Local Web UI (dashboard)** | Opens the read-only local web dashboard on `http://127.0.0.1:4173/` (`npm run ui`). |
 | **Harness: Run Self-Test Cycle** | Proves the harness itself works (no AI needed). |
@@ -304,8 +313,9 @@ The template ships a project config for Claude Code (VS Code extension, terminal
 
 | Command | What it does |
 |---|---|
-| `/harness:run <goal>` | **the visible workflow:** the controller briefs your session (the orchestrator), which delegates to the named agents (`lead-ba`, `lead-dev`, `lead-qa`) that work in parallel in front of you; the controller then verifies the files and the real check, and you get a report |
+| `/harness:run <goal>` | **the visible workflow:** the controller briefs your session (the orchestrator), which delegates to the named agents (`lead-ba`, `lead-dev`, `lead-qa`, `lead-ux`) that work in parallel in front of you; the controller then verifies the files and the real check, and you get a report |
 | `/harness:auto` | the same, **autonomous**: works through the READY backlog by itself (and proposes tasks once the charter objectives are filled in), pauses on any failure, then reports |
+| `/harness:sessions [tasks]` | **Session A (coordinator):** runs up to 4 child sessions in parallel (one task each, `checkpoint`/`handoff`), merges a finished one only with your yes, and cleans up merged branches |
 | `/harness:status` | runs `node .harness/status.mjs` + the backlog overview and summarises them in plain words |
 | `/harness:tick` | one autonomous step (`node .harness/daemon.mjs --tick`). It first checks the charter: if `autonomous: off` it stops and asks, and never edits the charter itself |
 | `/harness:doctor` | runs `node .harness/doctor.mjs` and explains every failure, warning and note |
@@ -313,9 +323,8 @@ The template ships a project config for Claude Code (VS Code extension, terminal
 | `/harness:teach <rule>` | saves a rule to memory for every AI in the project |
 
 `.claude/settings.json` adds permission rules and the hook:
-- **Allowed without asking:** only the harness scripts (`status`, `doctor`, `watch`, `dispatch`, `daemon` plain/`--status`/`--tick`,
-  `visible` `brief`/`assign`/`verify`/`handoff`/`propose`/`status`/`report`, read-only `backlog`/`memory` commands, `backlog add`, `memory remember`). Never a whole interpreter (`node`, `git`, `npm`).
-- **Always asks:** `daemon --autonomous`, `backlog import/ready/block`, `memory forget`, editing `charter.md` or `config.json`, `git push`.
+- **Allowed without asking:** only the harness scripts (`status`, `doctor`, `start.mjs --summary`/`--json`, `hook-session.mjs --brief`, `usage`, `watch`, `team`, `dispatch`, `daemon` plain/`--status`/`--tick`, `visible` `brief`/`assign`/`verify`/`handoff`/`propose`/`status`/`report`, `sessions` `board`/`new`/`start`/`checkpoint`/`handoff`/`report`, read-only `backlog`/`memory` commands, `backlog add`, `memory remember`). Never a whole interpreter (`node`, `git`, `npm`).
+- **Always asks:** `visible.mjs rollback`, `sessions.mjs merge`/`cleanup`, `team.mjs auto-assign`, `daemon --autonomous`, `backlog import/approve/ready/block`, `memory forget`, editing `team.json`/`charter.md`/`config.json`, `git push`.
 - **Denied:** editing `.harness/releases/**`, force-pushing.
 - **Hook:** at the start of every session the AI is told the harness state (controller running? backlog? autonomy? `uat`?).
 
@@ -709,8 +718,6 @@ Skills inject targeted rules and allowed tools only when relevant to the task's 
 ### 4. Model Independence & MCP Presets (`.harness/mcp.json`)
 The harness connects to any CLI-driven AI engine (Claude, Codex, Antigravity, local Ollama models) without vendor lock-in. Optional MCP server presets are pre-configured for GitHub PR/issue inspection, Postgres databases, and web fetching.
 
-## License
-
 ## Roles on the team
 
 Orchestrator (plans) → leads: `lead-ba` (specs, `docs/`), `lead-dev` (code, `src/`), `lead-qa` (tests, also
@@ -733,5 +740,7 @@ Using the harness in a project and maintaining the harness itself are separate j
 read-only (fingerprinted, blocked for Claude Code, checked by doctor), and gaps are reported to the template instead of
 patched locally. How to report a gap, update a project, and the release checklist (`npm test`, `npm run audit`):
 [`docs/MAINTAINING.md`](docs/MAINTAINING.md) ([ខ្មែរ](docs/MAINTAINING.km.md)).
+
+## License
 
 [MIT](LICENSE) © 2026 TAIMO

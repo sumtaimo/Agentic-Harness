@@ -22,7 +22,9 @@ try {
   helpIfAsked(import.meta.url);
   if (process.env.HARNESS_WORKER === '1') process.exit(0);
   const brief = process.argv.includes('--brief');
+  const noFetch = process.argv.includes('--no-fetch') || process.env.HARNESS_NO_FETCH === '1';
   const { readCharter, readBacklog, backlogCounts, nextReady } = await import('./lib/governance.mjs');
+  const { listVisibleRuns } = await import('./lib/handoff.mjs');
 
   let pid = 0;
   try {
@@ -39,14 +41,21 @@ try {
   const profile = (() => { try { return fs.readFileSync(FILES.profile, 'utf8'); } catch { return ''; } })();
   const git = cfg.git || {};
 
-  const VIS = path.join(path.dirname(FILES.state), 'visible');
-  let runs = [];
-  try { runs = fs.readdirSync(VIS).map((d) => readJsonSafe(path.join(VIS, d, 'run.json'), null)).filter(Boolean); } catch { /* no runs yet */ }
+  const runs = listVisibleRuns();
   const open = runs.filter((r) => !['PASSED', 'HALTED_HITL_REQUIRED', 'ROLLED_BACK', 'ESCALATED'].includes(r.status));
-  const stopped = runs.filter((r) => ['HALTED_HITL_REQUIRED', 'ESCALATED'].includes(r.status)).slice(-1);
+  const stopped = runs.filter((r) => ['HALTED_HITL_REQUIRED', 'ESCALATED'].includes(r.status));
+  const newestOpen = open.length ? open[open.length - 1] : null;
+  const newestStopped = stopped.length ? stopped[stopped.length - 1] : null;
   const held = bl.tasks.filter((t) => t.status === 'BLOCKED' && t.needsApproval);
+  const inboxWaiting = count(DIRS.inbox);
+  const stagingLeftovers = (() => { try { return fs.readdirSync(DIRS.staging).filter((d) => !d.startsWith('.')); } catch { return []; } })();
+  const staleInProgress = (!pid && inboxWaiting === 0)
+    ? (bl.tasks || []).filter((t) => t.status === 'IN_PROGRESS').map((t) => t.id)
+    : [];
   const today = (() => { try { return usageTodayLine(cfg); } catch { return ''; } })();
   const core = (() => { try { return checkCore(); } catch { return { manifest: null, changed: [], missing: [], added: [] }; } })();
+  const coreEdited = [...(core.changed || []), ...(core.missing || [])];
+  const coreAdded = core.added || [];
   const taughtCount = (() => { try { return listLessons(FILES.lessons).length; } catch { return 0; } })();
 
   if (brief) {
@@ -54,12 +63,12 @@ try {
       `[Agentic Harness] Controller: ${pid ? `running (PID ${pid}, ${st.phase || '?'})` : 'NOT running'} | Backlog: READY ${c.READY}, IN_PROGRESS ${c.IN_PROGRESS}, BLOCKED ${c.BLOCKED}, DONE ${c.DONE} | Autopilot: ${charter.autonomous ? 'ON' : 'off'}`
     ];
 
-    if (open.length) {
-      const r = open[0];
+    if (newestOpen) {
+      const r = newestOpen;
       const ed = r.editor && r.editor !== 'claude-code' ? `, ${r.editor}` : '';
       briefLines.push(`! Open run ${r.id} ("${r.title}", ${r.status}${ed}): node .harness/visible.mjs handoff ${r.id} | node .harness/dispatch.mjs --resume-visible ${r.id} --wait`);
-    } else if (stopped.length) {
-      const s = stopped[0];
+    } else if (newestStopped) {
+      const s = newestStopped;
       briefLines.push(`! Stopped run ${s.id} ("${s.title}", ${s.status}): node .harness/visible.mjs handoff ${s.id} | rollback: node .harness/visible.mjs rollback ${s.id}`);
     } else if (charter.autonomous && c.READY > 0) {
       const next = nextReady(bl);
@@ -97,7 +106,9 @@ try {
       const upstreamOf = (br) => { try { return g(['rev-parse', '--abbrev-ref', `${br}@{upstream}`]); } catch { return ''; } };
       const base = primary?.branch && upstreamOf(primary.branch);
       if (base) {
-        try { g(['fetch', '--quiet', base.split('/')[0]], 2000); } catch { /* offline: compare existing tracking ref */ }
+        if (!noFetch) {
+          try { g(['fetch', '--quiet', base.split('/')[0]], 2000); } catch { /* offline: compare existing tracking ref */ }
+        }
         const behindMain = Number(g(['rev-list', '--count', `${primary.branch}..${base}`]));
         const curBranch = (() => { try { return g(['symbolic-ref', '--short', 'HEAD']); } catch { return ''; } })();
         const curBase = (curBranch && upstreamOf(curBranch)) || base;
@@ -109,13 +120,16 @@ try {
       }
     } catch { /* not a git repo, or git missing */ }
 
-    const envEngines = process.env.HARNESS_ENGINES !== undefined
-      ? process.env.HARNESS_ENGINES.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+    const rawEnvEngines = process.env.HARNESS_ENGINES;
+    const explicitNoneEngines = rawEnvEngines !== undefined && rawEnvEngines.trim().toLowerCase() === 'none';
+    const envEngines = rawEnvEngines !== undefined && !explicitNoneEngines
+      ? rawEnvEngines.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
       : null;
     const readyTools = [];
     const awaitingTools = [];
     for (const k of ROUTABLE_ENGINES.filter((x) => cfg.profiles?.[x])) {
       const label = k === 'antigravity' ? 'agy' : k;
+      if (explicitNoneEngines) continue;
       if (envEngines && envEngines.length) {
         if (envEngines.includes(k) && engineConsent(k) !== false) readyTools.push(label);
         continue;
@@ -137,12 +151,15 @@ try {
 
     const notes = [];
     if (configError) notes.push(`config.json invalid (${configError.slice(0, 60)})`);
-    if (core.manifest && (core.changed.length || core.missing.length)) notes.push(`harness core edited (${[...core.changed, ...core.missing].join(', ')})`);
-    if (stopped.length && open.length) notes.push(`stopped run ${stopped[0].id} awaits decision`);
+    if (core.manifest && coreEdited.length) notes.push(`harness core edited (${coreEdited.join(', ')})`);
+    if (core.manifest && coreAdded.length) notes.push(`extra core file(s): ${coreAdded.slice(0, 3).join(', ')}${coreAdded.length > 3 ? ` (+${coreAdded.length - 3})` : ''}`);
+    if (stagingLeftovers.length) notes.push(`staging leftovers (${stagingLeftovers.slice(0, 3).join(', ')})`);
+    if (staleInProgress.length) notes.push(`stale IN_PROGRESS (${staleInProgress.slice(0, 3).join(', ')})`);
+    if (newestStopped && newestOpen) notes.push(`stopped run ${newestStopped.id} awaits decision`);
     if (/^- .*\(fill me/im.test(profile)) notes.push('profile.md incomplete');
     if (notes.length) briefLines.push(`! Notice: ${notes.join(' | ')}`);
 
-    briefLines.push('- Menu: node .harness/start.mjs (template: npm start) · Health: node .harness/doctor.mjs · Rules: AGENTS.md');
+    briefLines.push('- Menu: node .harness/start.mjs (template: npm start) · Web UI: node .harness/ui.mjs · Health: node .harness/doctor.mjs · Rules: AGENTS.md');
     console.log(briefLines.join('\n'));
     process.exit(0);
   }
@@ -150,7 +167,7 @@ try {
   const lines = [
     '[Agentic Harness] This folder has an agentic harness (.harness/). Instructions: AGENTS.md.',
     `- Controller: ${pid ? `running (PID ${pid}), phase ${st.phase || '?'}${st.taskTitle ? `, task "${st.taskTitle}"` : ''}` : 'NOT running (start it in the background to work through the harness; see /harness:run)'}`,
-    `- Backlog: READY ${c.READY}, IN_PROGRESS ${c.IN_PROGRESS}, DONE ${c.DONE}, BLOCKED ${c.BLOCKED} | inbox ${count(DIRS.inbox)} | failed jobs ${count(DIRS.failed)}`,
+    `- Backlog: READY ${c.READY}, IN_PROGRESS ${c.IN_PROGRESS}, DONE ${c.DONE}, BLOCKED ${c.BLOCKED} | inbox ${inboxWaiting} | failed jobs ${count(DIRS.failed)}`,
     `- Autonomous mode: charter says ${charter.autonomous ? 'ON' : 'off'}${git.integrationBranch && git.integrationMode !== 'off' ? `; autonomous work lands on the '${git.integrationBranch}' branch, never main` : ''}`,
     `- Memory: ${taughtCount} taught rule(s) (already loaded via CLAUDE.md)`
   ];
@@ -158,8 +175,8 @@ try {
   if (/^- .*\(fill me/im.test(profile)) lines.push('- profile.md is not filled in yet: ask the user a few simple questions and fill it (see AGENTS.md section 1).');
 
   // Editor workflow state: unfinished runs need a decision; AUTO MODE starts the workflow by itself.
-  if (open.length) {
-    const r = open[0];
+  if (newestOpen) {
+    const r = newestOpen;
     const ed = r.editor && r.editor !== 'claude-code' ? `, from ${r.editor}` : '';
     lines.push(`- UNFINISHED editor run ${r.id} ("${r.title}", ${r.status}${ed}). Ask the user whether to finish it (node .harness/visible.mjs verify ${r.id}), hand off or continue in another AI/terminal (node .harness/visible.mjs handoff ${r.id} or node .harness/dispatch.mjs --resume-visible ${r.id} --wait), or undo it (node .harness/visible.mjs rollback ${r.id}). Do not start another task first.`);
   } else if (charter.autonomous && c.READY > 0) {
@@ -170,6 +187,8 @@ try {
   }
   // Waiting for the human: big runs held by autopilot, and AI tools nobody allowed yet (headless runs need one).
   if (held.length) lines.push(`- ${held.length} task(s) wait for the user's OK because they may use a lot of quota: ${held.slice(0, 3).map((t) => `${t.id} ("${t.title || t.goal}")`).join(', ')}. Tell the user; run  node .harness/backlog.mjs approve <id>  only after a clear yes for that task.`);
+  if (staleInProgress.length) lines.push(`- WARNING: ${staleInProgress.length} backlog task(s) still marked IN_PROGRESS with no controller running (${staleInProgress.join(', ')}). Reset with: node .harness/backlog.mjs ready <id>`);
+  if (stagingLeftovers.length) lines.push(`- WARNING: .harness/staging/ still has backup folder(s) from an interrupted run (${stagingLeftovers.join(', ')}). Inspect or clean them if no run is active.`);
   if (!Object.values(loadApprovals().engines || {}).some((v) => v === true)) lines.push('- No AI tool is allowed yet for headless runs (dispatch / daemon). The user allows each one once in a terminal: node .harness/engines.mjs. Never run "engines.mjs allow" for them.');
   // Fresh start: a new session's worktree is cut from the main folder's branch, which can be behind the remote.
   // A brand-new session worktree (clean, no commits of its own) is fast-forwarded; the main folder is only reported.
@@ -181,7 +200,9 @@ try {
     const upstreamOf = (br) => { try { return g('rev-parse', '--abbrev-ref', `${br}@{upstream}`); } catch { return ''; } };
     const base = primary?.branch && upstreamOf(primary.branch);
     if (base) {
-      try { g('fetch', '--quiet', base.split('/')[0]); } catch { /* offline: compare with what we have */ }
+      if (!noFetch) {
+        try { g('fetch', '--quiet', base.split('/')[0]); } catch { /* offline: compare with what we have */ }
+      }
       const behindMain = Number(g('rev-list', '--count', `${primary.branch}..${base}`));
       const { realpathSync } = await import('node:fs');
       const real = (p) => { try { return realpathSync.native(p).replace(/\\/g, '/').toLowerCase(); } catch { return String(p).replace(/\\/g, '/').toLowerCase(); } };
@@ -215,9 +236,10 @@ try {
   if (today) lines.push(`- AI quota used by the harness today: ${today}. Mention it to the user in one short line when you run harness work.`);
   if (core.manifest) {
     lines.push('- This project USES the harness: never edit .harness/*.mjs or .harness/lib/** (the template owns them). A harness bug is reported to the template, not patched here.');
-    if (core.changed.length || core.missing.length) lines.push(`- WARNING: the harness core was edited in this project (${[...core.changed, ...core.missing].join(', ')}). Tell the user; re-installing from the template restores it.`);
+    if (coreEdited.length) lines.push(`- WARNING: the harness core was edited in this project (${coreEdited.join(', ')}). Tell the user; re-installing from the template restores it.`);
+    if (coreAdded.length) lines.push(`- WARNING: unmanifested core file(s) found in .harness/ (${coreAdded.join(', ')}). Tell the user; core files belong to the template.`);
   }
-  if (stopped.length && !open.length) lines.push(`- A previous editor run stopped and needs a human decision: ${stopped[0].id} ("${stopped[0].title}", ${stopped[0].status}). Report it to the user if they have not seen it.`);
+  if (newestStopped && !newestOpen) lines.push(`- A previous editor run stopped and needs a human decision: ${newestStopped.id} ("${newestStopped.title}", ${newestStopped.status}). Report it to the user if they have not seen it.`);
   lines.push('- To run work with visible named agents: use /harness:run <goal>. Autonomous: /harness:auto. Team: /harness:team. Status: /harness:status. Health check: /harness:doctor. Teach a rule: /harness:teach <rule>. Several sessions at once (Session A + up to 4 child sessions): /harness:sessions.');
   console.log(lines.join('\n'));
 } catch { /* never block the session */ }

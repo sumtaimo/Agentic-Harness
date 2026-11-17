@@ -20,8 +20,8 @@ import {
   ROOT, HARNESS_DIR, DIRS, FILES, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd,
   probeEngine, engineConsent, ROUTABLE_ENGINES, usageTodayLine, quotaWarnings, formatQuotaWarning, checkCore, listLessons, helpIfAsked
 } from './lib/common.mjs';
-import { readCharter, readBacklog, backlogCounts } from './lib/governance.mjs';
-import { listVisibleRuns, VISIBLE_TERMINAL, RESUMABLE_STATUSES, editorDisplayName, hasVisibleBaseline } from './lib/handoff.mjs';
+import { readCharter, readBacklog, backlogCounts, nextReady, loadRoles, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
+import { listVisibleRuns, VISIBLE_TERMINAL, RESUMABLE_STATUSES, editorDisplayName, hasVisibleBaseline, visibleRunDir } from './lib/handoff.mjs';
 
 const ENGINE_NAME = { claude: 'claude', antigravity: 'antigravity (agy)', codex: 'codex' };
 const normalizeEngineArg = (raw) => {
@@ -56,7 +56,7 @@ function readSessionsSummary() {
   }
 }
 
-export function collectStatus() {
+export function collectStatus({ skipSessions = false } = {}) {
   let cfg = {};
   let configError = null;
   try { cfg = loadConfig(); } catch (e) { configError = e.message; }
@@ -68,24 +68,28 @@ export function collectStatus() {
   } catch { pid = 0; }
 
   const state = readJsonSafe(FILES.state, {});
-  const charter = (() => { try { return readCharter(); } catch { return { autonomous: false, text: '' }; } })();
+  const charter = (() => { try { return readCharter(); } catch { return { exists: false, autonomous: false, maxAutoTasksPerRun: 3, requireRealCheck: true, text: '' }; } })();
   const bl = (() => { try { return readBacklog(); } catch { return { tasks: [] }; } })();
   const bCounts = backlogCounts(bl);
   const held = (bl.tasks || []).filter((t) => t.status === 'BLOCKED' && t.needsApproval);
 
   const allRuns = listVisibleRuns();
-  const openRuns = allRuns.filter((r) => !VISIBLE_TERMINAL.has(r.status));
-  const stoppedRuns = allRuns.filter((r) => r.status === 'HALTED_HITL_REQUIRED' || r.status === 'ESCALATED');
+  const openRuns = allRuns.filter((r) => !VISIBLE_TERMINAL.has(r.status)).reverse();
+  const stoppedRuns = allRuns.filter((r) => r.status === 'HALTED_HITL_REQUIRED' || r.status === 'ESCALATED').reverse();
 
   let verify = { cmd: cfg.defaultVerifyCmd || '(none)', source: 'unavailable', real: false };
   try { if (cfg && Object.keys(cfg).length) verify = detectVerifyCmd(ROOT, cfg); } catch { /* ignore */ }
 
-  const envEngines = process.env.HARNESS_ENGINES !== undefined
-    ? process.env.HARNESS_ENGINES.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+  const rawEnvEngines = process.env.HARNESS_ENGINES;
+  const explicitNoneEngines = rawEnvEngines !== undefined && rawEnvEngines.trim().toLowerCase() === 'none';
+  const envEngines = rawEnvEngines !== undefined && !explicitNoneEngines
+    ? rawEnvEngines.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
     : null;
   const engines = ROUTABLE_ENGINES.filter((k) => cfg.profiles?.[k]).map((k) => {
     let status = 'not installed';
-    if (envEngines && envEngines.length) {
+    if (explicitNoneEngines) {
+      status = 'not installed';
+    } else if (envEngines && envEngines.length) {
       status = !envEngines.includes(k) ? 'not installed' : engineConsent(k) === false ? 'denied' : 'ready';
     } else {
       const probe = probeEngine(cfg.profiles[k]);
@@ -99,11 +103,67 @@ export function collectStatus() {
     return { name: k, label: ENGINE_NAME[k] || k, status };
   });
 
-  const sessions = readSessionsSummary();
+  const sessions = skipSessions ? null : readSessionsSummary();
   const usageToday = (() => { try { return usageTodayLine(cfg) || ''; } catch { return ''; } })();
   const quotaWarnList = (() => { try { return quotaWarnings(cfg); } catch { return []; } })();
   const taughtCount = (() => { try { return listLessons(FILES.lessons).length; } catch { return 0; } })();
+  const autoLessonsCount = (() => { try { return listLessons(FILES.autoLessons).length; } catch { return 0; } })();
   const core = (() => { try { return checkCore(ROOT); } catch { return { manifest: null, changed: [], missing: [], added: [] }; } })();
+  const inboxCount = safeCountJson(DIRS.inbox);
+
+  const teamInfo = (() => {
+    try {
+      const team = loadTeam();
+      if (!team) return null;
+      const roles = loadRoles();
+      const { errors, warnings } = validateTeam(team, { roles, charter, plannerMaxWorkers: (cfg.planner || {}).maxWorkers || 4, engines: Object.keys(cfg.profiles || {}) });
+      const ag = syncAgents(team, roles, { check: true });
+      const members = Array.isArray(team.members) ? team.members : [];
+      const orch = members.find((m) => m.level === 'orchestrator');
+      const leads = members.filter((m) => m.level === 'lead');
+      return {
+        configured: true,
+        valid: errors.length === 0,
+        errorCount: errors.length,
+        warningCount: warnings.length,
+        errors,
+        warnings,
+        agentsInSync: (ag.stale || []).length === 0,
+        staleAgents: ag.stale || [],
+        orchestrator: orch ? { id: orch.id, engine: orch.engine || 'auto' } : null,
+        leadCount: leads.length,
+        routedCount: members.filter((m) => Boolean(m.engine)).length
+      };
+    } catch {
+      return null;
+    }
+  })();
+
+  const gitInfo = (() => {
+    const g = (a) => execFileSync('git', a, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 4000 }).trim();
+    try {
+      if (g(['rev-parse', '--is-inside-work-tree']) !== 'true') return { isRepo: false };
+      const branch = (() => { try { return g(['symbolic-ref', '--short', 'HEAD']); } catch { return '(detached)'; } })();
+      const dirtyCount = (() => { try { const st = g(['status', '--porcelain']); return st ? st.split(/\r?\n/).filter(Boolean).length : 0; } catch { return 0; } })();
+      const integrationBranch = cfg.git?.integrationBranch || 'uat';
+      const uatTip = (() => { try { return g(['rev-parse', '--short', integrationBranch]); } catch { return null; } })();
+      const workerBranches = (() => {
+        try {
+          const out = g(['branch', '--list', 'harness/*']);
+          return out ? out.split(/\r?\n/).map((s) => s.replace(/^\*?\s+/, '').trim()).filter(Boolean).length : 0;
+        } catch { return 0; }
+      })();
+      return { isRepo: true, branch, dirtyCount, integrationBranch, uatExists: Boolean(uatTip), uatTip, workerBranches };
+    } catch {
+      return { isRepo: false };
+    }
+  })();
+
+  const stagingLeftovers = (() => { try { return fs.readdirSync(DIRS.staging).filter((d) => !d.startsWith('.')); } catch { return []; } })();
+  const staleInProgress = (pid === 0 && inboxCount === 0)
+    ? (bl.tasks || []).filter((t) => t.status === 'IN_PROGRESS').map((t) => t.id)
+    : [];
+  const profileIncomplete = /^- .*\(fill me/im.test((() => { try { return fs.readFileSync(FILES.profile, 'utf8'); } catch { return ''; } })());
 
   return {
     root: ROOT,
@@ -116,26 +176,41 @@ export function collectStatus() {
       taskTitle: state.taskTitle || null
     },
     autonomous: !!charter.autonomous,
+    charter: {
+      exists: Boolean(charter.exists),
+      autonomous: Boolean(charter.autonomous),
+      maxAutoTasksPerRun: charter.maxAutoTasksPerRun ?? 3,
+      requireRealCheck: charter.requireRealCheck !== false,
+      hasPlaceholder: /\(describe your product goals here/.test(charter.text || '')
+    },
+    team: teamInfo,
+    git: gitInfo,
     verify,
     backlog: {
       counts: bCounts,
       held: held.map((t) => ({ id: t.id, title: t.title || t.goal || t.id, blockedReason: t.blockedReason || '' }))
     },
     queues: {
-      inbox: safeCountJson(DIRS.inbox),
+      inbox: inboxCount,
       completed: safeCountJson(DIRS.completed),
       failed: safeCountJson(DIRS.failed)
     },
     visible: {
-      open: openRuns.map((r) => ({ id: r.id, title: r.title, status: r.status, editor: r.editor || 'claude-code', resumable: RESUMABLE_STATUSES.has(r.status), hasBaseline: hasVisibleBaseline(r) })),
-      stopped: stoppedRuns.map((r) => ({ id: r.id, title: r.title, status: r.status, editor: r.editor || 'claude-code', resumable: RESUMABLE_STATUSES.has(r.status), hasBaseline: hasVisibleBaseline(r) }))
+      open: openRuns.map((r) => ({ id: r.id, title: r.title, status: r.status, editor: r.editor || 'claude-code', resumable: RESUMABLE_STATUSES.has(r.status), hasBaseline: hasVisibleBaseline(r), hasReport: fs.existsSync(path.join(visibleRunDir(r.id), 'report.md')) })),
+      stopped: stoppedRuns.map((r) => ({ id: r.id, title: r.title, status: r.status, editor: r.editor || 'claude-code', resumable: RESUMABLE_STATUSES.has(r.status), hasBaseline: hasVisibleBaseline(r), hasReport: fs.existsSync(path.join(visibleRunDir(r.id), 'report.md')) }))
     },
     engines,
     sessions,
     usageToday,
     quotaWarnings: quotaWarnList,
     taughtCount,
-    coreModified: [...(core.changed || []), ...(core.missing || [])]
+    warnings: {
+      stagingLeftovers,
+      staleInProgress,
+      profileIncomplete,
+      autoLessonsCount
+    },
+    coreModified: [...(core.changed || []), ...(core.missing || []), ...(core.added || [])]
   };
 }
 
@@ -155,7 +230,7 @@ export function formatSummary(info) {
     const extra = info.visible.open.length > 1 ? ` (+${info.visible.open.length - 1} more)` : '';
     editorStr = `Open run ${r.id} ("${r.title}", ${r.status}${ed})${extra}`;
   } else if (info.visible.stopped.length) {
-    const s = info.visible.stopped[info.visible.stopped.length - 1];
+    const s = info.visible.stopped[0];
     editorStr = `Stopped run ${s.id} ("${s.title}", ${s.status})`;
   }
 
@@ -176,6 +251,17 @@ export function formatSummary(info) {
     sessStr = parts.join(' · ');
   }
 
+  const teamStr = !info.team
+    ? 'no team.json'
+    : !info.team.valid
+      ? `INVALID (${info.team.errorCount} err)`
+      : !info.team.agentsInSync
+        ? `valid (${info.team.leadCount} leads; ${info.team.staleAgents.length} agent(s) out of sync)`
+        : `valid (${info.team.leadCount} leads, agents in sync)`;
+  const gitStr = info.git?.isRepo
+    ? `git: ${info.git.branch}${info.git.dirtyCount ? ` (${info.git.dirtyCount} uncommitted)` : ' (clean)'}${info.git.uatExists ? ` · ${info.git.integrationBranch}@${info.git.uatTip}` : ''}`
+    : 'git: not a repo';
+
   const lines = [
     '============================================================================',
     `AGENTIC HARNESS${info.version ? ` v${info.version}` : ''} — Start Menu & Status   (${info.root})`,
@@ -187,10 +273,18 @@ export function formatSummary(info) {
     `Needs OK:      ${heldStr}`,
     `AI tools:      ${toolStr}`,
     `Session board: ${sessStr}`,
-    `Quota today:   ${info.usageToday || 'none logged yet'}   |   Memory: ${info.taughtCount} taught rule(s)`
+    `Team & Git:    ${teamStr}   |   ${gitStr}`,
+    `Quota today:   ${info.usageToday || 'none logged yet'}   |   Memory: ${info.taughtCount} taught · ${info.warnings?.autoLessonsCount ?? 0} auto`,
+    `Quick tools:   Web UI: npm run ui (node .harness/ui.mjs)   |   Health: node .harness/doctor.mjs`
   ];
   if (info.configError) lines.push(`! Config error: ${info.configError}`);
   if (info.coreModified.length) lines.push(`! Core warning: edited files in this project: ${info.coreModified.join(', ')}`);
+  if (info.charter?.hasPlaceholder) lines.push('! Charter note: "Project objectives" still has placeholder text in .harness/charter.md');
+  if (info.team && !info.team.valid) lines.push(`! Team error: ${info.team.errors[0]}`);
+  if (info.team && info.team.valid && info.team.staleAgents.length) lines.push(`! Team warning: editor agent(s) out of sync: ${info.team.staleAgents.join(', ')} (use [3] -> [5] or sync-agents)`);
+  if (info.warnings?.stagingLeftovers?.length) lines.push(`! Staging leftovers (.harness/staging/): ${info.warnings.stagingLeftovers.join(', ')}`);
+  if (info.warnings?.staleInProgress?.length) lines.push(`! Stale IN_PROGRESS backlog item(s): ${info.warnings.staleInProgress.join(', ')} (use [4] -> [6] to reset READY)`);
+  if (info.warnings?.profileIncomplete) lines.push('! Profile incomplete: .harness/memory/profile.md still has "(fill me)" placeholders');
   for (const w of info.quotaWarnings || []) lines.push(`! ${formatQuotaWarning(w)}`);
   lines.push('============================================================================');
   return lines.join('\n');
@@ -211,6 +305,12 @@ const isBack = (raw) => {
   if (raw === null) return true;
   const s = raw.trim().toLowerCase();
   return !s || s === '0' || s === 'b' || s === 'back' || s === 'q';
+};
+
+const isBackCmd = (raw) => {
+  if (raw === null) return true;
+  const s = raw.trim().toLowerCase();
+  return s === '0' || s === 'b' || s === 'back' || s === 'q';
 };
 
 async function confirm(ask, prompt, defaultYes = false) {
@@ -235,7 +335,7 @@ export async function menuContinue(_rl, ask, info, run = runScript, say = consol
   let target = candidates[0];
   if (candidates.length > 1) {
     const pick = await ask(`Run ID to manage (Enter = ${candidates[0].id}): `);
-    if (pick === null) return;
+    if (pick === null || isBackCmd(pick)) return;
     if (pick.trim()) {
       const found = candidates.find((r) => r.id.toLowerCase() === pick.trim().toLowerCase());
       if (!found) { say(`Unknown run ID "${pick.trim()}".`); return; }
@@ -246,6 +346,7 @@ export async function menuContinue(_rl, ask, info, run = runScript, say = consol
   const canResume = target.resumable !== false && RESUMABLE_STATUSES.has(target.status);
   const canVerify = target.status === 'DELEGATED' || target.status === 'FAILED';
   const canRollback = typeof target.hasBaseline === 'boolean' ? target.hasBaseline : true;
+  const canReport = target.hasReport !== false;
 
   say(`\nRun ${target.id} (${target.status}):`);
   say('  [1] View handoff report & continuation prompt (visible.mjs handoff)');
@@ -253,9 +354,10 @@ export async function menuContinue(_rl, ask, info, run = runScript, say = consol
   say(`  [3] Resume in terminal until done (dispatch.mjs --resume-visible --wait)${canResume ? '' : `  [unavailable: ${target.status}]`}`);
   say(`  [4] Verify now (visible.mjs verify)${canVerify ? '' : `  [unavailable: ${target.status} — needs DELEGATED/FAILED]`}`);
   say(`  [5] Rollback all changes to pre-run snapshot (visible.mjs rollback)${canRollback ? '' : '  [unavailable: no baseline snapshot]'}`);
+  say(`  [6] View last verification report (visible.mjs report)${canReport ? '' : '  [unavailable: verify first]'}`);
   say('  [0] Back');
 
-  const sub = await ask('Choose [0-5]: ');
+  const sub = await ask('Choose [0-6]: ');
   if (isBack(sub)) return;
   const choice = sub.trim();
 
@@ -268,7 +370,7 @@ export async function menuContinue(_rl, ask, info, run = runScript, say = consol
     }
     const readyList = info.engines.filter((e) => e.status === 'ready').map((e) => e.name);
     const engRaw = await ask(`AI engine (auto, claude, antigravity/agy, codex${readyList.length ? `; ready: ${readyList.join(', ')}` : ''}) [auto]: `);
-    if (engRaw === null) return;
+    if (engRaw === null || isBackCmd(engRaw)) return;
     const eng = normalizeEngineArg(engRaw);
     const knownEngines = new Set(info.engines.map((e) => e.name));
     if (eng && knownEngines.size && !knownEngines.has(eng)) {
@@ -299,6 +401,14 @@ export async function menuContinue(_rl, ask, info, run = runScript, say = consol
     run('visible.mjs', ['rollback', target.id]);
     return;
   }
+  if (choice === '6') {
+    if (!canReport) {
+      say(`No verification report for run ${target.id} yet (verify it first).`);
+      return;
+    }
+    run('visible.mjs', ['report', target.id]);
+    return;
+  }
   say(`Unknown option "${choice}".`);
 }
 
@@ -308,7 +418,7 @@ export async function menuDispatch(_rl, ask, info, run = runScript, say = consol
     say('Note: no AI tool is allowed yet (use [3] Setup -> [3] to allow one, or continue in an interactive terminal to be prompted).');
   }
   const goalRaw = await ask('Goal (what should the AI do? Enter cancels): ');
-  if (goalRaw === null || !goalRaw.trim()) { say('Cancelled.'); return; }
+  if (goalRaw === null || !goalRaw.trim() || isBackCmd(goalRaw)) { say('Cancelled.'); return; }
   const goal = goalRaw.trim();
 
   say('Execution mode:');
@@ -316,7 +426,7 @@ export async function menuDispatch(_rl, ask, info, run = runScript, say = consol
   say('  [2] parallel — AI planner splits into parallel workers');
   say('  [3] team     — orchestrator -> BA/DEV/QA leads -> workers');
   const modeRaw = await ask('Choose mode [1]: ');
-  if (modeRaw === null) return;
+  if (modeRaw === null || isBackCmd(modeRaw)) return;
   const mTrim = modeRaw.trim().toLowerCase();
   const mode = (!mTrim || mTrim === '1' || mTrim === 'normal') ? 'normal'
     : (mTrim === '2' || mTrim === 'parallel') ? 'parallel'
@@ -329,20 +439,22 @@ export async function menuDispatch(_rl, ask, info, run = runScript, say = consol
     const costRaw = await ask('Max cost cap in USD (--max-cost, optional, e.g. 2): ');
     if (costRaw === null) return;
     const ct = costRaw.trim();
+    if (['b', 'back', 'q'].includes(ct.toLowerCase())) return;
     if (ct && (!Number.isFinite(Number(ct)) || Number(ct) < 0)) { say('Invalid --max-cost number; cancelled.'); return; }
     maxCost = ct;
   }
 
   const filesRaw = await ask('Allowed files/folders (comma-separated, e.g. src/,tests/ — recommended for undo; Enter = unrestricted): ');
-  if (filesRaw === null) return;
+  if (filesRaw === null || isBackCmd(filesRaw)) return;
   const files = filesRaw.trim();
 
   const checkRaw = await ask(`Verify command (Enter = auto "${info.verify.cmd}"): `);
-  if (checkRaw === null) return;
+  if (checkRaw === null || isBackCmd(checkRaw)) return;
   const check = checkRaw.trim();
 
-  const engRaw = await ask('AI engine (auto, claude, antigravity/agy, codex) [auto]: ');
-  if (engRaw === null) return;
+  const readyEngines = info.engines.filter((e) => e.status === 'ready').map((e) => e.name);
+  const engRaw = await ask(`AI engine (auto, claude, antigravity/agy, codex${readyEngines.length ? `; ready: ${readyEngines.join(', ')}` : ''}) [auto]: `);
+  if (engRaw === null || isBackCmd(engRaw)) return;
   const eng = normalizeEngineArg(engRaw);
   const knownEngines = new Set(info.engines.map((e) => e.name));
   if (eng && knownEngines.size && !knownEngines.has(eng)) {
@@ -350,11 +462,43 @@ export async function menuDispatch(_rl, ask, info, run = runScript, say = consol
     return;
   }
 
+  const targetRaw = await ask('Delivery target (Enter = working folder, "uat" = --branch uat, or "cwd:<path>" = child/external folder): ');
+  if (targetRaw === null || isBackCmd(targetRaw)) return;
+  const tVal = targetRaw.trim();
+  let branch = '';
+  let cwd = '';
+  if (/^(uat|--branch\s+uat)$/i.test(tVal)) {
+    branch = 'uat';
+  } else if (/^cwd:/i.test(tVal)) {
+    const dir = tVal.slice(4).trim();
+    const abs = dir ? path.resolve(ROOT, dir) : '';
+    if (!dir || !fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
+      say(`Directory not found for cwd "${dir}"; cancelled.`);
+      return;
+    }
+    cwd = dir;
+  } else if (tVal) {
+    const abs = path.resolve(ROOT, tVal);
+    if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) cwd = tVal;
+    else { say(`Unknown delivery target "${tVal}"; cancelled. Use Enter, "uat", or "cwd:<folder>".`); return; }
+  }
+
+  const modelRaw = await ask('Model tier override (Enter = automatic, or fast / medium / high): ');
+  if (modelRaw === null || isBackCmd(modelRaw)) return;
+  const model = modelRaw.trim().toLowerCase();
+  if (model && !['fast', 'medium', 'high'].includes(model)) {
+    say(`Unknown model tier "${modelRaw.trim()}"; cancelled. Use fast, medium, or high.`);
+    return;
+  }
+
   const args = ['--goal', goal, '--mode', mode];
   if (files) args.push('--files', files);
   if (check) args.push('--check', check);
   if (eng) args.push('--engine', eng);
+  if (model) args.push('--model', model);
   if (maxCost) args.push('--max-cost', maxCost);
+  if (branch) args.push('--branch', branch);
+  if (cwd) args.push('--cwd', cwd);
   args.push('--wait');
 
   const quote = (s) => (/[\s"]/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s);
@@ -372,9 +516,10 @@ export async function menuSetup(_rl, ask, _info, run = runScript, say = console.
   say('  [4] Auto-assign team engines to installed CLIs (team.mjs auto-assign)');
   say('  [5] Sync editor named agents (team.mjs sync-agents)');
   say('  [6] Show agent team & budgets (team.mjs show)');
+  say('  [7] Validate team guardrails (team.mjs validate)');
   say('  [0] Back');
 
-  const sub = await ask('Choose [0-6]: ');
+  const sub = await ask('Choose [0-7]: ');
   if (isBack(sub)) return;
   const choice = sub.trim();
 
@@ -383,7 +528,7 @@ export async function menuSetup(_rl, ask, _info, run = runScript, say = console.
   if (choice === '3') {
     run('engines.mjs', ['list']);
     const ans = await ask('Change permission? Enter "allow <tool>" or "deny <tool>" (claude, agy, codex), or Enter to go back: ');
-    if (ans === null || !ans.trim()) return;
+    if (ans === null || !ans.trim() || isBackCmd(ans)) return;
     const parts = ans.trim().split(/\s+/);
     const verb = parts[0]?.toLowerCase();
     const tool = parts[1]?.toLowerCase();
@@ -402,6 +547,7 @@ export async function menuSetup(_rl, ask, _info, run = runScript, say = console.
   }
   if (choice === '5') { run('team.mjs', ['sync-agents']); return; }
   if (choice === '6') { run('team.mjs', ['show']); return; }
+  if (choice === '7') { run('team.mjs', ['validate']); return; }
   say(`Unknown option "${choice}".`);
 }
 
@@ -413,9 +559,12 @@ export async function menuBacklog(_rl, ask, info, run = runScript, say = console
   say('  [4] Run one Autopilot step now (daemon.mjs --tick)');
   say('  [5] Start Autopilot loop on uat branch (daemon.mjs --autonomous)');
   say('  [6] Mark a BLOCKED or BACKLOG item READY (backlog.mjs ready <id>)');
+  say('  [7] Mark an item BLOCKED (backlog.mjs block <id> "reason")');
+  say('  [8] Promote next READY item to inbox now (backlog.mjs pop)');
+  say('  [9] List release snapshots (backlog.mjs releases)');
   say('  [0] Back');
 
-  const sub = await ask('Choose [0-6]: ');
+  const sub = await ask('Choose [0-9]: ');
   if (isBack(sub)) return;
   const choice = sub.trim();
 
@@ -428,7 +577,7 @@ export async function menuBacklog(_rl, ask, info, run = runScript, say = console
     }
     const defId = info.backlog.held[0].id;
     const rawId = await ask(`Backlog ID to approve [${defId}]: `);
-    if (rawId === null) return;
+    if (rawId === null || isBackCmd(rawId)) return;
     const id = rawId.trim() || defId;
     if (!await confirm(ask, `Approve ${id} for team/parallel or high-tier execution? [y/N] `, false)) { say('Not approved.'); return; }
     run('backlog.mjs', ['approve', id]);
@@ -436,20 +585,38 @@ export async function menuBacklog(_rl, ask, info, run = runScript, say = console
   }
   if (choice === '3') {
     const titleRaw = await ask('Task title (Enter cancels): ');
-    if (titleRaw === null || !titleRaw.trim()) { say('Cancelled.'); return; }
+    if (titleRaw === null || !titleRaw.trim() || isBackCmd(titleRaw)) { say('Cancelled.'); return; }
     const goalRaw = await ask('Detailed goal (Enter = same as title): ');
-    if (goalRaw === null) return;
+    if (goalRaw === null || isBackCmd(goalRaw)) return;
     const filesRaw = await ask('Target files/folders (comma-separated, optional): ');
-    if (filesRaw === null) return;
+    if (filesRaw === null || isBackCmd(filesRaw)) return;
     const checkRaw = await ask('Verify command (optional, e.g. npm test): ');
-    if (checkRaw === null) return;
+    if (checkRaw === null || isBackCmd(checkRaw)) return;
+    const roleRaw = await ask('Role (Enter = default, "auto-plan", DEV_ENGINEER, BA_ANALYST, QA_AUDITOR, UX_DESIGNER): ');
+    if (roleRaw === null || isBackCmd(roleRaw)) return;
+    const skillsRaw = await ask('Skills (comma-separated, e.g. code-craft,test-champion — Enter = auto): ');
+    if (skillsRaw === null || isBackCmd(skillsRaw)) return;
+    const prioRaw = await ask('Priority (1 = highest .. 9 = lowest) [5]: ');
+    if (prioRaw === null || isBackCmd(prioRaw)) return;
+    const prio = prioRaw.trim();
+    if (prio && (!/^\d+$/.test(prio) || Number(prio) < 1)) { say(`Invalid priority "${prio}"; cancelled.`); return; }
     const statusRaw = await ask('Initial status ([1] READY / [2] BACKLOG) [1]: ');
-    if (statusRaw === null) return;
+    if (statusRaw === null || isBackCmd(statusRaw)) return;
     const isBacklog = statusRaw.trim() === '2' || /^backlog$/i.test(statusRaw.trim());
     const args = ['add', titleRaw.trim()];
     if (goalRaw.trim()) args.push('--goal', goalRaw.trim());
     if (filesRaw.trim()) args.push('--files', filesRaw.trim());
     if (checkRaw.trim()) args.push('--check', checkRaw.trim());
+    const roleTrim = roleRaw.trim();
+    if (/^auto-plan$/i.test(roleTrim)) args.push('--auto-plan');
+    else if (roleTrim) {
+      const knownRoles = Object.keys((() => { try { return loadRoles(); } catch { return {}; } })());
+      const up = roleTrim.toUpperCase();
+      if (knownRoles.length && !knownRoles.includes(up)) { say(`Unknown role "${roleTrim}". Known: ${knownRoles.join(', ')}, auto-plan.`); return; }
+      args.push('--role', up);
+    }
+    if (skillsRaw.trim()) args.push('--skills', skillsRaw.trim());
+    if (prio) args.push('--priority', prio);
     if (!isBacklog) args.push('--ready');
     run('backlog.mjs', args);
     return;
@@ -462,11 +629,46 @@ export async function menuBacklog(_rl, ask, info, run = runScript, say = console
     return;
   }
   if (choice === '6') {
-    const idRaw = await ask('Backlog ID to set READY: ');
-    if (idRaw === null || !idRaw.trim()) return;
-    run('backlog.mjs', ['ready', idRaw.trim()]);
+    const bl = (() => { try { return readBacklog(); } catch { return { tasks: [] }; } })();
+    const cands = (bl.tasks || []).filter((t) => t.status !== 'READY' && t.status !== 'DONE');
+    if (cands.length) {
+      say('\nItems not currently READY:');
+      for (const t of cands.slice(0, 12)) say(`  - ${t.id} [${t.status}] ${t.title || t.goal}`);
+    }
+    const defId = cands.length === 1 ? cands[0].id : '';
+    const idRaw = await ask(`Backlog ID to set READY${defId ? ` [${defId}]` : ''}: `);
+    if (idRaw === null || isBackCmd(idRaw)) return;
+    const id = idRaw.trim() || defId;
+    if (!id) { say('Cancelled.'); return; }
+    run('backlog.mjs', ['ready', id]);
     return;
   }
+  if (choice === '7') {
+    const bl = (() => { try { return readBacklog(); } catch { return { tasks: [] }; } })();
+    const cands = (bl.tasks || []).filter((t) => t.status !== 'DONE' && t.status !== 'BLOCKED');
+    if (cands.length) {
+      say('\nActive / planned items:');
+      for (const t of cands.slice(0, 12)) say(`  - ${t.id} [${t.status}] ${t.title || t.goal}`);
+    }
+    const defId = cands.length === 1 ? cands[0].id : '';
+    const idRaw = await ask(`Backlog ID to mark BLOCKED${defId ? ` [${defId}]` : ''}: `);
+    if (idRaw === null || isBackCmd(idRaw)) return;
+    const id = idRaw.trim() || defId;
+    if (!id) { say('Cancelled.'); return; }
+    const reasonRaw = await ask('Reason (Enter = "blocked by a human"): ');
+    if (reasonRaw === null || isBackCmd(reasonRaw)) return;
+    run('backlog.mjs', ['block', id, ...(reasonRaw.trim() ? [reasonRaw.trim()] : [])]);
+    return;
+  }
+  if (choice === '8') {
+    const next = (() => { try { return nextReady(); } catch { return null; } })();
+    if (!next) { say('No READY item in .harness/backlog.json to promote.'); return; }
+    say(`Next READY item: ${next.id} — ${next.title || next.goal}`);
+    if (!await confirm(ask, `Promote ${next.id} into .harness/inbox/ now? [y/N] `, false)) { say('Cancelled.'); return; }
+    run('backlog.mjs', ['pop']);
+    return;
+  }
+  if (choice === '9') { run('backlog.mjs', ['releases']); return; }
   say(`Unknown option "${choice}".`);
 }
 
@@ -478,9 +680,10 @@ export async function menuSessions(_rl, ask, info, run = runScript, say = consol
   say('  [4] Save WIP checkpoint commit on child branch (sessions.mjs checkpoint)');
   say('  [5] Merge a DONE task into base after checks (sessions.mjs merge)');
   say('  [6] Cleanup merged worktrees & branches (sessions.mjs cleanup)');
+  say('  [7] Run headless worker inside a child worktree (dispatch.mjs --cwd)');
   say('  [0] Back');
 
-  const sub = await ask('Choose [0-6]: ');
+  const sub = await ask('Choose [0-7]: ');
   if (isBack(sub)) return;
   const choice = sub.trim();
 
@@ -488,16 +691,16 @@ export async function menuSessions(_rl, ask, info, run = runScript, say = consol
   const pickOpenId = async (label) => {
     if (openIds.length) say(`Open child tasks: ${openIds.join(', ')}`);
     const idRaw = await ask(`${label}${openIds.length === 1 ? ` [${openIds[0]}]` : ''}: `);
-    if (idRaw === null) return null;
+    if (idRaw === null || isBackCmd(idRaw)) return null;
     return idRaw.trim() || (openIds.length === 1 ? openIds[0] : '');
   };
 
   if (choice === '1') { run('sessions.mjs', ['board']); return; }
   if (choice === '2') {
     const titleRaw = await ask('Child task title (Enter cancels): ');
-    if (titleRaw === null || !titleRaw.trim()) { say('Cancelled.'); return; }
+    if (titleRaw === null || !titleRaw.trim() || isBackCmd(titleRaw)) { say('Cancelled.'); return; }
     const typeRaw = await ask('Type ([1] feat / [2] bug / [3] task) [1]: ');
-    if (typeRaw === null) return;
+    if (typeRaw === null || isBackCmd(typeRaw)) return;
     const t = typeRaw.trim().toLowerCase();
     const type = (t === '2' || t === 'bug') ? 'bug' : (t === '3' || t === 'task') ? 'task' : 'feat';
     run('sessions.mjs', ['new', titleRaw.trim(), '--type', type]);
@@ -515,7 +718,7 @@ export async function menuSessions(_rl, ask, info, run = runScript, say = consol
     const id = await pickOpenId('Task ID to checkpoint');
     if (!id) { say('Cancelled.'); return; }
     const msgRaw = await ask('WIP checkpoint note (Enter = "checkpoint"): ');
-    if (msgRaw === null) return;
+    if (msgRaw === null || isBackCmd(msgRaw)) return;
     const args = ['checkpoint', id, ...(msgRaw.trim() ? ['--message', msgRaw.trim()] : [])];
     run('sessions.mjs', args);
     return;
@@ -524,7 +727,7 @@ export async function menuSessions(_rl, ask, info, run = runScript, say = consol
     const doneIds = (info.sessions?.done || []).map((x) => x.id);
     if (doneIds.length) say(`Tasks reported DONE: ${doneIds.join(', ')}`);
     const idRaw = await ask(`Task ID to merge${doneIds.length ? ` [${doneIds[0]}]` : ''}: `);
-    if (idRaw === null) return;
+    if (idRaw === null || isBackCmd(idRaw)) return;
     const id = idRaw.trim() || doneIds[0];
     if (!id) { say('Cancelled.'); return; }
     if (!await confirm(ask, `Run verify check and merge ${id} into base branch? [y/N] `, false)) { say('Merge cancelled.'); return; }
@@ -532,20 +735,58 @@ export async function menuSessions(_rl, ask, info, run = runScript, say = consol
     return;
   }
   if (choice === '6') { run('sessions.mjs', ['cleanup']); return; }
+  if (choice === '7') {
+    const id = await pickOpenId('Open child task ID to run inside its worktree');
+    if (!id) { say('Cancelled.'); return; }
+    let data = null;
+    try {
+      const raw = execFileSync(process.execPath, [path.join(HARNESS_DIR, 'sessions.mjs'), 'handoff', id, '--json'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 });
+      data = JSON.parse(raw);
+    } catch (e) {
+      say(`Unable to inspect child task "${id}": ${(e?.stderr || e?.message || '').toString().trim() || 'failed'}`);
+      return;
+    }
+    if (!data?.worktree) {
+      say(`No active local worktree found for ${id} (${data?.task?.branch || 'branch unknown'}). Start it first with: node .harness/sessions.mjs start ${id}`);
+      return;
+    }
+    say(`Child worktree: ${data.worktree} (branch ${data.task.branch}; uncommitted: ${data.uncommitted?.length || 0})`);
+    if (data.checkpointNeededForWorktrees) say('Note: useGitWorktrees is true; run [4] checkpoint first if uncommitted WIP must be visible to detached worker worktrees.');
+    const defGoal = `Finish ${id}: ${data.task.title}`;
+    const goalRaw = await ask(`Goal [${defGoal}]: `);
+    if (goalRaw === null || isBackCmd(goalRaw)) return;
+    const goal = goalRaw.trim() || defGoal;
+    const readyList = info.engines.filter((e) => e.status === 'ready').map((e) => e.name);
+    const knownEngines = new Set(info.engines.map((e) => e.name));
+    const defEng = data.suggestedEngine && knownEngines.has(data.suggestedEngine) ? data.suggestedEngine : 'auto';
+    const engRaw = await ask(`AI engine (auto, claude, antigravity/agy, codex${readyList.length ? `; ready: ${readyList.join(', ')}` : ''}) [${defEng}]: `);
+    if (engRaw === null || isBackCmd(engRaw)) return;
+    const eng = normalizeEngineArg(engRaw.trim() || defEng);
+    if (eng && knownEngines.size && !knownEngines.has(eng)) {
+      say(`Unknown engine "${engRaw.trim()}"; cancelled.`);
+      return;
+    }
+    const args = ['--cwd', data.worktree, '--goal', goal, ...(eng ? ['--engine', eng] : []), '--wait'];
+    say(`Preview: node .harness/dispatch.mjs ${args.join(' ')}`);
+    if (!await confirm(ask, `Run headless worker in ${id} worktree now? [Y/n] `, true)) { say('Cancelled.'); return; }
+    run('dispatch.mjs', args, { extraEnv: { HARNESS_YES: '1' }, allowInput: true });
+    return;
+  }
   say(`Unknown option "${choice}".`);
 }
 
 export async function menuUsageAndStatus(_rl, ask, _info, run = runScript, say = console.log) {
-  say('\nUsage, status & memory:');
+  say('\nUsage, status, memory & Web UI:');
   say('  [1] AI usage / quota — last 7 days (usage.mjs)');
   say('  [2] AI usage / quota — last 30 days (usage.mjs --days 30)');
   say('  [3] Controller status & last 20 events (status.mjs --log 20)');
   say('  [4] Editor workflow runs (visible.mjs status)');
-  say('  [5] Memory rules & auto-lessons (or teach a new rule)');
+  say('  [5] Memory rules, auto-lessons, prompt context & task sessions');
   say('  [6] Short workspace summary (hook-session.mjs --brief)');
+  say('  [7] Start local read-only Web UI dashboard (ui.mjs)');
   say('  [0] Back');
 
-  const sub = await ask('Choose [0-6]: ');
+  const sub = await ask('Choose [0-7]: ');
   if (isBack(sub)) return;
   const choice = sub.trim();
 
@@ -555,26 +796,45 @@ export async function menuUsageAndStatus(_rl, ask, _info, run = runScript, say =
   if (choice === '4') { run('visible.mjs', ['status']); return; }
   if (choice === '5') {
     run('memory.mjs', ['list']);
-    const rule = await ask('Teach AI a new rule? (type rule or Enter to skip): ');
-    if (rule !== null && rule.trim()) run('memory.mjs', ['remember', rule.trim()]);
+    const ans = await ask('Action — type rule to teach, "forget <id>", "forget-auto <id>", "context", "sessions [n]", or Enter to go back: ');
+    if (ans === null || !ans.trim() || isBackCmd(ans)) return;
+    const t = ans.trim();
+    let m;
+    if (/^context$/i.test(t)) run('memory.mjs', ['context']);
+    else if ((m = t.match(/^sessions(?:\s+(\d+))?$/i))) run('memory.mjs', ['sessions', ...(m[1] ? [m[1]] : [])]);
+    else if ((m = t.match(/^forget\s+(\S+)$/i))) run('memory.mjs', ['forget', m[1]]);
+    else if ((m = t.match(/^forget-auto\s+(\S+)$/i))) run('memory.mjs', ['forget-auto', m[1]]);
+    else run('memory.mjs', ['remember', t]);
     return;
   }
   if (choice === '6') { run('hook-session.mjs', ['--brief']); return; }
+  if (choice === '7') {
+    const portRaw = await ask('Port for local Web UI (Enter = 4173, 0 = free port, b = back) [4173]: ');
+    if (portRaw === null) return;
+    const pTrim = portRaw.trim();
+    if (['b', 'back', 'q'].includes(pTrim.toLowerCase())) return;
+    if (pTrim && (!/^\d+$/.test(pTrim) || Number(pTrim) < 0 || Number(pTrim) > 65535)) {
+      say(`Invalid port "${pTrim}". Expected 0..65535.`);
+      return;
+    }
+    run('ui.mjs', pTrim ? ['--port', pTrim] : [], { allowInput: true });
+    return;
+  }
   say(`Unknown option "${choice}".`);
 }
 
 function printMainMenu(info, say = console.log) {
-  const openHint = info.visible.open.length ? `  [${info.visible.open.length} open: ${info.visible.open[0].id}]` : info.visible.stopped.length ? `  [stopped: ${info.visible.stopped[info.visible.stopped.length - 1].id}]` : '';
+  const openHint = info.visible.open.length ? `  [${info.visible.open.length} open: ${info.visible.open[0].id}]` : info.visible.stopped.length ? `  [stopped: ${info.visible.stopped[0].id}]` : '';
   const heldHint = info.backlog.held.length ? `  [${info.backlog.held.length} Needs OK!]` : '';
   const riskHint = info.sessions?.highRisk?.length ? `  [${info.sessions.highRisk.length} HIGH RISK!]` : '';
 
   say('\nActions:');
-  say(`  [1] Continue unfinished work      handoff / resume / verify / rollback${openHint}`);
-  say('  [2] Start a new task              dispatch (normal, parallel, or team)');
-  say('  [3] Setup & AI tool permissions   doctor, allow/deny AI tools, team routing');
-  say(`  [4] Backlog & Autopilot           overview, approve, add, tick, auto${heldHint}`);
-  say(`  [5] Session board                 child sessions, new, handoff, checkpoint, merge${riskHint}`);
-  say('  [6] Usage, status & memory        quota (7d/30d), logs, memory, --brief');
+  say(`  [1] Continue unfinished work      handoff / resume / verify / rollback / report${openHint}`);
+  say('  [2] Start a new task              dispatch (normal, parallel, or team; --branch uat / --cwd)');
+  say('  [3] Setup & AI tool permissions   doctor, allow/deny AI tools, team validate & routing');
+  say(`  [4] Backlog & Autopilot           overview, approve, add, ready/block/pop, tick, auto${heldHint}`);
+  say(`  [5] Session board                 child sessions, new, handoff, checkpoint, cwd, merge${riskHint}`);
+  say('  [6] Usage, status, memory & UI    quota (7d/30d), logs, memory, --brief, Web UI');
   say('  [0] Exit');
 }
 

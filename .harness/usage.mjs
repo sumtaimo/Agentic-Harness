@@ -14,7 +14,24 @@ import { FILES, loadConfig, helpIfAsked, quotaWarnings, formatQuotaWarning } fro
 helpIfAsked(import.meta.url);
 
 const args = process.argv.slice(2);
-const days = Math.max(1, Number(args[args.indexOf('--days') + 1]) || 7);
+function parseDays(argv) {
+  const eq = argv.find((a) => a.startsWith('--days='));
+  if (eq !== undefined) {
+    const raw = eq.slice('--days='.length);
+    const n = Number(raw);
+    if (!raw || !Number.isInteger(n) || n < 1) { console.error(`Invalid --days value '${raw}'. Expected a positive integer (for example: --days=30).`); process.exit(1); }
+    return n;
+  }
+  const idx = argv.indexOf('--days');
+  if (idx > -1) {
+    const raw = argv[idx + 1];
+    const n = Number(raw);
+    if (raw === undefined || raw.startsWith('-') || !Number.isInteger(n) || n < 1) { console.error('--days requires a positive integer (for example: --days 30).'); process.exit(1); }
+    return n;
+  }
+  return 7;
+}
+const days = parseDays(args);
 const asJson = args.includes('--json');
 const since = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
 
@@ -22,14 +39,18 @@ const rows = [];
 try {
   for (const line of fs.readFileSync(FILES.log, 'utf8').split('\n')) {
     if (!line.includes('"AGENT_USAGE"')) continue;
-    try { const e = JSON.parse(line); if (e.ts.slice(0, 10) >= since) rows.push(e); } catch { /* skip a broken line */ }
+    try {
+      const e = JSON.parse(line);
+      if (typeof e.ts === 'string' && e.ts.slice(0, 10) >= since) rows.push(e);
+    } catch { /* skip a broken line */ }
   }
 } catch { /* no log yet */ }
 
 const sum = {};
 for (const e of rows) {
-  const day = e.ts.slice(0, 10); const key = `${e.engine}|${e.model || 'CLI default'}`;
-  const d = (sum[day] ||= {}); const r = (d[key] ||= { engine: e.engine, model: e.model || 'CLI default', calls: 0, failed: 0, tokens: 0, tokensKnown: 0, usd: 0, minutes: 0 });
+  const engine = String(e.engine || 'unknown');
+  const day = e.ts.slice(0, 10); const key = `${engine}|${e.model || 'CLI default'}`;
+  const d = (sum[day] ||= {}); const r = (d[key] ||= { engine, model: e.model || 'CLI default', calls: 0, failed: 0, tokens: 0, tokensKnown: 0, usd: 0, minutes: 0 });
   r.calls++; if (!e.ok) r.failed++;
   if (typeof e.tokens === 'number') { r.tokens += e.tokens; r.tokensKnown++; }
   r.usd += Number(e.usd) || 0; r.minutes += (Number(e.ms) || 0) / 60000;

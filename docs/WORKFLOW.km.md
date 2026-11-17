@@ -70,7 +70,7 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 
 - test មិនខូចទៀតទេ ពេលមានការងារក្នុង backlog ឬមាន run កំពុងបើក (`sandbox()` ក្នុង `test/run-tests.mjs`)។
 - ការដំឡើងថ្មី (`install.mjs`) មិនចម្លង profile, lessons, backlog ឬ run ដែលកំពុងបើក របស់ម្ចាស់ project ទៀតទេ។
-- `agy` ទទួល prompt តាម stdin (`-p ""`)។ នៅលើ Windows harness រក្សា argument ទទេ `""` ដោយមិនបាត់។
+- `agy` ទទួល prompt តាម argument (`-p "<prompt>"` ព្រោះ `-p ""` តាម stdin ត្រូវបាន `agy` បដិសេធដោយ `error: empty prompt`)។ នៅលើ Windows `agy.exe` ត្រូវបាន spawn ដោយ `shell: false` ដើម្បីកុំឱ្យ `cmd.exe` កាត់ prompt ច្រើនបន្ទាត់ ឬបោះ `--model` ចោល។
 - engine ដែល `--help` ទទេ ហើយ profile មិនទាន់ verified នឹងមិនត្រូវបានប្រើទេ។ probe cache មាន version ដូច្នេះលទ្ធផលចាស់មិនត្រូវបានប្រើឡើងវិញ។
 - `doctor` ព្រមានពេល engine ដែលជ្រើសទីមួយមិនទាន់ដំឡើង។
 - សារ "profile មិនទាន់បំពេញ" ដែលខុស ត្រូវបានជួសជុល៖ ឥឡូវពិនិត្យតែបន្ទាត់ field ដែលចាប់ផ្តើមដោយ `- ` ប៉ុណ្ណោះ។
