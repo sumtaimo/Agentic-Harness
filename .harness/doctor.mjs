@@ -161,6 +161,34 @@ for (const s of Object.values(skills)) {
   const badRoles = s.roles.filter((r) => !roles[r]);
   badRoles.length ? warn(`skill ${s.name}: unknown role(s) ${badRoles.join(', ')}`) : ok(`skill ${s.name} → roles ${s.roles.join(', ') || 'any'}${s.roles.filter((r) => roles[r]).map((r) => { const t = skillToolsFor(s, r); return t.length ? `; ${r}: ${t.join(', ')}` : ''; }).join('')}`);
 }
+// Skill Foundry (github:sumtaimo/Skill-Foundry) installs skills into .claude/skills/<name>/ with a .foundry.json stamp
+// and a pointer in .harness/skills/<name>/SKILL.md. Check that the two halves agree and that the roles can run them.
+{
+  const csk = path.join(ROOT, '.claude', 'skills');
+  const stamps = fs.existsSync(csk) ? fs.readdirSync(csk, { withFileTypes: true }).filter((d) => d.isDirectory() && fs.existsSync(path.join(csk, d.name, '.foundry.json'))).map((d) => d.name) : [];
+  if (stamps.length) {
+    const FCLI = 'npx github:sumtaimo/Skill-Foundry';
+    let issues = 0;
+    for (const n of stamps) {
+      let st = {}; try { st = JSON.parse(fs.readFileSync(path.join(csk, n, '.foundry.json'), 'utf8')); } catch { warn(`Skill Foundry: .claude/skills/${n}/.foundry.json is not valid JSON. Fix: ${FCLI} update ${n}`); issues++; continue; }
+      if (st.scope === 'factory') continue;
+      const p = skills[n];
+      if (!p) { warn(`Skill Foundry: ${n} is installed but has no pointer .harness/skills/${n}/SKILL.md, so harness workers never get it. Fix: ${FCLI} update ${n}`); issues++; continue; }
+      if (!p.installedBy.startsWith('skill-foundry')) { warn(`Skill Foundry: .harness/skills/${n}/SKILL.md is the project's own skill, not the foundry pointer, so the foundry skill is not wired. Fix: ${FCLI} update ${n} --sync-harness (keeps yours as SKILL.md.orig) or keep yours`); issues++; continue; }
+      const pv = p.installedBy.split(/\s+/)[1];
+      if (st.version && pv && pv !== st.version) { warn(`Skill Foundry: ${n} pointer is for ${pv} but ${st.version} is installed. Fix: ${FCLI} update ${n}`); issues++; }
+      if (!p.autoApply) { warn(`Skill Foundry: ${n} pointer has autoApply off, so it reaches only members that list it in team.json "skills". Fix: ${FCLI} update ${n}`); issues++; }
+      const engine = fs.existsSync(path.join(csk, n, 'engine'));
+      for (const r of p.roles) {
+        const role = roles[r]; if (!role) continue;
+        const ng = skillRulesNotGranted(role, [p]);
+        if (ng.length) { warn(`Skill Foundry: ${n} asks role ${r} for ${ng.map((x) => x.split(': ')[1]).join(', ')}, which the role does not allow (ignored).`); issues++; }
+        if (engine && !(role.allowedTools || []).some((t) => t === 'Bash(node:*)' || t === 'Bash(*)' || t === 'Bash')) { warn(`Skill Foundry: ${n} runs engine/*.mjs scripts, but role ${r} may not run node. Let DEV_ENGINEER run that step, or (project owner's choice) add "Bash(node:*)" to .harness/roles/${role.file}`); issues++; }
+      }
+    }
+    issues ? note(`Skill Foundry: ${stamps.length} skill(s), ${issues} finding(s) above. Deeper check: ${FCLI} doctor`) : ok(`Skill Foundry: ${stamps.length} skill(s) wired to the harness (${stamps.join(', ')})`);
+  }
+}
 try {
   validateBacklog(JSON.parse(fs.readFileSync(path.join(ROOT, '.harness', 'backlog.json'), 'utf8')));
   const c = backlogCounts(readBacklog());

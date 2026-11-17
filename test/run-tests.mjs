@@ -3592,5 +3592,127 @@ await test('bug-hunter Batch 4 (ui, charter, settings): ui.mjs skipSessions/usag
   ]) assert(settings.ask.includes(rule), `settings.json ask missing ${rule}`);
 });
 
+
+// ───────────── Skill Foundry sync (owner decisions H1–H5) ─────────────
+
+// A stand-in for the Skill Foundry CLI that follows the shared file contract (.claude/skills/<n>/.foundry.json +
+// .harness/skills/<n>/SKILL.md pointer with the "installed-by: skill-foundry" marker). No network.
+const FAKE_FOUNDRY = `import fs from 'node:fs'; import path from 'node:path';
+const p = process.cwd(); const n = 'fx-engine';
+const d = path.join(p, '.claude', 'skills', n); fs.mkdirSync(path.join(d, 'engine'), { recursive: true });
+fs.writeFileSync(path.join(d, 'SKILL.md'), '# fx'); fs.writeFileSync(path.join(d, 'engine', 'run.mjs'), '');
+fs.writeFileSync(path.join(d, '.foundry.json'), JSON.stringify({ name: n, version: '1.2.0', source: 'github:sumtaimo/Skill-Foundry', files: {} }));
+const h = path.join(p, '.harness', 'skills');
+if (fs.existsSync(h)) { fs.mkdirSync(path.join(h, n), { recursive: true }); fs.writeFileSync(path.join(h, n, 'SKILL.md'), '---\\nname: fx-engine\\ndescription: fx\\nroles: ["DEV_ENGINEER","QA_AUDITOR"]\\nallowedTools: ["Edit","Write","Bash"]\\nkeywords: []\\nautoApply: true\\ninstalled-by: skill-foundry 1.2.0\\n---\\n# fx\\n'); }
+fs.writeFileSync(path.join(p, 'foundry-ran.txt'), process.argv.slice(2).join(' '));`;
+const fakeFoundry = () => { const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-foundry-')), 'foundry.mjs'); fs.writeFileSync(f, FAKE_FOUNDRY); return f; };
+const fxSkill = { name: 'fx-engine', roles: ['DEV_ENGINEER', 'QA_AUDITOR'], allowedTools: ['Edit', 'Write', 'Bash'], toolsByRole: {}, keywords: [], autoApply: true, installedBy: 'skill-foundry 1.2.0' };
+
+await test('H1 matchSkills: a lead listing "code-craft" still gets autoApply (Skill Foundry) skills; wrong roles stay out; keywords only without an explicit list', async () => {
+  const { matchSkills, loadSkills } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
+  const all = { ...loadSkills(), 'fx-engine': fxSkill, 'ux-only': { ...fxSkill, name: 'ux-only', roles: ['UX_DESIGNER'] } };
+  const m = matchSkills({ skills: ['code-craft'], prompt: 'write a test' }, 'DEV_ENGINEER', all);
+  const names = m.chosen.map((s) => s.name);
+  assert(names[0] === 'code-craft' && names.includes('fx-engine') && !names.includes('ux-only'), names.join());
+  assert(!names.includes('test-champion'), 'keyword skill added despite an explicit list');
+  const ux = matchSkills({ skills: ['ui-craft'] }, 'UX_DESIGNER', all).chosen.map((s) => s.name);
+  assert(ux.includes('ui-craft') && ux.includes('ux-only') && !ux.includes('fx-engine'), ux.join());
+  assert(matchSkills({ skills: ['code-craft', 'code-craft'] }, 'DEV_ENGINEER', all).chosen.filter((s) => s.name === 'code-craft').length === 1, 'duplicate');
+  const none = matchSkills({ prompt: 'add a regression test' }, 'QA_AUDITOR', all).chosen.map((s) => s.name);
+  assert(none.includes('test-champion') && none.includes('fx-engine'), none.join());
+});
+
+await test('H1 computeAllowedTools: code-craft + an engine skill keeps npm test AND node, in either order, never beyond the role', async () => {
+  const { computeAllowedTools, loadRoles, loadSkills } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
+  const roles = loadRoles(); const cc = loadSkills()['code-craft'];
+  for (const order of [[cc, fxSkill], [fxSkill, cc]]) {
+    const t = computeAllowedTools(roles.DEV_ENGINEER, order, ['src/a.js']);
+    assert(t.includes('Bash(npm test:*)') && t.includes('Bash(node:*)') && t.includes('Edit(src/a.js)') && t.includes('Write(src/a.js)'), t.join());
+  }
+  const qa = computeAllowedTools(roles.QA_AUDITOR, [cc, fxSkill], ['test/a.test.js']);
+  assert(qa.includes('Bash(npm test:*)') && !qa.some((x) => /node/.test(x)), `QA gained node: ${qa.join()}`); // H2 (b): roles are not widened
+  const plain = { ...fxSkill, allowedTools: [] };
+  const p = computeAllowedTools(roles.DEV_ENGINEER, [cc, plain], ['src/a.js']);
+  assert(p.includes('Bash(npm test:*)') && !p.includes('Bash(node:*)'), `a skill with no tool list changed the rules: ${p.join()}`);
+  const ux = computeAllowedTools(roles.UX_DESIGNER, [fxSkill], ['src/a.css']);
+  assert(!ux.some((x) => /node|npm/.test(x)), ux.join());
+});
+
+await test('H3 the spec-writer starter stub carries the starter marker Skill Foundry recognises', async () => {
+  const { loadSkills } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
+  const s = loadSkills()['spec-writer'];
+  assert(s.starterStub === 'agentic-harness' && /starter-stub: agentic-harness/.test(s.raw), 'marker missing');
+  for (const n of ['code-craft', 'api-craft', 'security-guard', 'test-champion', 'ui-craft']) assert(!loadSkills()[n].starterStub, `${n} must stay harness-owned`);
+});
+
+await test('AH-6 re-installing never duplicates AGENTS.md / CLAUDE.md / GEMINI.md sections (fresh and pre-marker projects)', () => {
+  const p = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-reinst-'));
+  const inst = () => spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), p, '--no-auto-assign'], { encoding: 'utf8', env: { ...process.env, HARNESS_OFFLINE: '1' } });
+  inst(); const first = Object.fromEntries(['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.windsurfrules'].map((f) => [f, fs.readFileSync(path.join(p, f), 'utf8')]));
+  const r = inst();
+  assert(r.status === 0, r.stderr);
+  for (const [f, body] of Object.entries(first)) assert(fs.readFileSync(path.join(p, f), 'utf8') === body, `${f} changed on re-install`);
+  // a project from a release before the marker: an appended "# Agentic harness" section without the marker
+  const q = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-legacy-'));
+  fs.writeFileSync(path.join(q, 'AGENTS.md'), '# Mine\nKeep.\n\n# Agentic harness\n\nThis project contains an **Agentic Harness** in `.harness/`.\n');
+  fs.writeFileSync(path.join(q, 'CLAUDE.md'), '# Mine\n\n## Agentic harness\n\nRead AGENTS.md and .harness/memory/profile.md.\n');
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), q, '--no-auto-assign'], { encoding: 'utf8', env: { ...process.env, HARNESS_OFFLINE: '1' } });
+  assert((fs.readFileSync(path.join(q, 'AGENTS.md'), 'utf8').match(/Agentic Harness\*\*/g) || []).length === 1, 'legacy AGENTS.md duplicated');
+  assert((fs.readFileSync(path.join(q, 'CLAUDE.md'), 'utf8').match(/Agentic harness/g) || []).length === 1, 'legacy CLAUDE.md duplicated');
+  // a user's own AGENTS.md still gets the section
+  const u = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-own-'));
+  fs.writeFileSync(path.join(u, 'AGENTS.md'), '# Mine\nNothing about it.\n');
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), u, '--no-auto-assign'], { encoding: 'utf8', env: { ...process.env, HARNESS_OFFLINE: '1' } });
+  assert(fs.readFileSync(path.join(u, 'AGENTS.md'), 'utf8').includes('<!-- agentic-harness -->'), 'own AGENTS.md not merged');
+});
+
+await test('H4 Skill Foundry is opt-in: no network by default, --with-skills runs it, offline/failure never fails the install', () => {
+  const foundry = fakeFoundry();
+  const inst = (p, args, extra = {}) => spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), p, '--no-auto-assign', ...args], { encoding: 'utf8', env: { ...process.env, HARNESS_FOUNDRY_CMD: foundry, ...extra } });
+  const a = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-sf-'));
+  const r0 = inst(a, []);
+  assert(r0.status === 0 && !fs.existsSync(path.join(a, 'foundry-ran.txt')) && /--with-skills/.test(r0.stdout), 'ran Skill Foundry without --with-skills');
+  const r1 = inst(a, ['--with-skills']);
+  assert(r1.status === 0 && fs.readFileSync(path.join(a, 'foundry-ran.txt'), 'utf8') === 'add --all --quiet' && /added  Skill Foundry/.test(r1.stdout), r1.stdout);
+  const b = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-sf-'));
+  const r2 = inst(b, ['--with-skills'], { HARNESS_OFFLINE: '1' });
+  assert(r2.status === 0 && !fs.existsSync(path.join(b, 'foundry-ran.txt')) && /HARNESS_OFFLINE/.test(r2.stdout), 'offline not honoured');
+  const broken = path.join(path.dirname(foundry), 'broken.mjs'); fs.writeFileSync(broken, 'console.error("network down"); process.exit(7);');
+  const r3 = inst(b, ['--with-skills'], { HARNESS_FOUNDRY_CMD: broken });
+  assert(r3.status === 0 && /did not install \(network down\)/.test(r3.stdout) && fs.existsSync(path.join(b, '.harness', 'MANIFEST.json')), r3.stdout);
+});
+
+await test('Dual order (fake Skill Foundry): harness→foundry and foundry→harness both end wired, no duplicates, no Write() rules; doctor reports the gaps', () => {
+  const foundry = fakeFoundry();
+  const env2 = { ...process.env, HARNESS_FOUNDRY_CMD: foundry };
+  const inst = (p, args = []) => spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), p, '--no-auto-assign', ...args], { encoding: 'utf8', env: env2 });
+  const doc = (p) => spawnSync(process.execPath, ['.harness/doctor.mjs'], { cwd: p, encoding: 'utf8', env: { ...env, HARNESS_ROOT: p } }).stdout;
+  const check = (p, label) => {
+    assert(fs.existsSync(path.join(p, '.claude', 'skills', 'fx-engine', '.foundry.json')) && /installed-by: skill-foundry/.test(fs.readFileSync(path.join(p, '.harness', 'skills', 'fx-engine', 'SKILL.md'), 'utf8')), `${label}: not wired`);
+    assert((fs.readFileSync(path.join(p, 'AGENTS.md'), 'utf8').match(/Agentic Harness\*\*/g) || []).length === 1, `${label}: AGENTS.md duplicated`);
+    const deny = json(path.join(p, '.claude', 'settings.json')).permissions.deny || [];
+    assert(!deny.some((r) => r.startsWith('Write(')), `${label}: invalid Write() rule`);
+    const v = spawnSync(process.execPath, ['.harness/team.mjs', 'validate'], { cwd: p, encoding: 'utf8', env: { ...env, HARNESS_ROOT: p } });
+    assert(v.status === 0, `${label}: team invalid ${v.stdout}`);
+    const out = doc(p);
+    assert(/Skill Foundry: fx-engine runs engine\/\*\.mjs scripts, but role QA_AUDITOR may not run node/.test(out) && !/role DEV_ENGINEER may not run node/.test(out), `${label}: doctor ${out.split('Skill Foundry').slice(1).join('|')}`);
+  };
+  // Order 1: harness first, then Skill Foundry (via --with-skills on the re-install)
+  const a = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-dual1-'));
+  inst(a); inst(a, ['--with-skills']); check(a, 'order 1');
+  // Order 2: Skill Foundry first (no pointer: no .harness yet), then the harness; installer and doctor name the gap
+  const b = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-dual2-'));
+  spawnSync(process.execPath, [foundry], { cwd: b });
+  const r = inst(b);
+  assert(/not wired to harness workers yet \(fx-engine\)/.test(r.stdout), r.stdout);
+  assert(/fx-engine is installed but has no pointer/.test(doc(b)), 'doctor missed the missing pointer');
+  spawnSync(process.execPath, [foundry, 'update'], { cwd: b }); inst(b); check(b, 'order 2');
+  // stale pointer version + autoApply off are reported
+  const ptr = path.join(b, '.harness', 'skills', 'fx-engine', 'SKILL.md');
+  fs.writeFileSync(ptr, fs.readFileSync(ptr, 'utf8').replace('skill-foundry 1.2.0', 'skill-foundry 1.1.0').replace('autoApply: true', 'autoApply: false'));
+  const out = doc(b);
+  assert(/pointer is for 1\.1\.0 but 1\.2\.0 is installed/.test(out) && /autoApply off/.test(out), out.split('Skill Foundry').slice(1).join('|'));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

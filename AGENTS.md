@@ -253,7 +253,14 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
   engine permissions: with Claude Code it can only edit its own targetFiles.
 - Skills (`.harness/skills/<name>/SKILL.md`, frontmatter `name`, `description`, `roles`,
   `allowedTools`): rules injected into matching workers. A skill can narrow tools, never add;
-  exact rules like `Bash(npm test:*)` are granted only if the role already covers them.
+  exact rules like `Bash(npm test:*)` are granted only if the role already covers them. With several skills, each
+  narrows on its own and the worker gets the union (never more than the role). A lead's `skills` list in `team.json`
+  is added to every `autoApply: true` skill for its role (e.g. skills installed by Skill Foundry).
+- More skills: `npx github:sumtaimo/Skill-Foundry add --all` (or install the harness with `--with-skills`). Doctor
+  checks that each one has its `.harness/skills/` pointer and says which roles may not run its `engine/` scripts.
+  Boundaries: `spec-writer` here is a starter stub that Skill Foundry's deeper version replaces; `test-champion` writes
+  test code (Skill Foundry's `test-planner` is the regression checklist); `ui-craft` is the general style rules
+  (`design-system` / `ui-polish` generate tokens and do the final polish).
 - One step now: `node .harness/daemon.mjs --tick`. Scheduled: `node .harness/daemon.mjs --autonomous`
   (only one daemon per folder). When READY items run out, the PO_ARCHITECT proposes new ones
   (≤ budget); its suggested checks are recorded, never run.

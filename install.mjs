@@ -2,7 +2,8 @@
 /**
  * install.mjs — copy this harness into another project, without overwriting that project's files.
  *
- *   node install.mjs /path/to/your/project [--autonomous off] [--no-auto-assign]
+ *   node install.mjs /path/to/your/project [--autonomous off] [--no-auto-assign] [--with-skills]
+ *     --with-skills  also run Skill Foundry (npx github:sumtaimo/Skill-Foundry add --all); off by default, skipped with HARNESS_OFFLINE=1
  *   node install.mjs --reset [/path/to/your/project] [--autonomous off]   (clean a "Use this template" copy)
  *
  * - .harness/ is copied (your existing memory, inbox and logs are kept if already there).
@@ -177,6 +178,12 @@ for (const rel of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.github/copilot-instr
   if (!fs.existsSync(d)) { fs.copyFileSync(s, d); report.push(`wrote  ${rel}`); continue; }
   const body = fs.readFileSync(d, 'utf8');
   if (body.includes(MARK)) { report.push(`kept   ${rel} (harness section already present)`); continue; }
+  // Copies written by an earlier install (the template's own files carry no marker) or by a release before the marker
+  // existed: they already hold the harness instructions, so appending again would duplicate them.
+  const legacy = rel === 'AGENTS.md'
+    ? /This project contains an \*\*Agentic Harness\*\*|^# Agentic harness\s*$/m.test(body)
+    : /\.harness\/memory\/profile\.md/.test(body) && /agentic harness|AGENTS\.md/i.test(body);
+  if (legacy) { report.push(`kept   ${rel} (harness instructions already present)`); continue; }
   // Their AGENTS.md exists: append the full harness instructions; others just get the pointer.
   const add = rel === 'AGENTS.md' ? `${MARK}\n${fs.readFileSync(s, 'utf8').replace(/^# .*\n/, '# Agentic harness\n')}` : POINTER;
   fs.writeFileSync(d, `${body.replace(/\s*$/, '')}\n\n${add}`);
@@ -306,6 +313,29 @@ if (optI > -1) {
     fs.writeFileSync(cp, fs.readFileSync(cp, 'utf8').replace(/^- autonomous: on$/m, '- autonomous: off'));
     report.push('set   autonomous mode OFF in the new .harness/charter.md');
   }
+}
+
+// Skill Foundry (opt-in, owner decision H4/H5): --with-skills installs every Skill Foundry skill from its default
+// branch. A failure (offline, no npx, network) never fails the install. HARNESS_OFFLINE=1 skips it (tests use that);
+// HARNESS_FOUNDRY_CMD=<script.mjs> runs a local foundry CLI instead of npx (for offline tests and forks).
+const FOUNDRY = 'npx github:sumtaimo/Skill-Foundry';
+if (ARGS.includes('--with-skills')) {
+  if (process.env.HARNESS_OFFLINE === '1') report.push(`! skipped Skill Foundry (HARNESS_OFFLINE=1). Later:  ${FOUNDRY} add --all`);
+  else {
+    const local = process.env.HARNESS_FOUNDRY_CMD;
+    const win = process.platform === 'win32';
+    const [cmd, args] = local ? [process.execPath, [path.resolve(local), 'add', '--all', '--quiet']] : [win ? 'npx.cmd' : 'npx', ['--yes', 'github:sumtaimo/Skill-Foundry', 'add', '--all', '--quiet']];
+    const r = spawnSync(cmd, args, { cwd: target, encoding: 'utf8', timeout: 180000, shell: win && !local });
+    if (r.status === 0) report.push('added  Skill Foundry skills (.claude/skills/ + .harness/skills/ pointers); check them with  node .harness/doctor.mjs');
+    else report.push(`! Skill Foundry did not install (${(r.error?.message || r.stderr || `exit ${r.status}`).trim().split('\n').pop()}); the harness is installed. Retry later:  ${FOUNDRY} add --all`);
+  }
+} else {
+  // Skill Foundry installed before the harness: its skills have no harness pointers yet, so workers do not get them.
+  const csk = path.join(target, '.claude', 'skills');
+  const unwired = fs.existsSync(csk) ? fs.readdirSync(csk).filter((n) => fs.existsSync(path.join(csk, n, '.foundry.json')) && !fs.existsSync(path.join(target, '.harness', 'skills', n, 'SKILL.md'))) : [];
+  report.push(unwired.length
+    ? `! ${unwired.length} Skill Foundry skill(s) are not wired to harness workers yet (${unwired.join(', ')}). Run:  ${FOUNDRY} update   (or re-install with --with-skills)`
+    : `tip    more skills: ${FOUNDRY} add --all   (or install with --with-skills)`);
 }
 
 console.log(`Installed the agentic harness into ${target}\n`);

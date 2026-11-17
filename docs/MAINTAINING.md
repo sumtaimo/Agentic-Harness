@@ -50,7 +50,7 @@ backlog and memory are kept; the core and its fingerprints are replaced.
 Run these in the template repository, in order. Nothing goes to `lab` until all pass **and the owner says yes**.
 
 1. `npm test`: the free test suite (fake engines only; it hides the real AI CLIs on your machine).
-2. `npm run audit -- --site`: installs into an empty project as a new user would and checks every command, the docs'
+2. `npm run audit -- --site` (when the Skill Foundry contract changed, also `--foundry <checkout>/src/factory/foundry.mjs`): installs into an empty project as a new user would and checks every command, the docs'
    references, the owner's rules and the website build. Free; it never calls an AI tool.
 3. A real run, only when an engine's command line or models changed, and only with the owner's OK (it spends quota):
    one tiny task in a scratch project (`npm run demo`, then the `hello.txt` task in `docs/ENGINES.md`).

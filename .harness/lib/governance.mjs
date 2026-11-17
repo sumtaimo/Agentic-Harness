@@ -143,6 +143,7 @@ function covers(roleRule, skillRule) {
  *       - exact rules ("Bash(npm test:*)") → replace the role's rules for that tool by those skill
  *         rules that the role already covers (a skill can never grant a command the role lacks).
  *     Tools the skill does not mention are dropped (read-only tools are always kept).
+ *  3. several skills compose by UNION of what each one keeps (never more than the role allows); see below.
  *  Returns the rules; use explainSkillNarrowing() for what a skill asked for but did not get.
  */
 export function computeAllowedTools(role, skills, targetFiles) {
@@ -152,21 +153,26 @@ export function computeAllowedTools(role, skills, targetFiles) {
     if (rule.includes('{targetFiles}')) targets.forEach((t) => rules.push(rule.replace('{targetFiles}', t)));
     else rules.push(rule);
   }
-  for (const s of skills) {
-    const list = skillToolsFor(s, role.name);
-    if (!Array.isArray(list) || list.length === 0) continue;
-    const bare = new Set(list.filter((r) => !r.includes('(')).map(baseTool));
-    const exact = new Map();
-    for (const r of list.filter((x) => x.includes('('))) exact.set(baseTool(r), [...(exact.get(baseTool(r)) || []), r]);
-    const before = rules;
+  // Each skill narrows the role's rules on its own; with several skills the result is the UNION of those views, so a
+  // skill that needs a tool (e.g. a bare "Bash" for its engine scripts) is never starved by a stricter sibling skill
+  // (code-craft's "npm test only"). It can never exceed what the role itself allows. A skill with no tool list has no
+  // opinion and is skipped; if no skill lists tools the role's rules stay as they are.
+  const narrowers = skills.map((s) => skillToolsFor(s, role.name)).filter((l) => Array.isArray(l) && l.length > 0);
+  if (narrowers.length) {
+    const base = rules;
     const out = [];
-    for (const r of before) {
-      const t = baseTool(r);
-      if (READ_ONLY_TOOLS.has(t) || bare.has(t)) out.push(r);
-    }
-    for (const [t, skillRules] of exact) {
-      if (bare.has(t)) continue; // a bare name already keeps the role's rules
-      for (const sr of skillRules) if (before.some((r) => covers(r, sr))) out.push(sr);
+    for (const list of narrowers) {
+      const bare = new Set(list.filter((r) => !r.includes('(')).map(baseTool));
+      const exact = new Map();
+      for (const r of list.filter((x) => x.includes('('))) exact.set(baseTool(r), [...(exact.get(baseTool(r)) || []), r]);
+      for (const r of base) {
+        const t = baseTool(r);
+        if (READ_ONLY_TOOLS.has(t) || bare.has(t)) out.push(r);
+      }
+      for (const [t, skillRules] of exact) {
+        if (bare.has(t)) continue; // a bare name already keeps the role's rules
+        for (const sr of skillRules) if (base.some((r) => covers(r, sr))) out.push(sr);
+      }
     }
     rules = out;
   }
@@ -229,6 +235,8 @@ export function loadSkills() {
         toolsByRole: Object.fromEntries(Object.entries(meta).filter(([k, v]) => /^allowedTools\./.test(k) && Array.isArray(v)).map(([k, v]) => [k.slice('allowedTools.'.length).toUpperCase(), v])),
         keywords: Array.isArray(meta.keywords) ? meta.keywords.map(String) : [],
         autoApply: meta.autoApply === true,
+        installedBy: meta['installed-by'] ? String(meta['installed-by']) : '',
+        starterStub: meta['starter-stub'] ? String(meta['starter-stub']) : '',
         body: body.trim(),
         raw,
         dir: dir.name
@@ -239,26 +247,28 @@ export function loadSkills() {
 }
 
 /**
- * Pick skills for a worker. Explicit `skills` win; otherwise skills whose roles include the
- * worker's role AND (autoApply OR a keyword appears in the prompt). A skill whose `roles` list
+ * Pick skills for a worker: the explicit `skills` (a lead's list, a plan's list), PLUS every skill with `autoApply: true`
+ * whose roles include the worker's role (so Skill Foundry skills still reach a lead that lists "code-craft").
+ * With no explicit list, also skills whose roles include the role AND a keyword appears in the prompt. A skill whose `roles` list
  * excludes the role is never injected (reported as a mismatch).
  */
 export function matchSkills(sub, roleName, allSkills) {
   const chosen = []; const mismatched = []; const unknown = [];
   const fits = (s) => s.roles.length === 0 || s.roles.includes(roleName);
-  if (Array.isArray(sub.skills) && sub.skills.length) {
+  const explicit = Array.isArray(sub.skills) && sub.skills.length > 0;
+  if (explicit) {
     for (const n of sub.skills) {
       const s = allSkills[n];
       if (!s) unknown.push(n);
       else if (!fits(s)) mismatched.push(n);
-      else chosen.push(s);
+      else if (!chosen.includes(s)) chosen.push(s);
     }
-  } else {
-    const text = String(sub.prompt || '').toLowerCase();
-    for (const s of Object.values(allSkills)) {
-      if (!fits(s) || s.roles.length === 0) continue;
-      if (s.autoApply || s.keywords.some((k) => text.includes(k.toLowerCase()))) chosen.push(s);
-    }
+  }
+  const text = String(sub.prompt || '').toLowerCase();
+  for (const s of Object.values(allSkills)) {
+    if (chosen.includes(s) || !fits(s) || s.roles.length === 0) continue;
+    // an explicit list adds to autoApply skills (e.g. installed by Skill Foundry); keywords only decide when nothing is explicit
+    if (s.autoApply || (!explicit && s.keywords.some((k) => text.includes(k.toLowerCase())))) chosen.push(s);
   }
   return { chosen, mismatched, unknown };
 }

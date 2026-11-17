@@ -5,6 +5,7 @@ roles: ["BA_ANALYST"]
 allowedTools: ["Read", "Edit", "Write"]
 keywords: ["spec", "requirement", "acceptance", "docs", "document"]
 autoApply: false
+starter-stub: agentic-harness
 ---
 # Spec Writer Rules
 1. Start with one sentence: what the feature does and for whom.

@@ -5,6 +5,8 @@
  *
  *   npm run audit            all checks; exit 1 if any FAIL
  *   npm run audit -- --site  also build the website (needs: cd website && npm ci)
+ *   npm run audit -- --foundry <path/to/Skill-Foundry/src/factory/foundry.mjs>
+ *                            also the live dual-order check against a real Skill Foundry checkout (no network)
  *
  * Checks: fresh install works and records the core fingerprints; personal files never travel (approvals.json);
  * the core is read-only for Claude Code in a project; every command answers --help; doctor on a fresh project has
@@ -154,6 +156,43 @@ if (process.argv.includes('--site')) {
   const site = path.join(REPO, 'website');
   if (!fs.existsSync(path.join(site, 'node_modules'))) check('website build', false, 'run: cd website && npm ci');
   else { const b = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], { cwd: site, encoding: 'utf8', shell: process.platform === 'win32' }); check('website builds (typecheck + bundle)', b.status === 0, (b.stdout + b.stderr).slice(-600)); }
+}
+
+// 6. Skill Foundry dual-order integration (optional, a real local checkout of github:sumtaimo/Skill-Foundry)
+{
+  const i = process.argv.indexOf('--foundry');
+  if (i > -1) {
+    const cli = path.resolve(String(process.argv[i + 1] || ''));
+    console.log('\nSkill Foundry dual-order integration');
+    if (!fs.existsSync(cli)) check('Skill Foundry CLI found', false, cli);
+    else {
+      const verify = (p, label) => {
+        const doc = run(['.harness/doctor.mjs'], p, { HARNESS_ROOT: p, HARNESS_ENGINES: '' });
+        check(`${label}: doctor has no Skill Foundry wiring problem`, !/has no pointer|not the foundry pointer|pointer is for|not valid JSON/.test(doc.stdout), doc.stdout.split('\n').filter((l) => /Skill Foundry/.test(l)).join('\n'));
+        check(`${label}: team.mjs validate`, run(['.harness/team.mjs', 'validate'], p, { HARNESS_ROOT: p }).status === 0);
+        const fd = run([cli, 'doctor', '--json'], p);
+        let rep = null; try { rep = JSON.parse(fd.stdout); } catch { /* reported below */ }
+        check(`${label}: Skill Foundry doctor reports 0 problems`, rep && rep.counts.problem === 0, fd.stdout.slice(-600));
+        const deny = JSON.parse(fs.readFileSync(path.join(p, '.claude', 'settings.json'), 'utf8')).permissions.deny || [];
+        check(`${label}: no invalid Write(...) rules`, !deny.some((r) => r.startsWith('Write(')), deny.filter((r) => r.startsWith('Write(')).join(', '));
+        check(`${label}: AGENTS.md has the harness section once`, (fs.readFileSync(path.join(p, 'AGENTS.md'), 'utf8').match(/This project contains an \*\*Agentic Harness\*\*/g) || []).length === 1);
+        const stamps = fs.readdirSync(path.join(p, '.claude', 'skills')).filter((n) => fs.existsSync(path.join(p, '.claude', 'skills', n, '.foundry.json')));
+        check(`${label}: every Skill Foundry skill has its harness pointer`, stamps.length > 0 && stamps.every((n) => /installed-by: skill-foundry/.test((() => { try { return fs.readFileSync(path.join(p, '.harness', 'skills', n, 'SKILL.md'), 'utf8'); } catch { return ''; } })())), stamps.join(', '));
+      };
+      const one = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-sf1-'));
+      spawnSync('git', ['init', '-q'], { cwd: one });
+      run([path.join(REPO, 'install.mjs'), one, '--no-auto-assign', '--with-skills'], REPO, { HARNESS_FOUNDRY_CMD: cli, HARNESS_ENGINES: '' });
+      verify(one, 'order 1 (harness, then --with-skills)');
+      const two = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-sf2-'));
+      spawnSync('git', ['init', '-q'], { cwd: two });
+      run([cli, 'add', '--all', '--quiet'], two);
+      run([path.join(REPO, 'install.mjs'), two, '--no-auto-assign'], REPO, { HARNESS_ENGINES: '' });
+      run([cli, 'update', '--quiet'], two);
+      run([path.join(REPO, 'install.mjs'), two, '--no-auto-assign'], REPO, { HARNESS_ENGINES: '' });
+      verify(two, 'order 2 (Skill Foundry, then harness, then update)');
+      for (const d of [one, two]) fs.rmSync(d, { recursive: true, force: true });
+    }
+  }
 }
 
 fs.rmSync(proj, { recursive: true, force: true });
