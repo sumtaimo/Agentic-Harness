@@ -4,26 +4,28 @@
  * It only REPORTS. Skill Foundry owns skill content; the harness owns what is shown at session start. Nothing is ever
  * updated here, and the AI is told not to run `update` or `add` itself (the deny rules forbid it as well).
  *
- * Rules (all of them keep a session from ever being blocked):
+ * Rules (all of them keep a session from ever being blocked or delayed):
  *  - only when `.claude/skills/<name>/.foundry.json` exists (a project that uses Skill Foundry);
  *  - HARNESS_OFFLINE=1 skips the check entirely;
- *  - runs `npx --yes github:sumtaimo/Skill-Foundry check --json` with a ~5 second timeout (HARNESS_FOUNDRY_TIMEOUT_MS overrides, for tests)
- *    (HARNESS_FOUNDRY_CMD=<script.mjs> runs a local Skill Foundry CLI instead: offline tests, forks);
- *  - exit code 0 or 2 with valid JSON is a normal answer (2 = something is outdated or edited); any failure (no npx, no network,
- *    timeout, any other exit code, invalid JSON) says nothing;
- *  - the answer is cached in .harness/foundry-check.json (git-ignored): 24 hours when it worked, 1 hour when it failed
- *    (so an offline machine does not wait 5 seconds at every session start). The cache is dropped as soon as the installed
- *    skills change (an `update` or a local edit), so the notice never lingers after the user acted on it.
+ *  - a session start only READS the cache. `check --json` through npx takes 2-7 seconds (measured), so when the cache is
+ *    missing or old a detached background process refreshes it (up to 60 s) and the answer shows at the next session;
+ *    HARNESS_FOUNDRY_CMD=<script.mjs> runs a local Skill Foundry CLI instead of npx (offline tests, forks);
+ *  - exit code 0 or 2 with valid JSON is a normal answer (2 = something is outdated or edited); any failure (no npx, no
+ *    network, timeout, any other exit code, invalid JSON) says nothing;
+ *  - the answer is cached in .harness/foundry-check.json (git-ignored): 24 hours when it worked, 1 hour when it failed.
+ *    The cache is dropped as soon as the installed skills change (an `update` or a local edit), so the notice never lingers
+ *    after the user acted on it.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { ROOT } from './common.mjs';
 
 export const FOUNDRY_CLI = 'npx github:sumtaimo/Skill-Foundry';
 export const CACHE_OK_MS = 24 * 60 * 60 * 1000;
 export const CACHE_FAIL_MS = 60 * 60 * 1000;
-export const CHECK_TIMEOUT_MS = 5000;
+export const REFRESH_LOCK_MS = 2 * 60 * 1000;
 const MAX_LINES = 3;
 
 const cachePath = (root) => path.join(root, '.harness', 'foundry-check.json');
@@ -61,35 +63,65 @@ export function foundryLines(entries) {
 }
 
 /**
- * The check. Returns { lines: string[], source: 'none' | 'offline' | 'cache' | 'live' | 'failed' }.
- * `none`: no Skill Foundry skills in this project (no call). Never throws.
+ * Run `check --json` now and write the cache. Returns the entries, or null on any failure (also cached, for 1 hour).
+ * `check --json` through npx takes 2-7 seconds (npx asks GitHub every time), so this is NEVER called from a session start
+ * (see foundryCheck): only from the background refresher and from the doctor.
  */
-export function foundryCheck({ root = ROOT, env = process.env, now = Date.now() } = {}) {
+export function refreshFoundryCache({ root = ROOT, env = process.env, now = Date.now(), timeoutMs = 60000 } = {}) {
+  const sig = foundrySignature(root);
+  if (!sig) return null;
+  const local = env.HARNESS_FOUNDRY_CMD;
+  const win = process.platform === 'win32';
+  const [cmd, args] = local
+    ? [process.execPath, [path.resolve(local), 'check', '--json']]
+    : [win ? 'npx.cmd' : 'npx', ['--yes', 'github:sumtaimo/Skill-Foundry', 'check', '--json']];
+  const limit = Number(env.HARNESS_FOUNDRY_TIMEOUT_MS) > 0 ? Number(env.HARNESS_FOUNDRY_TIMEOUT_MS) : timeoutMs;
+  const r = spawnSync(cmd, args, { cwd: root, encoding: 'utf8', timeout: limit, env, shell: win && !local, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 20 });
+  let entries = null;
+  // `check --json` exits 0 when all is current and 2 when a skill is outdated or was edited; both print the JSON. Any other code is a failure.
+  if (!r.error && (r.status === 0 || r.status === 2)) {
+    try {
+      const parsed = JSON.parse(r.stdout);
+      if (Array.isArray(parsed) && parsed.every((e) => e && typeof e === 'object' && typeof e.name === 'string')) {
+        entries = parsed.map((e) => ({ name: e.name, installed: e.installed, latest: e.latest, current: e.current, modified: Array.isArray(e.modified) ? e.modified.map(String) : [] }));
+      }
+    } catch { /* invalid JSON: treated as a failure */ }
+  }
+  try { fs.writeFileSync(cachePath(root), `${JSON.stringify(entries ? { at: now, sig, ok: true, entries } : { at: now, sig, ok: false })}\n`); } catch { /* read-only folder: no cache */ }
+  return entries;
+}
+
+/**
+ * The session-start check. NEVER waits for the network: it reads the cache and, when the cache is missing or old, starts
+ * ONE detached background process (this file with --refresh) that refreshes it, so the answer shows at the next session.
+ * An old cache of the SAME installed skills is still shown while it refreshes; after an update or edit (the signature
+ * changed) the old answer is dropped at once. `sync: true` (doctor, tests via HARNESS_FOUNDRY_SYNC=1) runs the check inline.
+ * Returns { lines: string[], source: 'none' | 'offline' | 'cache' | 'stale' | 'refreshing' | 'live' | 'failed' }. Never throws.
+ */
+export function foundryCheck({ root = ROOT, env = process.env, now = Date.now(), sync = false } = {}) {
   try {
     if (env.HARNESS_OFFLINE === '1') return { lines: [], source: 'offline' };
     const sig = foundrySignature(root);
     if (!sig) return { lines: [], source: 'none' };
     const cache = readJson(cachePath(root));
-    if (cache && cache.sig === sig && Number.isFinite(cache.at) && now >= cache.at && now - cache.at < (cache.ok ? CACHE_OK_MS : CACHE_FAIL_MS)) {
-      return { lines: cache.ok ? foundryLines(cache.entries) : [], source: 'cache' };
+    const mine = cache && cache.sig === sig && Number.isFinite(cache.at) && now >= cache.at;
+    if (mine && now - cache.at < (cache.ok ? CACHE_OK_MS : CACHE_FAIL_MS)) return { lines: cache.ok ? foundryLines(cache.entries) : [], source: 'cache' };
+    if (sync || env.HARNESS_FOUNDRY_SYNC === '1') {
+      const entries = refreshFoundryCache({ root, env, now, timeoutMs: 30000 });
+      return entries ? { lines: foundryLines(entries), source: 'live' } : { lines: [], source: 'failed' };
     }
-    const local = env.HARNESS_FOUNDRY_CMD;
-    const win = process.platform === 'win32';
-    const [cmd, args] = local
-      ? [process.execPath, [path.resolve(local), 'check', '--json']]
-      : [win ? 'npx.cmd' : 'npx', ['--yes', 'github:sumtaimo/Skill-Foundry', 'check', '--json']];
-    const r = spawnSync(cmd, args, { cwd: root, encoding: 'utf8', timeout: Number(env.HARNESS_FOUNDRY_TIMEOUT_MS) > 0 ? Number(env.HARNESS_FOUNDRY_TIMEOUT_MS) : CHECK_TIMEOUT_MS, env, shell: win && !local, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 20 });
-    let entries = null;
-    // `check --json` exits 0 when all is current and 2 when a skill is outdated or was edited; both print the JSON. Any other code is a failure.
-    if (!r.error && (r.status === 0 || r.status === 2)) {
-      try {
-        const parsed = JSON.parse(r.stdout);
-        if (Array.isArray(parsed) && parsed.every((e) => e && typeof e === 'object' && typeof e.name === 'string')) {
-          entries = parsed.map((e) => ({ name: e.name, installed: e.installed, latest: e.latest, current: e.current, modified: Array.isArray(e.modified) ? e.modified.map(String) : [] }));
-        }
-      } catch { /* invalid JSON: treated as a failure */ }
-    }
-    try { fs.writeFileSync(cachePath(root), `${JSON.stringify(entries ? { at: now, sig, ok: true, entries } : { at: now, sig, ok: false })}\n`); } catch { /* read-only folder: no cache */ }
-    return entries ? { lines: foundryLines(entries), source: 'live' } : { lines: [], source: 'failed' };
+    const shown = mine && cache.ok ? foundryLines(cache.entries) : [];
+    // one refresher at a time: a marker in the cache says one was started less than 2 minutes ago
+    if (cache && cache.sig === sig && Number.isFinite(cache.refreshingAt) && now - cache.refreshingAt >= 0 && now - cache.refreshingAt < REFRESH_LOCK_MS) return { lines: shown, source: mine ? 'stale' : 'refreshing' };
+    try { fs.writeFileSync(cachePath(root), `${JSON.stringify({ ...(mine ? cache : { sig, at: 0, ok: false }), sig, refreshingAt: now })}\n`); } catch { return { lines: shown, source: 'stale' }; }
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--refresh', root], { cwd: root, env, detached: true, stdio: 'ignore', windowsHide: true });
+    child.on('error', () => {}); child.unref();
+    return { lines: shown, source: mine ? 'stale' : 'refreshing' };
   } catch { return { lines: [], source: 'failed' }; }
+}
+
+// background refresher: `node foundry-check.mjs --refresh <root>`
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) && process.argv[2] === '--refresh') {
+  try { refreshFoundryCache({ root: path.resolve(process.argv[3] || ROOT), env: process.env }); } catch { /* nothing to report */ }
+  process.exit(0);
 }

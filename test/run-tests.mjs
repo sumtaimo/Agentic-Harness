@@ -3852,7 +3852,7 @@ function foundryProject({ stamps = true } = {}) {
     fs.writeFileSync(path.join(d, '.claude', 'skills', n, 'SKILL.md'), `# ${n}\n`);
     fs.writeFileSync(path.join(d, '.claude', 'skills', n, '.foundry.json'), JSON.stringify({ name: n, version: '1.0.0', hash: 'h-' + n, source: 'github:sumtaimo/Skill-Foundry', files: {} }));
   }
-  const fenv = (mode, extra = {}) => ({ HARNESS_OFFLINE: '0', HARNESS_FOUNDRY_CMD: cmd, FAKE_CALLS: calls, FAKE_MODE: mode, HARNESS_NO_FETCH: '1', ...extra });
+  const fenv = (mode, extra = {}) => ({ HARNESS_FOUNDRY_SYNC: '1', HARNESS_OFFLINE: '0', HARNESS_FOUNDRY_CMD: cmd, FAKE_CALLS: calls, FAKE_MODE: mode, HARNESS_NO_FETCH: '1', ...extra });
   const callCount = () => { try { return fs.readFileSync(calls, 'utf8').split('\n').filter(Boolean).length; } catch { return 0; } };
   return { d, fenv, callCount, cache: path.join(d, '.harness', 'foundry-check.json') };
 }
@@ -3891,6 +3891,47 @@ await test('Skill Foundry check: exit 2 (what check --json returns for outdated 
   p = foundryProject();
   r = node(p.d, ['.harness/hook-session.mjs', '--brief'], p.fenv('outdated', { FAKE_EXIT: '2' }));
   assert(/^! Skill Foundry: 1 skill\(s\) have an update/m.test(r.stdout), `brief exit 2: ${r.stdout}`);
+});
+
+
+await test('Skill Foundry check never waits for the network: a session start reads the cache, a background process refreshes it (npx check --json takes 2-7 s)', async () => {
+  const slow = (p) => fs.writeFileSync(path.join(p.d, 'fake-check.mjs'), FAKE_CHECK.replace("const m = process.env.FAKE_MODE", "await new Promise((r) => setTimeout(r, 2500));\nconst m = process.env.FAKE_MODE"));
+  const waitFor = async (cond, ms = 15000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (cond()) return true; await new Promise((r) => setTimeout(r, 100)); } return false; };
+  const settled = (p) => { try { const c = json(p.cache); return c.ok !== undefined && c.refreshingAt === undefined && c.at > 0; } catch { return false; } };
+  const bg = { HARNESS_FOUNDRY_SYNC: '' };
+  // first session: no answer yet, instant, and exactly one background refresher even when two sessions start together
+  let p = foundryProject(); slow(p);
+  const t0 = Date.now();
+  let r = node(p.d, ['.harness/hook-session.mjs'], p.fenv('outdated', { ...bg, FAKE_EXIT: '2' }));
+  const r2 = node(p.d, ['.harness/hook-session.mjs'], p.fenv('outdated', { ...bg, FAKE_EXIT: '2' }));
+  assert(r.status === 0 && r2.status === 0 && !/Skill Foundry/.test(r.stdout + r2.stdout) && Date.now() - t0 < 2400, `waited for the check: ${Date.now() - t0} ms, ${r.stdout}`);
+  assert(await waitFor(() => settled(p)), 'the background refresher never wrote the cache');
+  assert(p.callCount() === 1, `${p.callCount()} refreshers ran, expected 1`);
+  // next session: the answer is there, instantly, with no new call
+  const t1 = Date.now();
+  r = node(p.d, ['.harness/hook-session.mjs'], p.fenv('outdated', { ...bg, FAKE_EXIT: '2' }));
+  assert(sfLines(r.stdout).length === 1 && /have an update \(spec-writer\)/.test(r.stdout) && p.callCount() === 1 && Date.now() - t1 < 2000, `cached answer: ${r.stdout}`);
+  // an old cache of the same skills is shown while a refresh runs; a changed skill drops it at once
+  const old = json(p.cache); fs.writeFileSync(p.cache, JSON.stringify({ ...old, at: Date.now() - 26 * 3600 * 1000 }));
+  r = node(p.d, ['.harness/hook-session.mjs'], p.fenv('current', bg));
+  assert(sfLines(r.stdout).length === 1, `stale answer not shown while refreshing: ${r.stdout}`);
+  assert(await waitFor(() => settled(p) && json(p.cache).entries.every((e) => e.current)), 'refresh after expiry did not happen');
+  assert(sfLines(node(p.d, ['.harness/hook-session.mjs'], p.fenv('current', bg)).stdout).length === 0, 'refreshed answer (all current) still shows a notice');
+  fs.writeFileSync(path.join(p.d, '.claude', 'skills', 'spec-writer', '.foundry.json'), JSON.stringify({ name: 'spec-writer', version: '1.1.0', hash: 'new' }));
+  r = node(p.d, ['.harness/hook-session.mjs'], p.fenv('current', bg));
+  assert(sfLines(r.stdout).length === 0, 'the old answer survived an update');
+  assert(await waitFor(() => settled(p) && p.callCount() === 3), 'no refresh after the skills changed');
+  // failures in the background stay silent and are remembered for an hour
+  p = foundryProject();
+  node(p.d, ['.harness/hook-session.mjs'], p.fenv('outdated', { ...bg, FAKE_EXIT: '1' }));
+  assert(await waitFor(() => settled(p)) && json(p.cache).ok === false, 'a failure was not cached');
+  r = node(p.d, ['.harness/hook-session.mjs'], p.fenv('outdated', { ...bg, FAKE_EXIT: '1' }));
+  assert(!/Skill Foundry/.test(r.stdout) && p.callCount() === 1, `a failure is retried too early: ${p.callCount()} calls`);
+  // HARNESS_OFFLINE=1 starts nothing
+  p = foundryProject();
+  node(p.d, ['.harness/hook-session.mjs'], p.fenv('outdated', { ...bg, HARNESS_OFFLINE: '1' }));
+  await new Promise((r3) => setTimeout(r3, 600));
+  assert(p.callCount() === 0 && !fs.existsSync(p.cache), 'offline started a refresher');
 });
 
 await test('Skill Foundry check: at most 3 lines, however many skills are outdated or edited', async () => {
