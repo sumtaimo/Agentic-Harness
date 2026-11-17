@@ -3601,12 +3601,13 @@ await test('bug-hunter Batch 4 (ui, charter, settings): ui.mjs skipSessions/usag
 const FAKE_FOUNDRY = `import fs from 'node:fs'; import path from 'node:path';
 const p = process.cwd(); const a = process.argv.slice(2);
 if (a.includes('--default') && process.env.FAKE_DEFAULT !== '1') { console.error('usage: add <skill…> | add --all | add --role <ROLE>'); process.exit(1); }
-const names = a.includes('--default') ? ['spec-writer', 'test-planner', 'ux-review'] : (a[0] === 'add' && a[1] && !a[1].startsWith('--') ? [a[1]] : ['fx-engine']);
-const ROLES = { 'spec-writer': '["BA_ANALYST","PO_ARCHITECT"]', 'test-planner': '["QA_AUDITOR","BA_ANALYST"]', 'ux-review': '["UX_DESIGNER","QA_AUDITOR"]', 'fx-engine': '["DEV_ENGINEER","QA_AUDITOR"]' };
+const given = a.slice(1).filter((x) => !x.startsWith('--'));
+const names = a.includes('--default') ? ['spec-writer', 'test-planner', 'ux-review'] : ((a[0] === 'add' || a[0] === 'update') && given.length ? given : ['fx-engine']);
+const ROLES = { 'spec-writer': '["BA_ANALYST","PO_ARCHITECT"]', 'test-planner': '["QA_AUDITOR","BA_ANALYST"]', 'ux-review': '["UX_DESIGNER","QA_AUDITOR"]', 'copy-tight': '["BA_ANALYST","DEV_ENGINEER"]', 'changelog-writer': '["DEV_ENGINEER","QA_AUDITOR"]', 'fx-engine': '["DEV_ENGINEER","QA_AUDITOR"]' };
 for (const n of names) {
   const eng = n === 'fx-engine';
   const d = path.join(p, '.claude', 'skills', n); fs.mkdirSync(eng ? path.join(d, 'engine') : d, { recursive: true });
-  fs.writeFileSync(path.join(d, 'SKILL.md'), '# fx'); if (eng) fs.writeFileSync(path.join(d, 'engine', 'run.mjs'), '');
+  if (!fs.existsSync(path.join(d, 'SKILL.md'))) fs.writeFileSync(path.join(d, 'SKILL.md'), '# fx'); if (eng) fs.writeFileSync(path.join(d, 'engine', 'run.mjs'), '');
   fs.writeFileSync(path.join(d, '.foundry.json'), JSON.stringify({ name: n, version: '1.2.0', source: 'github:sumtaimo/Skill-Foundry', files: {} }));
   const h = path.join(p, '.harness', 'skills');
   if (fs.existsSync(h)) { fs.mkdirSync(path.join(h, n), { recursive: true }); fs.writeFileSync(path.join(h, n, 'SKILL.md'), '---\\nname: ' + n + '\\ndescription: fx\\nroles: ' + (ROLES[n] || '["BA_ANALYST"]') + '\\n' + (eng ? 'allowedTools: ["Edit","Write","Bash"]\\n' : '') + 'keywords: []\\nautoApply: true\\ninstalled-by: skill-foundry 1.2.0\\n---\\n# fx\\n'); }
@@ -3679,7 +3680,8 @@ await test('Skill Foundry default: every install gets Skill Foundry\'s default s
   const ran = (p) => { try { return fs.readFileSync(path.join(p, 'foundry-ran.txt'), 'utf8'); } catch { return null; } };
   const a = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-sf-'));
   const r0 = inst(a, []);
-  assert(r0.status === 0 && ran(a) === 'add spec-writer --quiet' && /added  skill spec-writer/.test(r0.stdout), r0.stdout); // a Skill Foundry without --default: one-skill fallback
+  assert(r0.status === 0 && ran(a) === 'add spec-writer copy-tight test-planner changelog-writer ux-review --quiet' && /added  skills spec-writer, copy-tight, test-planner, changelog-writer, ux-review/.test(r0.stdout), r0.stdout); // a Skill Foundry without --default: one fitting script-free skill per role
+  assert(fs.existsSync(path.join(a, '.harness', 'foundry-default.json')), 'the default install was not remembered');
   assert(/installed-by: skill-foundry/.test(fs.readFileSync(path.join(a, '.harness', 'skills', 'spec-writer', 'SKILL.md'), 'utf8')), 'default skill not wired');
   fs.rmSync(path.join(a, 'foundry-ran.txt'));
   inst(a, []); assert(ran(a) === null, 're-install pulled the default skill again');
@@ -3731,7 +3733,7 @@ await test('Dual order (fake Skill Foundry): harness→foundry and foundry→har
   // Order 2: Skill Foundry first (no pointer: no .harness yet), then the harness; installer and doctor name the gap
   const b = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-dual2-'));
   spawnSync(process.execPath, [foundry], { cwd: b });
-  const r = inst(b);
+  const r = inst(b, ['--no-skills']);
   assert(/not wired to harness workers yet \(fx-engine\)/.test(r.stdout), r.stdout);
   assert(/fx-engine is installed but has no pointer/.test(doc(b)), 'doctor missed the missing pointer');
   spawnSync(process.execPath, [foundry, 'update'], { cwd: b }); inst(b); check(b, 'order 2');
@@ -3993,6 +3995,38 @@ await test('Skill Foundry check: doctor shows the same lines as a note (not a fa
   const q = foundryProject();
   const r2 = node(q.d, ['.harness/doctor.mjs'], q.fenv('current'));
   assert(!/have an update|was edited/.test(r2.stdout) && r.status === r2.status, 'doctor result changed because of the check');
+});
+
+
+await test('Skill Foundry: a skill removed on purpose stays removed; Skill Foundry installed first is wired by the installer and the user\'s edits are kept', async () => {
+  const foundry = fakeFoundry();
+  const inst = (p, args = [], extra = {}) => spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), p, '--no-auto-assign', ...args], { encoding: 'utf8', env: { ...process.env, HARNESS_FOUNDRY_CMD: foundry, ...extra } });
+  const ran = (p) => { try { return fs.readFileSync(path.join(p, 'foundry-ran.txt'), 'utf8'); } catch { return null; } };
+  // 1. default installed once, the user removes a skill (what `remove` does), the next install must not bring it back
+  const a = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-rm-'));
+  inst(a); assert(fs.existsSync(path.join(a, '.claude', 'skills', 'ux-review')), 'default not installed');
+  fs.rmSync(path.join(a, '.claude', 'skills', 'ux-review'), { recursive: true }); fs.rmSync(path.join(a, '.harness', 'skills', 'ux-review'), { recursive: true });
+  fs.rmSync(path.join(a, 'foundry-ran.txt'));
+  const r = inst(a);
+  assert(r.status === 0 && ran(a) === null && !fs.existsSync(path.join(a, '.claude', 'skills', 'ux-review')), `a removed skill came back: ${ran(a)}`);
+  // a project that still has its other Skill Foundry skills keeps its own choice even without the marker; with none left, the default is set up again
+  fs.rmSync(path.join(a, '.harness', 'foundry-default.json')); inst(a);
+  assert(ran(a) === null && fs.existsSync(path.join(a, '.harness', 'foundry-default.json')), 'a project with its own skills got the default on top');
+  fs.rmSync(path.join(a, '.claude', 'skills'), { recursive: true }); fs.rmSync(path.join(a, '.harness', 'foundry-default.json')); inst(a);
+  assert(ran(a) !== null, 'with no skill left and no marker the default was not set up again');
+  // 2. Skill Foundry first, harness second: the installer wires the unwired skills (update <names>) and installs no default on top
+  const b = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-first-'));
+  spawnSync(process.execPath, [foundry, 'add', 'ux-review'], { cwd: b });
+  const skill = path.join(b, '.claude', 'skills', 'ux-review', 'SKILL.md'); fs.writeFileSync(skill, '# my own edit\n');
+  const rb = inst(b);
+  assert(rb.status === 0 && ran(b) === 'update ux-review --quiet' && /added  harness pointers for ux-review/.test(rb.stdout), `${ran(b)} | ${rb.stdout}`);
+  assert(fs.readFileSync(skill, 'utf8').includes('my own edit') && /installed-by: skill-foundry/.test(fs.readFileSync(path.join(b, '.harness', 'skills', 'ux-review', 'SKILL.md'), 'utf8')), 'pointer missing or the user edit was lost');
+  assert(!fs.existsSync(path.join(b, '.claude', 'skills', 'spec-writer')) && fs.existsSync(path.join(b, '.harness', 'foundry-default.json')), 'a default was added on top of the project\'s own skills');
+  // 3. offline / --no-skills: nothing is called, the gap is reported with the command to run
+  const c = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-first-'));
+  spawnSync(process.execPath, [foundry, 'add', 'ux-review'], { cwd: c }); fs.rmSync(path.join(c, 'foundry-ran.txt'));
+  const rc = inst(c, [], { HARNESS_FOUNDRY_CMD: '' });
+  assert(rc.status === 0 && ran(c) === null && /not wired to harness workers yet \(ux-review\).*update/.test(rc.stdout), rc.stdout);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
