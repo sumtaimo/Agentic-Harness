@@ -4029,5 +4029,31 @@ await test('Skill Foundry: a skill removed on purpose stays removed; Skill Found
   assert(rc.status === 0 && ran(c) === null && /not wired to harness workers yet \(ux-review\).*update/.test(rc.stdout), rc.stdout);
 });
 
+
+await test('Skill Foundry installed first: the harness starter stub counts as unwired and is replaced (original kept); re-installing the same version changes no file', async () => {
+  const foundry = fakeFoundry();
+  const inst = (p, args = [], extra = {}) => spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), p, '--no-auto-assign', ...args], { encoding: 'utf8', env: { ...process.env, HARNESS_FOUNDRY_CMD: foundry, ...extra } });
+  const ran = (p) => { try { return fs.readFileSync(path.join(p, 'foundry-ran.txt'), 'utf8'); } catch { return null; } };
+  const b = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-stub-'));
+  spawnSync(process.execPath, [foundry, 'add', 'spec-writer', 'ux-review'], { cwd: b });
+  const r = inst(b);
+  assert(r.status === 0 && ran(b) === 'update spec-writer ux-review --quiet' && /added  harness pointers for spec-writer, ux-review/.test(r.stdout), `${ran(b)} | ${r.stdout}`);
+  assert(/installed-by: skill-foundry/.test(fs.readFileSync(path.join(b, '.harness', 'skills', 'spec-writer', 'SKILL.md'), 'utf8')), 'the starter stub was left in place');
+  // a skill of the user's own with that name is not a stub and is never touched
+  const c = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-own-'));
+  inst(c, ['--no-skills']); spawnSync(process.execPath, [foundry, 'add', 'spec-writer'], { cwd: c });
+  fs.writeFileSync(path.join(c, '.harness', 'skills', 'spec-writer', 'SKILL.md'), '---\nname: spec-writer\ndescription: mine\nroles: ["BA_ANALYST"]\n---\nMy own rules\n'); fs.rmSync(path.join(c, 'foundry-ran.txt'));
+  inst(c);
+  assert(ran(c) === null && /My own rules/.test(fs.readFileSync(path.join(c, '.harness', 'skills', 'spec-writer', 'SKILL.md'), 'utf8')), 'a skill of the user\'s own was replaced or called');
+  // the same version installed again changes no file (MANIFEST.json included)
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-twice-'));
+  spawnSync('git', ['init', '-q'], { cwd: d }); inst(d, ['--no-skills'], { HARNESS_FOUNDRY_CMD: '' });
+  spawnSync('git', ['add', '-A'], { cwd: d }); spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@l', 'commit', '-qm', 'i'], { cwd: d });
+  await new Promise((res) => setTimeout(res, 1100));
+  inst(d, ['--no-skills'], { HARNESS_FOUNDRY_CMD: '' });
+  const st = spawnSync('git', ['status', '--short'], { cwd: d, encoding: 'utf8' }).stdout.trim();
+  assert(st === '', `a second install changed: ${st}`);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

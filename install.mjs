@@ -17,6 +17,7 @@
  */
 
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -164,7 +165,11 @@ copyDir(path.join(SRC, '.harness'), path.join(target, '.harness'));
 {
   const { hashCore } = await import(pathToFileURL(path.join(target, '.harness', 'lib', 'common.mjs')).href);
   const version = (() => { try { return JSON.parse(fs.readFileSync(path.join(SRC, 'package.json'), 'utf8')).version; } catch { return null; } })();
-  fs.writeFileSync(path.join(target, '.harness', 'MANIFEST.json'), `${JSON.stringify({ template: 'agentic-harness', version, installedAt: new Date().toISOString(), note: 'Fingerprints of the harness core code from the template. Do not edit: doctor compares them; re-install to update.', files: hashCore(target) }, null, 2)}
+  // installing the same version again must change nothing: keep the first installedAt while version and fingerprints are identical
+  const files = hashCore(target);
+  const before = (() => { try { return JSON.parse(fs.readFileSync(path.join(target, '.harness', 'MANIFEST.json'), 'utf8')); } catch { return null; } })();
+  const same = before && before.template === 'agentic-harness' && before.version === version && JSON.stringify(before.files) === JSON.stringify(files) && typeof before.installedAt === 'string';
+  fs.writeFileSync(path.join(target, '.harness', 'MANIFEST.json'), `${JSON.stringify({ template: 'agentic-harness', version, installedAt: same ? before.installedAt : new Date().toISOString(), note: 'Fingerprints of the harness core code from the template. Do not edit: doctor compares them; re-install to update.', files }, null, 2)}
 `);
   report.push('wrote  .harness/MANIFEST.json (fingerprints of the harness core)');
 }
@@ -351,7 +356,11 @@ const FALLBACK_SKILLS = ['spec-writer', 'copy-tight', 'test-planner', 'changelog
     else report.push(`! Skill Foundry skill not installed (${why(r)}); the harness itself is installed`);
   }
   // Skill Foundry installed before the harness: its skills have no harness pointers yet, so workers do not get them.
-  const unwired = () => stamped().filter((n) => !fs.existsSync(path.join(target, '.harness', 'skills', n, 'SKILL.md')));
+  // A skill is wired when .harness/skills/<name>/SKILL.md exists AND is not the harness's own starter stub (Skill Foundry replaces
+  // a starter stub and keeps the original as SKILL.md.orig; a skill of the user's own with that name is never touched).
+  const STUB_SHA = new Set(['7fb11973a154c1caa78e5451d023eeb203a62208d6c0066a22d8195319546ebd', 'f14d673bad4efe2ef816f55dd6f894a06603d7805eeec73dde88aa902ff6ca21']);
+  const isStub = (f) => { try { const t = fs.readFileSync(f, 'utf8'); return t.includes('starter-stub: agentic-harness') || STUB_SHA.has(crypto.createHash('sha256').update(t.replace(/\r\n?/g, '\n').trim()).digest('hex')); } catch { return false; } };
+  const unwired = () => stamped().filter((n) => { const f = path.join(target, '.harness', 'skills', n, 'SKILL.md'); return !fs.existsSync(f) || isStub(f); });
   const pending = unwired();
   if (pending.length && network) {
     const r = go(['update', ...pending, '--quiet']);
