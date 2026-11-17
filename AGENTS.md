@@ -255,7 +255,9 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
   `allowedTools`): rules injected into matching workers. A skill can narrow tools, never add;
   exact rules like `Bash(npm test:*)` are granted only if the role already covers them. With several skills, each
   narrows on its own and the worker gets the union (never more than the role). A lead's `skills` list in `team.json`
-  is added to every `autoApply: true` skill for its role.
+  is added to: every skill for its role with `autoApply: true`, and every skill for its role whose `keywords` appear in
+  the task. A skill whose `roles` exclude the worker's role is never injected. Only skills in the explicit list may
+  narrow a worker's tools; a skill added by keyword or `autoApply` brings its rules, never takes a tool away.
 - One step now: `node .harness/daemon.mjs --tick`. Scheduled: `node .harness/daemon.mjs --autonomous`
   (only one daemon per folder). When READY items run out, the PO_ARCHITECT proposes new ones
   (≤ budget); its suggested checks are recorded, never run.

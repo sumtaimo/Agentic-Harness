@@ -3621,7 +3621,7 @@ await test('H1 matchSkills: a lead listing "code-craft" still gets autoApply (Sk
   const m = matchSkills({ skills: ['code-craft'], prompt: 'write a test' }, 'DEV_ENGINEER', all);
   const names = m.chosen.map((s) => s.name);
   assert(names[0] === 'code-craft' && names.includes('fx-engine') && !names.includes('ux-only'), names.join());
-  assert(!names.includes('test-champion'), 'keyword skill added despite an explicit list');
+  assert(!names.includes('test-champion'), 'a QA-only skill reached DEV through its keyword');
   const ux = matchSkills({ skills: ['ui-craft'] }, 'UX_DESIGNER', all).chosen.map((s) => s.name);
   assert(ux.includes('ui-craft') && ux.includes('ux-only') && !ux.includes('fx-engine'), ux.join());
   assert(matchSkills({ skills: ['code-craft', 'code-craft'] }, 'DEV_ENGINEER', all).chosen.filter((s) => s.name === 'code-craft').length === 1, 'duplicate');
@@ -3751,6 +3751,75 @@ await test('named agents: only a role that may run node is told it may run a ski
   assert(/node \.claude\/skills\/<skill>\/engine/.test(files['lead-dev.md']), 'lead-dev not told it may run engine scripts');
   for (const f of ['lead-qa.md', 'lead-ux.md', 'lead-ba.md']) assert(!/engine/.test(files[f]), `${f} told it may run engine scripts`);
   assert(/except a skill's own script/.test(g.loadSkills()['code-craft'].body), 'code-craft still forbids engine scripts');
+});
+
+
+// ───────────── SKILL_MATCH: keywords also work for members with an explicit skills list ─────────────
+
+await test('SKILL_MATCH matchSkills: explicit + keyword, explicit only, keyword without list, role always required, autoApply kept', async () => {
+  const g = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
+  assert(g.SKILL_MATCH === 'keywords-with-explicit' && g.SKILL_COMPOSITION === 'additive-union', 'capability flags');
+  const sk = (name, roles, keywords, autoApply = false, allowedTools = []) => ({ name, roles, keywords, autoApply, allowedTools, toolsByRole: {} });
+  const all = {
+    'code-craft': sk('code-craft', ['DEV_ENGINEER', 'QA_AUDITOR'], []),
+    contrast: sk('contrast', ['DEV_ENGINEER'], ['contrast', 'accessibility']),
+    'qa-only': sk('qa-only', ['QA_AUDITOR'], ['contrast']),
+    always: sk('always', ['DEV_ENGINEER'], [], true),
+    anyrole: sk('anyrole', [], ['contrast'])
+  };
+  const pick = (sub, role) => g.matchSkills(sub, role, all);
+  const names = (m) => m.chosen.map((s) => s.name).sort().join();
+  assert(names(pick({ skills: ['code-craft'], prompt: 'Fix the CONTRAST of the button' }, 'DEV_ENGINEER')) === 'always,code-craft,contrast', 'explicit + keyword');
+  assert(names(pick({ skills: ['code-craft'], prompt: 'rename a variable' }, 'DEV_ENGINEER')) === 'always,code-craft', 'explicit, no keyword');
+  assert(names(pick({ prompt: 'check accessibility' }, 'DEV_ENGINEER')) === 'always,contrast', 'no list + keyword');
+  assert(names(pick({ prompt: 'rename a variable' }, 'DEV_ENGINEER')) === 'always', 'no list + no keyword');
+  // role mismatch: never chosen by keyword, reported when explicitly asked for
+  const m = pick({ skills: ['qa-only', 'nope'], prompt: 'contrast' }, 'DEV_ENGINEER');
+  assert(!m.chosen.some((s) => s.name === 'qa-only') && m.mismatched.join() === 'qa-only' && m.unknown.join() === 'nope', JSON.stringify(m));
+  assert(!pick({ prompt: 'contrast' }, 'UX_DESIGNER').chosen.some((s) => s.name === 'contrast'), 'keyword crossed roles');
+  assert(!pick({ prompt: 'contrast' }, 'DEV_ENGINEER').chosen.some((s) => s.name === 'anyrole'), 'a skill without roles was injected by keyword');
+  // autoApply is still chosen without a keyword, with and without a list
+  assert(pick({ skills: ['code-craft'], prompt: '' }, 'DEV_ENGINEER').chosen.some((s) => s.name === 'always') && pick({}, 'DEV_ENGINEER').chosen.some((s) => s.name === 'always'), 'autoApply lost');
+  // a keyword/autoApply skill WITH a tool list never narrows (only explicit skills may)
+  const narrowing = sk('narrow', ['BA_ANALYST'], ['docs'], false, ['Read', 'Edit', 'Write']);
+  const baRole = g.loadRoles().BA_ANALYST;
+  const kw = g.computeAllowedTools(baRole, [narrowing], ['docs/a.md'], { explicit: [] });
+  const ex = g.computeAllowedTools(baRole, [narrowing], ['docs/a.md'], { explicit: ['narrow'] });
+  assert(kw.includes('Bash(git status)') && !ex.includes('Bash(git status)'), `keyword narrowed: ${kw} | explicit: ${ex}`);
+  // tools: pointers without a tool list change nothing (no narrowing, no widening)
+  const roles = g.loadRoles(); const cc = g.loadSkills()['code-craft'];
+  for (const r of ['DEV_ENGINEER', 'QA_AUDITOR', 'UX_DESIGNER', 'BA_ANALYST']) {
+    const base = g.computeAllowedTools(roles[r], r === 'UX_DESIGNER' || r === 'BA_ANALYST' ? [] : [cc], ['x']);
+    const more = g.computeAllowedTools(roles[r], [...(r === 'UX_DESIGNER' || r === 'BA_ANALYST' ? [] : [cc]), all.contrast, all.always], ['x']);
+    assert(JSON.stringify(base) === JSON.stringify(more), `${r}: tools changed by pointer skills: ${base} vs ${more}`);
+  }
+});
+
+await test('SKILL_MATCH end to end: a Skill Foundry-style pointer (autoApply false, keywords) reaches lead-dev only when its task has a keyword', () => {
+  const p = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-kw-'));
+  spawnSync('git', ['init', '-q'], { cwd: p });
+  fs.writeFileSync(path.join(p, 'package.json'), JSON.stringify({ name: 'kw', scripts: { test: 'node -e 0' } }));
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), p, '--no-auto-assign', '--no-skills'], { encoding: 'utf8', env: { ...env, HARNESS_OFFLINE: '1' } });
+  fs.mkdirSync(path.join(p, '.harness', 'skills', 'contrast-check'), { recursive: true });
+  fs.writeFileSync(path.join(p, '.harness', 'skills', 'contrast-check', 'SKILL.md'), '---\nname: contrast-check\ndescription: checks contrast\nroles: ["DEV_ENGINEER"]\nkeywords: ["contrast","accessibility"]\nautoApply: false\ninstalled-by: skill-foundry 1.0.0\n---\n# contrast-check\nCONTRAST-RULES-BODY\n');
+  spawnSync('git', ['add', '-A'], { cwd: p }); spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@l', 'commit', '-qm', 'i'], { cwd: p });
+  const run = (args) => spawnSync(process.execPath, ['.harness/visible.mjs', ...args], { cwd: p, encoding: 'utf8', env: { ...env, HARNESS_ROOT: p } });
+  const prompt = (goal) => {
+    const b = run(['brief', '--goal', goal]); const id = (/RUN_ID=(\S+)/.exec(b.stdout) || [])[1];
+    assert(id, b.stdout + b.stderr);
+    const r = run(['assign', id, JSON.stringify({ assignments: [{ lead: 'lead-dev', files: ['src/a.js'], goal }, { lead: 'lead-ux', files: ['src/a.css'], goal }] })]);
+    assert(r.status === 0, r.stdout + r.stderr);
+    run(['rollback', id]);
+    return r.stdout;
+  };
+  const hit = prompt('Improve the colour contrast of the save button');
+  const dev = hit.slice(hit.indexOf('You are lead-dev'), hit.indexOf('You are lead-ux') > hit.indexOf('You are lead-dev') ? hit.indexOf('You are lead-ux') : undefined);
+  const ux = hit.slice(hit.indexOf('You are lead-ux'));
+  assert(/### contrast-check/.test(dev) && /### code-craft/.test(dev), 'lead-dev did not get the keyword skill next to its explicit code-craft');
+  assert(/use only the skills listed here/.test(dev) && /which yours may\)/.test(dev), 'lead-dev skill wording');
+  assert(!/### contrast-check/.test(ux), 'the DEV-only skill reached lead-ux');
+  const miss = prompt('Rename the save handler');
+  assert(!/### contrast-check/.test(miss), 'injected without a keyword');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

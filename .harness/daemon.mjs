@@ -514,7 +514,7 @@ function resolveGovernance(sub, gov) {
   if (m.mismatched.length) logTelemetry('SKILL_ROLE_MISMATCH', `Skill(s) ${m.mismatched.join(', ')} not allowed for role ${roleName || '(none)'}; not injected`, { worker: sub.id });
   sub.resolvedRole = role ? role.name : null;
   sub.resolvedSkills = m.chosen.map((s) => s.name);
-  sub.resolvedTools = role ? computeAllowedTools(role, m.chosen, sub.targetFiles) : (sub.allowedTools || null);
+  sub.resolvedTools = role ? computeAllowedTools(role, m.chosen, sub.targetFiles, { explicit: Array.isArray(sub.skills) ? sub.skills : [] }) : (sub.allowedTools || null);
   if (role) {
     const notGranted = skillRulesNotGranted(role, m.chosen);
     if (notGranted.length) logTelemetry('SKILL_RULE_NOT_GRANTED', `${sub.id}: skill asked for tools the role ${role.name} does not allow: ${notGranted.join('; ')}`, { worker: sub.id, notGranted });

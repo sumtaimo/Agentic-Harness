@@ -87,7 +87,7 @@ function teamOrDie() {
 
 function leadPrompt(run, lead, a, roles, skills) {
   const role = roles[String(lead.role).toUpperCase()] || {};
-  const sk = matchSkills({ skills: lead.skills || [] }, String(lead.role).toUpperCase(), skills).chosen;
+  const sk = matchSkills({ skills: lead.skills || [], prompt: a.goal }, String(lead.role).toUpperCase(), skills).chosen; // same rule as headless workers: explicit + autoApply + keywords in this assignment
   const memory = memoryContext(config);
   return [
     `You are ${lead.id} (role ${lead.role}), a lead on the agent team. The orchestrator delegated this to you in run ${run.id}. Work ONLY inside the project folder ${ROOT}.`,
@@ -97,7 +97,7 @@ function leadPrompt(run, lead, a, roles, skills) {
     run.interfaceContract ? `\nShared interface contract (the other leads are building against exactly this, in parallel):\n${run.interfaceContract}` : '',
     run.acceptanceCriteria?.length ? `\nAcceptance criteria:\n${run.acceptanceCriteria.map((c) => `- ${c}`).join('\n')}` : '',
     `\nTask overall: ${run.goal}`,
-    sk.length ? `\nMandatory skill rules for you:\n${sk.map((s) => `### ${s.name}\n${s.body}`).join('\n\n')}` : '',
+    sk.length ? `\nMandatory skill rules for you (use only the skills listed here; run a skill's engine/*.mjs script only if your role may run node${runsNode(role) ? ', which yours may' : ', which yours may not: report that step for DEV_ENGINEER instead'}):\n${sk.map((s) => `### ${s.name}\n${s.body}`).join('\n\n')}` : '',
     memory ? `\nRules the user taught (follow them):\n${memory}` : '',
     (role.allowedTools || []).some((r) => /^Bash\((npm|node)/.test(r)) ? `\nYou may check your work with \`npm test\` or \`node --test\`${runsNode(role) ? `, and run ${ENGINE_SCRIPTS}` : ''}; do not run other commands.` : '\nYou have no shell; use the file tools only.',
     '\nWhen done, reply with a short report (at most 5 lines): files changed, what you did, what you checked, anything unresolved. Do not claim you tested something you did not run.'

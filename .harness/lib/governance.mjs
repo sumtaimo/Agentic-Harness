@@ -107,6 +107,11 @@ export function readCharter(file = GOV.charter) {
  * are ADDED to autoApply skills (matchSkills), and several skills' tool lists compose by UNION (computeAllowedTools).
  */
 export const SKILL_COMPOSITION = 'additive-union';
+/**
+ * Capability flag: keywords inject a skill even for a member with an explicit `skills` list (matchSkills), so a tool
+ * such as Skill Foundry may write pointers with `autoApply: false` and rely on keywords. Read the flag, never a version.
+ */
+export const SKILL_MATCH = 'keywords-with-explicit';
 
 /** Load .harness/roles/*.json keyed by role name (e.g. DEV_ENGINEER). */
 export function loadRoles() {
@@ -150,9 +155,10 @@ function covers(roleRule, skillRule) {
  *         rules that the role already covers (a skill can never grant a command the role lacks).
  *     Tools the skill does not mention are dropped (read-only tools are always kept).
  *  3. several skills compose by UNION of what each one keeps (never more than the role allows); see below.
+ *  4. with `explicit`, only skills named there narrow; keyword/autoApply skills never take a rule away.
  *  Returns the rules; use explainSkillNarrowing() for what a skill asked for but did not get.
  */
-export function computeAllowedTools(role, skills, targetFiles) {
+export function computeAllowedTools(role, skills, targetFiles, { explicit = null } = {}) {
   const targets = (targetFiles || []).length ? targetFiles.map(toRulePath) : (role.writablePaths || []);
   let rules = [];
   for (const rule of role.allowedTools || []) {
@@ -163,7 +169,12 @@ export function computeAllowedTools(role, skills, targetFiles) {
   // skill that needs a tool (e.g. a bare "Bash" for its engine scripts) is never starved by a stricter sibling skill
   // (code-craft's "npm test only"). It can never exceed what the role itself allows. A skill with no tool list has no
   // opinion and is skipped; if no skill lists tools the role's rules stay as they are.
-  const narrowers = skills.map((s) => skillToolsFor(s, role.name)).filter((l) => Array.isArray(l) && l.length > 0);
+  // `explicit` (names from the member's or plan's own `skills` list): only those skills may NARROW. A skill that came in by
+  // keyword or autoApply only joins the union, so it can give back a rule the role already has, never take one away.
+  // Without `explicit` every skill counts as explicit (callers that do not pass it keep the old behaviour).
+  const isExplicit = (s) => !explicit || explicit.includes(s.name);
+  const lists = skills.map((s) => [isExplicit(s), skillToolsFor(s, role.name)]).filter(([, l]) => Array.isArray(l) && l.length > 0);
+  const narrowers = lists.some(([e]) => e) ? lists.map(([, l]) => l) : [];
   if (narrowers.length) {
     const base = rules;
     const out = [];
@@ -253,9 +264,9 @@ export function loadSkills() {
 }
 
 /**
- * Pick skills for a worker: the explicit `skills` (a lead's list, a plan's list), PLUS every skill with `autoApply: true`
- * whose roles include the worker's role (so Skill Foundry skills still reach a lead that lists "code-craft").
- * With no explicit list, also skills whose roles include the role AND a keyword appears in the prompt. A skill whose `roles` list
+ * Pick skills for a worker. A skill is chosen when its roles include the worker's role (always required) AND any of:
+ * it is in the explicit `skills` list (a lead's list, a plan's list); it has `autoApply: true`; or one of its keywords
+ * appears in the task prompt (case-insensitive), whether or not there is an explicit list. See SKILL_MATCH. A skill whose `roles` list
  * excludes the role is never injected (reported as a mismatch).
  */
 export function matchSkills(sub, roleName, allSkills) {
@@ -273,8 +284,8 @@ export function matchSkills(sub, roleName, allSkills) {
   const text = String(sub.prompt || '').toLowerCase();
   for (const s of Object.values(allSkills)) {
     if (chosen.includes(s) || !fits(s) || s.roles.length === 0) continue;
-    // an explicit list adds to autoApply skills (e.g. installed by Skill Foundry); keywords only decide when nothing is explicit
-    if (s.autoApply || (!explicit && s.keywords.some((k) => text.includes(k.toLowerCase())))) chosen.push(s);
+    // added to the explicit list: autoApply skills, and skills whose keyword appears in the task (with or without a list)
+    if (s.autoApply || s.keywords.some((k) => k && text.includes(String(k).toLowerCase()))) chosen.push(s);
   }
   return { chosen, mismatched, unknown };
 }
