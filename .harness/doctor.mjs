@@ -184,7 +184,11 @@ for (const s of Object.values(skills)) {
         const role = roles[r]; if (!role) continue;
         const ng = skillRulesNotGranted(role, [p]);
         if (ng.length) { warn(`Skill Foundry: ${n} asks role ${r} for ${ng.map((x) => x.split(': ')[1]).join(', ')}, which the role does not allow (ignored).`); issues++; }
-        if (engine && !(role.allowedTools || []).some((t) => t === 'Bash(node:*)' || t === 'Bash(*)' || t === 'Bash')) { warn(`Skill Foundry: ${n} runs engine/*.mjs scripts, but role ${r} may not run node. Let DEV_ENGINEER run that step, or (project owner's choice) add "Bash(node:*)" to .harness/roles/${role.file}`); issues++; }
+        if (engine && !(role.allowedTools || []).some((t) => t === 'Bash(node:*)' || t === 'Bash(*)' || t === 'Bash')) {
+          // The skill declares in its pointer (data, never by name) whether it works without its scripts: `engine: optional` is a note, anything else a warning.
+          if (p.engine === 'optional') note(`Skill Foundry: ${n} works for role ${r} without its engine/ scripts (its documented fallback, less detailed); give the engine step to DEV_ENGINEER for the full result.`);
+          else { warn(`Skill Foundry: ${n} ${p.engine === 'required' ? 'needs' : 'runs'} engine/*.mjs scripts, but role ${r} may not run node. Let DEV_ENGINEER run that step, or (project owner's choice) add "Bash(node:*)" to .harness/roles/${role.file}`); issues++; }
+        }
       }
     }
     // the doctor is run on purpose, so it may wait for the answer (sync); a session start never does

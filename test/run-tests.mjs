@@ -4055,5 +4055,22 @@ await test('Skill Foundry installed first: the harness starter stub counts as un
   assert(st === '', `a second install changed: ${st}`);
 });
 
+
+await test('doctor reads the pointer field engine: optional (a note, the skill has a fallback) vs required or undeclared (a warning); never by skill name', () => {
+  const p = foundryProject();
+  for (const [n, eng] of [['spec-writer', 'optional'], ['ux-review', 'required']]) {
+    fs.mkdirSync(path.join(p.d, '.claude', 'skills', n, 'engine'), { recursive: true });
+    fs.mkdirSync(path.join(p.d, '.harness', 'skills', n), { recursive: true });
+    fs.writeFileSync(path.join(p.d, '.harness', 'skills', n, 'SKILL.md'), `---\nname: ${n}\ndescription: x\nroles: ["BA_ANALYST"]\nallowedTools: ["Edit","Write","Bash"]\nkeywords: ["x"]\nautoApply: false\ninstalled-by: skill-foundry 1.0.0\n${eng ? `engine: ${eng}\n` : ''}---\n# ${n}\n`);
+  }
+  const out = node(p.d, ['.harness/doctor.mjs'], p.fenv('current')).stdout;
+  assert(/ℹ Skill Foundry: spec-writer works for role BA_ANALYST without its engine\/ scripts/.test(out) && !/! Skill Foundry: spec-writer/.test(out), `optional: ${out.split('\n').filter((l) => /spec-writer/.test(l)).join('|')}`);
+  assert(/! Skill Foundry: ux-review needs engine\/\*\.mjs scripts, but role BA_ANALYST may not run node/.test(out), `required: ${out.split('\n').filter((l) => /ux-review/.test(l)).join('|')}`);
+  // no field (a pointer written before the field existed): the old warning
+  fs.writeFileSync(path.join(p.d, '.harness', 'skills', 'ux-review', 'SKILL.md'), fs.readFileSync(path.join(p.d, '.harness', 'skills', 'ux-review', 'SKILL.md'), 'utf8').replace('engine: required\n', ''));
+  const out2 = node(p.d, ['.harness/doctor.mjs'], p.fenv('current')).stdout;
+  assert(/! Skill Foundry: ux-review runs engine\/\*\.mjs scripts, but role BA_ANALYST may not run node/.test(out2), 'old pointers lost their warning');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

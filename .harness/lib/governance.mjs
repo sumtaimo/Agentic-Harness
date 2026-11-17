@@ -253,6 +253,8 @@ export function loadSkills() {
         keywords: Array.isArray(meta.keywords) ? meta.keywords.map(String) : [],
         autoApply: meta.autoApply === true,
         installedBy: meta['installed-by'] ? String(meta['installed-by']) : '',
+        // how much the skill needs its engine/ scripts: 'required', 'optional' (it has a documented fallback without them) or '' (not declared)
+        engine: ['required', 'optional'].includes(String(meta.engine)) ? String(meta.engine) : '',
         starterStub: meta['starter-stub'] ? String(meta['starter-stub']) : '',
         body: body.trim(),
         raw,
