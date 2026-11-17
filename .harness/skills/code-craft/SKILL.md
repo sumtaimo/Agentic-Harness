@@ -11,4 +11,4 @@ autoApply: false
 1. Every generated source file MUST begin with a JSDoc block containing: `@governed-by PO_ARCHITECT`.
 2. Functions must include explicit TypeScript or runtime parameter validations.
 3. Keep code modular and do not modify files outside your declared target scope.
-4. Before finishing, run the project's tests with `npm test` (or `node --test`) and fix what fails. Do not use other commands. Only touch your declared files.
+4. Before finishing, run the project's tests with `npm test` (or `node --test`) and fix what fails. Do not use other commands, except a skill's own script (`node .claude/skills/<skill>/engine/…`) when an injected skill tells you to run it (only where your role may run node). Only touch your declared files.

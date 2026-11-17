@@ -27,7 +27,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, memoryContext, recordSession, remember, normalizeTarget, helpIfAsked, pendingCostReasons, aiUsageSince, usageTodayLine } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
-import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor } from './lib/governance.mjs';
+import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor, runsNode, ENGINE_SCRIPTS } from './lib/governance.mjs';
 import { VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, listVisibleRuns, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
 
 if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must not use the editor workflow.'); process.exit(2); }
@@ -99,7 +99,7 @@ function leadPrompt(run, lead, a, roles, skills) {
     `\nTask overall: ${run.goal}`,
     sk.length ? `\nMandatory skill rules for you:\n${sk.map((s) => `### ${s.name}\n${s.body}`).join('\n\n')}` : '',
     memory ? `\nRules the user taught (follow them):\n${memory}` : '',
-    (role.allowedTools || []).some((r) => /^Bash\((npm|node)/.test(r)) ? '\nYou may check your work with `npm test` or `node --test`; do not run other commands.' : '\nYou have no shell; use the file tools only.',
+    (role.allowedTools || []).some((r) => /^Bash\((npm|node)/.test(r)) ? `\nYou may check your work with \`npm test\` or \`node --test\`${runsNode(role) ? `, and run ${ENGINE_SCRIPTS}` : ''}; do not run other commands.` : '\nYou have no shell; use the file tools only.',
     '\nWhen done, reply with a short report (at most 5 lines): files changed, what you did, what you checked, anything unresolved. Do not claim you tested something you did not run.'
   ].filter(Boolean).join('\n');
 }

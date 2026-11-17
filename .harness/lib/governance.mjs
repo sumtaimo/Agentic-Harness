@@ -102,6 +102,12 @@ export function readCharter(file = GOV.charter) {
 
 // ───────────────────────────── roles ─────────────────────────────
 
+/**
+ * Capability flag read by other tools (e.g. Skill Foundry's doctor) instead of a version number: a lead's explicit skills
+ * are ADDED to autoApply skills (matchSkills), and several skills' tool lists compose by UNION (computeAllowedTools).
+ */
+export const SKILL_COMPOSITION = 'additive-union';
+
 /** Load .harness/roles/*.json keyed by role name (e.g. DEV_ENGINEER). */
 export function loadRoles() {
   const roles = {};
@@ -464,6 +470,10 @@ export function editorModelFor(lead, config) {
   return memberModels(config, { ...lead, engine: 'claude', level: 'worker' }).work.model;
 }
 
+/** Can this role run node (so a skill's engine/ scripts)? */
+export const runsNode = (role) => (role.allowedTools || []).some((r) => covers(r, 'Bash(node:*)') || r === 'Bash');
+export const ENGINE_SCRIPTS = "a skill's own script (`node .claude/skills/<skill>/engine/…`) when an injected skill tells you to run it";
+
 export function renderAgentFile(lead, role, team, config = (() => { try { return loadConfig(); } catch { return null; } })()) {
   const orch = (team.members || []).find((m) => m.level === 'orchestrator');
   const tools = agentToolsFor(role);
@@ -488,7 +498,7 @@ export function renderAgentFile(lead, role, team, config = (() => { try { return
     '- Change ONLY the files you were assigned. The controller compares every changed file against the assignments after you finish: anything outside your files is reverted and the run fails.',
     '- Follow the shared interface contract and acceptance criteria in your assignment exactly; other leads are building against them in parallel.',
     '- Never touch `.harness/`, `.claude/`, `.git/`, secrets or `.env*`. Never run git commands that change history or remotes, and never push.',
-    ...(tools.includes('Bash') ? ['- You may check your work with `npm test` or `node --test`. Do not run other commands.'] : ['- You have no shell. Work with the file tools only.']),
+    ...(tools.includes('Bash') ? [`- You may check your work with \`npm test\` or \`node --test\`${runsNode(role) ? ", and run " + ENGINE_SCRIPTS : ''}. Do not run other commands.`] : ['- You have no shell. Work with the file tools only.']),
     '- Finish with a short report (at most 5 lines): files changed, what you did, what you checked, anything unresolved. Do not claim you tested something you did not run.',
     ''
   ].join('\n');

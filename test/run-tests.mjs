@@ -3714,5 +3714,16 @@ await test('Dual order (fake Skill Foundry): harness→foundry and foundry→har
   assert(/pointer is for 1\.1\.0 but 1\.2\.0 is installed/.test(out) && /autoApply off/.test(out), out.split('Skill Foundry').slice(1).join('|'));
 });
 
+
+await test('named agents: only a role that may run node is told it may run a skill engine script; capability flag for Skill Foundry', async () => {
+  const g = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
+  assert(g.SKILL_COMPOSITION === 'additive-union', 'capability flag missing');
+  const roles = g.loadRoles(); const team = g.loadTeam();
+  const files = g.expectedAgentFiles(team, roles);
+  assert(/node \.claude\/skills\/<skill>\/engine/.test(files['lead-dev.md']), 'lead-dev not told it may run engine scripts');
+  for (const f of ['lead-qa.md', 'lead-ux.md', 'lead-ba.md']) assert(!/engine/.test(files[f]), `${f} told it may run engine scripts`);
+  assert(/except a skill's own script/.test(g.loadSkills()['code-craft'].body), 'code-craft still forbids engine scripts');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
