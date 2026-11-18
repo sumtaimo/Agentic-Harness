@@ -476,10 +476,8 @@ All memory is plain text in `.harness/memory/`, which you can open and edit your
 | `sessions/*.md` | the harness | one record per task: plan, check, errors, result, rollback | **no**: personal history |
 
 How it reaches each AI:
-- **Harness workers** get the memory in their prompt. Lessons are de-duplicated (repeating failures merge cleanly instead of spamming lines) and capped at
-  50 lines (taught rules first). If the engine already loads `profile.md` and `lessons.md` itself
-  (Claude Code via `CLAUDE.md` `@imports`), they are **not** injected a second time.
-- **Editor, terminal CLI, and cloud AIs** are told by their own instruction file to read it first:
+- **Harness workers** get task-aware memory in their prompt (`memoryContext` / `node .harness/memory.mjs context --goal "…" --files "…"`). Taught rules (`lessons.md`) come first, followed by `auto-lessons.md` entries ranked by relevance to the current goal, files, and failure trace (repeating failures merge cleanly as `seen (Nx)` and lines are capped at 50). If the engine already loads `profile.md` and `lessons.md` itself (Claude Code via `CLAUDE.md` `@imports`), they are **not** injected a second time.
+- **Editor, terminal CLI, and cloud AIs** are told by their own instruction file to read `AGENTS.md`, `profile.md`, `lessons.md`, and `auto-lessons.md` first (or run `memory.mjs context --goal "…" --files "…"`). `node .harness/doctor.mjs` checks that all 6 rule files stay aligned:
 
 | Editor / AI | File it reads | Status |
 |---|---|---|
@@ -558,7 +556,8 @@ node .harness/daemon.mjs --status        # same as status.mjs
 node .harness/backlog.mjs overview|add|ready|block|pop|import|releases
 node .harness/dispatch.mjs --help        # all options: --goal --files --check --engine --auto-plan --wait, swarm --worker id:files:prompt
 node .harness/memory.mjs list|remember|learn|promote|forget|forget-auto|context|sessions
-node .harness/doctor.mjs                 # setup check, engine flag probe + duplicate agy PATH guard
+node .harness/memory.mjs context --goal "…" --files "a,b"   # task-ranked memory retrieval
+node .harness/doctor.mjs                 # setup check, engine probe, cross-tool rule parity + duplicate agy PATH guard
 node .harness/usage.mjs                  # daily/7d/30d token & call usage + ≥80% daily limit warnings (--json)
 node .harness/status.mjs --log 25        # state + recent JSONL events
 node .harness/watch.mjs --job <id>       # live feed of every agent action until that job finishes
@@ -738,7 +737,9 @@ Orchestrator (plans) → leads: `lead-ba` (specs, `docs/**`), `lead-dev` (code, 
 - **Interactive Launcher & Dashboard:** `npm start` (`node .harness/start.mjs`, `--summary`), `node .harness/hook-session.mjs --brief` (4–8 line status), `npm run ui` (`node .harness/ui.mjs`, read-only local web dashboard on `127.0.0.1`), and `npm run usage` (`node .harness/usage.mjs`, with ≥80% daily quota warnings).
 - **Cross-Editor Handoff & Resume:** `node .harness/visible.mjs handoff` and `node .harness/dispatch.mjs --resume-visible [RUN_ID]` preserve partial edits and remap cross-engine models when switching editors or hitting usage caps.
 - **Root-Cause & Anti-Cheating Enforcement:** `visible.mjs brief --bugfix`, strict test-file isolation (`isTestFilePath()` prevents non-QA leads from owning test files), Two-Phase Root-Cause retry directives (`daemon.mjs`), and `auditPatchSignals()` flagging `.skip`/`.only`/`.todo`, empty `catch {}` blocks, and missing root-cause notes.
-- **Adaptive Scopes & Repo Intelligence:** `install.mjs` and `node .harness/team.mjs adapt-scopes [--apply]` detect project layouts (`app/`, `components/`, `styles/`, `cmd/`, `e2e/`, Go/Python tests) cleanly without overwriting custom rules, while `buildRepoMap()` injects a zero-token stack/entrypoint/hotspot summary into planners and `visible.mjs brief`.
+- **Adaptive Scopes & Repo Intelligence:** `install.mjs` and `node .harness/team.mjs adapt-scopes [--apply]` detect project layouts (`app/`, `components/`, `styles/`, `cmd/`, `e2e/`, Go/Python checks) cleanly without overwriting custom rules, while `buildRepoMap()` injects a zero-token stack/entrypoint/hotspot summary into planners and `visible.mjs brief`.
+- **Task-Aware Memory & Failure Diagnosis:** `memoryContext()` and `node .harness/memory.mjs context --goal "…" --files "…"` rank relevant `auto-lessons.md` entries to the active goal, files, and failure trace, while `diagnoseVerifyFailure()` injects `[FAILURE DIAGNOSIS]` and `[REPEAT FAILURE]` triage across retries and handoffs.
+- **Pre-Commit Patch Safety Gate & Rule Parity:** `scanPatchSafety()` blocks newly introduced secrets, private keys, credentialed URLs (always shown as `(redacted)`), and unresolved git conflict markers in diffs before `visible.mjs verify` or `daemon.mjs` commits/advances `uat`, and `node .harness/doctor.mjs` checks parity across all 6 editor/CLI rule files.
 - **Skill Matching & Composition:** `SKILL_MATCH` (`keywords` + explicit/`autoApply` selection) and `additive-union` (`SKILL_COMPOSITION`) explicit tool narrowing ensure skills inject targeted rules cleanly without ever exceeding a role's permissions.
 
 ## Many sessions at once (Session A + child sessions)

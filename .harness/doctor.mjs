@@ -287,6 +287,36 @@ else ok('memory/profile.md is filled in');
 if (!fs.existsSync(FILES.lessons)) note('memory/lessons.md is missing');
 ok(`${listLessons(FILES.lessons).length} taught rule(s), ${listLessons(FILES.autoLessons).length} auto lesson(s)`);
 
+console.log('\nEditor & cross-tool rules');
+{
+  const RULE_FILES = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.github/copilot-instructions.md', '.cursor/rules/harness.mdc', '.windsurfrules'];
+  const missing = [];
+  const stale = [];
+  for (const rel of RULE_FILES) {
+    const abs = path.join(ROOT, rel);
+    if (!fs.existsSync(abs)) { missing.push(rel); continue; }
+    const txt = fs.readFileSync(abs, 'utf8');
+    if (rel === 'AGENTS.md') {
+      const hasMem = /profile\.md/.test(txt) && /lessons\.md/.test(txt) && /auto-lessons\.md/.test(txt);
+      const hasHarness = /Agentic Harness|Agentic harness/i.test(txt);
+      if (!hasMem || !hasHarness) stale.push(rel);
+    } else {
+      const hasAgents = /AGENTS\.md/.test(txt);
+      const hasMem = /profile\.md/.test(txt) && /lessons\.md/.test(txt) && /auto-lessons\.md/.test(txt);
+      const hasAutoImports = !['CLAUDE.md', 'GEMINI.md'].includes(rel)
+        || (/^@AGENTS\.md\s*$/m.test(txt) && /^@\.harness\/memory\/profile\.md\s*$/m.test(txt) && /^@\.harness\/memory\/lessons\.md\s*$/m.test(txt))
+        || txt.includes('<!-- agentic-harness -->');
+      if (!hasAgents || !hasMem || !hasAutoImports) stale.push(rel);
+    }
+  }
+  if (!missing.length && !stale.length) {
+    ok(`cross-tool rules in sync (${RULE_FILES.length} files point to AGENTS.md + memory)`);
+  } else {
+    if (missing.length) note(`missing cross-tool rule file(s): ${missing.join(', ')} (optional — re-run install.mjs to add them for those editors/CLIs)`);
+    if (stale.length) note(`cross-tool rule file(s) need memory/AGENTS.md parity: ${stale.join(', ')} (make sure they reference AGENTS.md, profile.md, lessons.md, and auto-lessons.md)`);
+  }
+}
+
 console.log('\nDaemon');
 try {
   const pid = Number(fs.readFileSync(FILES.pid, 'utf8')); process.kill(pid, 0);

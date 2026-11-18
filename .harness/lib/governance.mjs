@@ -920,6 +920,162 @@ export function auditPatchSignals({ baseFiles = {}, curFiles = {}, root = ROOT, 
   return { signals, skippedTests, emptyCatches, missingRootCause };
 }
 
+const SAFETY_SKIP_RE = /^\.harness\/(?:releases|visible|staging|completed|failed|worktrees|logs|archive)(?:\/|$)/i;
+const DOC_SETEXT_RE = /\.(?:md|mdx|txt|rst)$/i;
+const JS_TS_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx)$/i;
+const SAFETY_ENV_RE = /\$\{[^}]+\}|\{\{[^}]+\}\}|<[^>\s]{2,}>|process\.env\.|import\.meta\.env\.|os\.environ|os\.getenv|ENV\[/i;
+const SAFETY_PLACEHOLDER_RE = /(?:^|[^a-z0-9])(?:example|dummy|sample|placeholder|your[_-]|yourkey|test[_-]?key|fake|mock|redacted|changeme|insert[_-]?here|replace[_-]?me|not[_-]?a[_-]?secret|unset)(?:[^a-z0-9]|$)/i;
+const SAFETY_REPEAT_RE = /^(.)\1{7,}$/;
+const SAFETY_TEST_PREFIX_RE = /^(?:sk_test|pk_test|rk_test|sk-test)[_-]/i;
+
+const PRIVATE_KEY_RE = /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/;
+const PROVIDER_SECRET_PATTERNS = [
+  ['AWS access key', /\b(?:AKIA|ASIA|AROA|AIDA)[A-Z0-9]{16}\b/g],
+  ['GitHub token', /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b/g],
+  ['Anthropic/OpenAI API key', /\bsk-ant-[A-Za-z0-9_-]{16,}\b|\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}\b/g],
+  ['Slack token', /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g],
+  ['Google API key', /\bAIza[0-9A-Za-z_-]{30,}\b/g],
+  ['Stripe live key', /\b(?:sk_live|rk_live)_[0-9a-zA-Z]{16,}\b/g]
+];
+const CRED_ASSIGN_RE = /\b(api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key|client[_-]?secret|password|passwd|db_pass)['"]?\s*[:=]\s*(['"])([A-Za-z0-9_+=/!@#$%^&*.-]{12,})\2/gi;
+const CRED_URL_RE = /\b((?:postgres(?:ql)?|mongodb(?:\+srv)?|mysql|redis|amqps?|https?)):\/\/([^:\s/@'"`<>]+):([^@\s/'"`<>]{4,})@([^:\s/'"`<>]+)/gi;
+const CONFLICT_BRACKET_RE = /^(?:<{7}(?:\s.*)?|>{7}(?:\s.*)?)\s*$/;
+const CONFLICT_EQ_RE = /^={7}\s*$/;
+const DEBUGGER_STMT_RE = /(?:^|[;{}])\s*debugger\b\s*(?:;|$)/;
+
+function isPlaceholderToken(val) {
+  if (!val) return true;
+  if (SAFETY_ENV_RE.test(val) || SAFETY_PLACEHOLDER_RE.test(val) || SAFETY_REPEAT_RE.test(val) || SAFETY_TEST_PREFIX_RE.test(val)) return true;
+  if (/(?:EXAMPLE|DUMMY|SAMPLE|PLACEHOLDER|YOUR_|REDACTED|FAKE|MOCK|0{10,}|x{10,}|X{10,})/.test(val)) return true;
+  return false;
+}
+
+/**
+ * Deterministic zero-dependency pre-commit patch safety scanner on newly added diff hunks.
+ * Scans all non-binary changed/added files (including .json, .yml, .yaml, .toml, .md, etc.; skips .harness/releases/**):
+ *  - Blocking: leaked API keys/tokens/private keys/credentialed URLs/hardcoded credentials (NEVER echoes matched secret; always redacted)
+ *  - Blocking: unresolved merge conflict markers (<<<<<<<, >>>>>>>, and ======= when not a standalone Markdown Setext heading)
+ *  - Warning (non-blocking): newly added JS/TS `debugger` statements
+ */
+export function scanPatchSafety({ baseFiles = {}, curFiles = {}, root = ROOT, baselineDir = null, baseRef = 'HEAD' } = {}) {
+  const blocking = [];
+  const warnings = [];
+  const secretFiles = [];
+  const conflictFiles = [];
+  const debugFiles = [];
+
+  const candidateSet = new Set();
+  for (const f of Object.keys(curFiles || {})) {
+    if (!(f in (baseFiles || {})) || baseFiles[f] !== curFiles[f]) candidateSet.add(f);
+  }
+
+  let gitHeadChecked = null;
+  const hasGitHead = () => {
+    if (gitHeadChecked !== null) return gitHeadChecked;
+    try {
+      gitHeadChecked = spawnSync('git', ['rev-parse', '--verify', '-q', baseRef || 'HEAD'], { cwd: root, stdio: 'ignore', timeout: 5000 }).status === 0;
+    } catch { gitHeadChecked = false; }
+    return gitHeadChecked;
+  };
+
+  const addUnique = (arr, val) => { if (val && !arr.includes(val)) arr.push(val); };
+
+  const seenRel = new Set();
+  for (const rawPath of candidateSet) {
+    const rel = String(rawPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || seenRel.has(rel)) continue;
+    seenRel.add(rel);
+    if (SAFETY_SKIP_RE.test(rel)) continue;
+
+    try {
+      const baseVal = baseFiles?.[rawPath] ?? baseFiles?.[rel];
+      const curVal = curFiles?.[rawPath] ?? curFiles?.[rel];
+      const hunks = extractAddedHunks({ rel, root, baseVal, curVal, baselineDir, baseRef, hasGitHead });
+      if (!hunks.length) continue;
+
+      const flatLines = hunks.flat();
+      let hasBracketMarker = flatLines.some((l) => CONFLICT_BRACKET_RE.test(l));
+      let fileConflict = hasBracketMarker;
+
+      if (!hasBracketMarker && flatLines.some((l) => CONFLICT_EQ_RE.test(l))) {
+        if (!DOC_SETEXT_RE.test(rel)) {
+          fileConflict = true;
+        } else {
+          // For Markdown/text docs, ======= is a Setext H1 underline unless <<<<<<< or >>>>>>> also exists in the file.
+          let diskText = '';
+          try { diskText = fs.readFileSync(path.resolve(root, rel), 'utf8'); } catch { diskText = !isHashOrFlag(curVal) ? String(curVal) : ''; }
+          if (/^(?:<{7}|>{7})(?:\s|$)/m.test(diskText)) fileConflict = true;
+        }
+      }
+      if (fileConflict) {
+        addUnique(conflictFiles, rel);
+        addUnique(blocking, `unresolved merge conflict marker in ${rel}`);
+      }
+
+      const isJsTs = JS_TS_RE.test(rel);
+      for (const line of flatLines) {
+        if (PRIVATE_KEY_RE.test(line) && !/-----BEGIN\s+(?:EXAMPLE|DUMMY|SAMPLE|TEST)\s+PRIVATE\s+KEY-----/i.test(line)) {
+          addUnique(secretFiles, rel);
+          addUnique(blocking, `leaked private key block in ${rel} (redacted)`);
+        }
+
+        for (const [label, re] of PROVIDER_SECRET_PATTERNS) {
+          re.lastIndex = 0;
+          let m;
+          while ((m = re.exec(line)) !== null) {
+            if (!isPlaceholderToken(m[0])) {
+              addUnique(secretFiles, rel);
+              addUnique(blocking, `leaked ${label} in ${rel} (redacted)`);
+              break;
+            }
+          }
+        }
+
+        if (!SAFETY_ENV_RE.test(line)) {
+          CRED_ASSIGN_RE.lastIndex = 0;
+          let cm;
+          while ((cm = CRED_ASSIGN_RE.exec(line)) !== null) {
+            const keyName = cm[1];
+            const secretVal = cm[3];
+            if (!isPlaceholderToken(secretVal)) {
+              addUnique(secretFiles, rel);
+              addUnique(blocking, `hardcoded credential (${keyName}) in ${rel} (redacted)`);
+              break;
+            }
+          }
+        }
+
+        CRED_URL_RE.lastIndex = 0;
+        let um;
+        while ((um = CRED_URL_RE.exec(line)) !== null) {
+          const [, scheme, user, pass, host] = um;
+          const localHost = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?|example\.com|example\.org)$/i.test(host);
+          const docCred = (/^user(?:name)?$/i.test(user) && /^pass(?:word|wd)?$/i.test(pass));
+          if (!localHost && !docCred && !SAFETY_ENV_RE.test(user) && !isPlaceholderToken(pass)) {
+            addUnique(secretFiles, rel);
+            addUnique(blocking, `credentialed URL (${scheme}://…@${host}) in ${rel} (redacted)`);
+            break;
+          }
+        }
+
+        if (isJsTs && !/^\s*(?:\/\/|\/\*|\*)/.test(line) && DEBUGGER_STMT_RE.test(line)) {
+          addUnique(debugFiles, rel);
+          addUnique(warnings, `debug statement (debugger) added in ${rel}`);
+        }
+      }
+    } catch { /* never crash on transient or unreadable files */ }
+  }
+
+  return {
+    blocked: blocking.length > 0,
+    blocking,
+    warnings,
+    secretFiles,
+    conflictFiles,
+    debugFiles
+  };
+}
+
 // ───────────────────────────── adaptive project layout & role scopes ─────────────────────────────
 
 const LAYOUT_SKIP_DIRS = new Set([

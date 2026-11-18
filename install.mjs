@@ -177,7 +177,7 @@ const { hashCore, winCommandLine } = await import(pathToFileURL(path.join(target
 }
 
 const MARK = '<!-- agentic-harness -->';
-const POINTER = `${MARK}\n## Agentic harness\n\nThis project has an agentic harness in \`.harness/\`. Read and follow \`AGENTS.md\` (section "Agentic harness" or the whole file) and the user's memory in \`.harness/memory/profile.md\` and \`.harness/memory/lessons.md\` before working. Save user corrections/preferences with \`node .harness/memory.mjs remember "<rule>"\`. Never edit the harness core (\`.harness/*.mjs\`, \`.harness/lib/**\`): it comes from the template; report harness bugs instead of patching them here.\n`;
+const POINTER = `${MARK}\n## Agentic harness\n\nThis project has an agentic harness in \`.harness/\`. Read and follow \`AGENTS.md\` (section "Agentic harness" or the whole file) and the user's memory in \`.harness/memory/profile.md\`, \`.harness/memory/lessons.md\`, and \`.harness/memory/auto-lessons.md\` (or \`node .harness/memory.mjs context --goal "..." --files "..."\`) before working. Save permanent user rules with \`node .harness/memory.mjs remember "<rule>"\` and local technical pitfalls with \`node .harness/memory.mjs learn "<lesson>"\`. Never edit the harness core (\`.harness/*.mjs\`, \`.harness/lib/**\`): it comes from the template; report harness bugs instead of patching them here.\n`;
 
 for (const rel of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.github/copilot-instructions.md', '.cursor/rules/harness.mdc', '.windsurfrules']) {
   const d = path.join(target, rel); const s = path.join(SRC, rel);

@@ -5121,6 +5121,383 @@ await test('repo intelligence map (Point 3): buildRepoMap summarizes stack, layo
   assert(poPrompt.includes('[REPO INTELLIGENCE]:') && poPrompt.includes('[DETECTED VERIFY COMMAND]: npm test'), poPrompt.slice(0, 1400));
 });
 
+// ───────────── Package B: task-aware memory retrieval, failure diagnosis, pre-commit patch safety gate, cross-tool rule parity ─────────────
+
+await test('task-aware memory retrieval (Point 4a): ranks relevant auto-lessons above newer unrelated ones, weights seen (Nx), falls back chronologically without a query, keeps CLAUDE.md no-double-injection', () => {
+  // 1. memory.mjs context CLI ranking, seen (Nx) boost, empty-query chronological fallback, and flag syntax
+  const d = sandbox();
+  const cf = path.join(d, '.harness', 'config.json');
+  const cfg = json(cf);
+  cfg.memory = { ...(cfg.memory || {}), enabled: true, maxAutoLessons: 2, maxLessonLines: 50, maxContextChars: 6000 };
+  fs.writeFileSync(cf, JSON.stringify(cfg, null, 2));
+  fs.rmSync(path.join(d, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+
+  node(d, ['.harness/memory.mjs', 'remember', 'Always validate API inputs cleanly']);
+  fs.writeFileSync(path.join(d, '.harness', 'memory', 'auto-lessons.md'), [
+    '# Auto-recorded harness lessons',
+    '- [L1] (2026-01-01) "Webhook retry": first attempt failed with "webhook Stripe signature mismatch" — passed after 2 cycles. Check for this earlier next time. (seen 5x; latest: "Stripe billing")',
+    '- [L2] (2026-01-02) "JWT auth": src/auth/jwt.ts missing issuer check when verifying tokens',
+    '- [L3] (2026-01-03) "Docs fix": docs/changelog.md typo fix',
+    '- [L4] (2026-01-04) "Webhook queue": first attempt failed with "webhook timeout" — passed after 2 cycles. Check for this earlier next time.'
+  ].join('\n') + '\n');
+
+  // Empty query falls back to last N chronological entries (L3, L4)
+  const noQ = node(d, ['.harness/memory.mjs', 'context']);
+  assert(noQ.status === 0 && noQ.stdout.includes('Always validate API inputs cleanly'), noQ.stdout);
+  assert(noQ.stdout.includes('L4') || noQ.stdout.includes('Webhook queue'), noQ.stdout);
+  assert(noQ.stdout.includes('Docs fix') && noQ.stdout.includes('Webhook queue') && !noQ.stdout.includes('JWT auth') && !noQ.stdout.includes('Webhook retry'), noQ.stdout);
+
+  // Task-specific query ranks matching auth/jwt lesson above newer unrelated entries
+  const authQ = node(d, ['.harness/memory.mjs', 'context', '--goal', 'Fix token issuer check', '--files', 'src/auth/jwt.ts']);
+  assert(authQ.status === 0 && authQ.stdout.indexOf('Always validate API inputs cleanly') < authQ.stdout.indexOf('JWT auth'), authQ.stdout);
+  assert(authQ.stdout.includes('JWT auth') && !authQ.stdout.includes('Docs fix'), `expected JWT auth prioritized:\n${authQ.stdout}`);
+
+  // Equal token match ("webhook"): L1 with (seen 5x) outranks newer L4; equals flags work too
+  const seenQ = node(d, ['.harness/memory.mjs', 'context', '--goal=Debug webhook failure', '--query=webhook']);
+  assert(seenQ.status === 0 && seenQ.stdout.includes('Webhook retry') && seenQ.stdout.includes('Webhook queue'), seenQ.stdout);
+  assert(seenQ.stdout.indexOf('Webhook retry') < seenQ.stdout.indexOf('Webhook queue'), `expected (seen 5x) L1 before L4:\n${seenQ.stdout}`);
+
+  // 2. End-to-end daemon.mjs + CLAUDE.md auto-load: skips profile/lessons, STILL injects task-relevant auto-lessons
+  const dCl = sandbox();
+  fs.writeFileSync(path.join(dCl, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
+  const cCl = json(path.join(dCl, '.harness', 'config.json'));
+  cCl.profiles.mock.instructionFile = 'CLAUDE.md';
+  fs.writeFileSync(path.join(dCl, '.harness', 'config.json'), JSON.stringify(cCl, null, 2));
+  fs.copyFileSync(path.join(REPO, 'CLAUDE.md'), path.join(dCl, 'CLAUDE.md'));
+  fs.writeFileSync(path.join(dCl, '.harness', 'memory', 'profile.md'), '# Profile\n- Name: Ada\n');
+  node(dCl, ['.harness/memory.mjs', 'remember', 'Permanent Rule ABC']);
+  fs.writeFileSync(path.join(dCl, '.harness', 'memory', 'auto-lessons.md'), [
+    '# Auto',
+    '- [L1] (2026-01-01) "CSV parser": src/csv.js BOM handling pitfall',
+    '- [L2] (2026-01-02) "CSS theme": src/ui/theme.css padding rule',
+    '- [L3] (2026-01-03) "README update": docs/readme.md note'
+  ].join('\n') + '\n');
+  drop(dCl, { id: 'mem-rank', title: 'Fix CSV BOM', verifyCmd: PASS, subtasks: [{ id: 'w', targetFiles: ['src/csv.js'], prompt: 'WRITE src/csv.js ok' }] });
+  runOnce(dCl);
+  const wp = promptOf(dCl, 'w');
+  assert(!wp.includes('Permanent Rule ABC') && !wp.includes('Name: Ada'), 'CLAUDE.md @imports should suppress profile/lessons double injection');
+  assert(wp.includes('src/csv.js BOM handling pitfall') && !wp.includes('src/ui/theme.css padding rule'), `expected relevant L1 instead of unrelated L2:\n${wp}`);
+
+  // 3. End-to-end visible.mjs brief + assign pass task query to memoryContext
+  const dv = sandbox();
+  fs.writeFileSync(path.join(dv, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
+  fs.writeFileSync(path.join(dv, '.harness', 'memory', 'auto-lessons.md'), [
+    '# Auto',
+    '- [L1] (2026-01-01) "SQLite helper": src/db/sqlite.js requires pragma foreign_keys',
+    '- [L2] (2026-01-02) "Footer": styles/footer.css margin tweak',
+    '- [L3] (2026-01-03) "Docs": docs/intro.md heading'
+  ].join('\n') + '\n');
+  const bRes = vis(dv, 'brief', '--goal', 'Update SQLite connection helper', '--files', 'src/db/sqlite.js', '--check', PASS);
+  const vid = runIdOf(bRes);
+  assert(bRes.status === 0 && bRes.stdout.includes('pragma foreign_keys'), `visible brief missing relevant auto-lesson:\n${bRes.stdout}`);
+  const aRes = vis(dv, 'assign', vid, deleg([{ lead: 'lead-dev', goal: 'fix sqlite helper', files: ['src/db/sqlite.js'] }]));
+  assert(aRes.status === 0 && aRes.stdout.includes('pragma foreign_keys') && !aRes.stdout.includes('Footer'), `visible assign did not rank sqlite lesson:\n${aRes.stdout}`);
+  assert(vis(dv, 'rollback', vid).status === 0);
+});
+
+await test('deterministic failure diagnosis & repeat detection (Point 4b): classifies all error categories, extracts files/tests/owners, detects repeats across telemetry, retry prompts, visible verify, and handoff', () => {
+  // 1. Pure classification & extraction checks
+  assert(common.diagnoseVerifyFailure('').category === 'UNKNOWN');
+
+  const dSafety = common.diagnoseVerifyFailure('PATCH_SAFETY: leaked GitHub token in src/auth.js (redacted)');
+  assert(dSafety.category === 'PATCH_SAFETY' && dSafety.files.includes('src/auth.js') && /secrets|conflict/i.test(dSafety.hint), JSON.stringify(dSafety));
+
+  assert(common.diagnoseVerifyFailure('sh: 1: vitest: command not found\nexit code 127').category === 'COMMAND_NOT_FOUND');
+
+  const dDep = common.diagnoseVerifyFailure("Error [ERR_MODULE_NOT_FOUND]: Cannot find module './helper.js' imported from src/index.js");
+  assert(dDep.category === 'MISSING_DEPENDENCY' && dDep.files.includes('src/index.js'), JSON.stringify(dDep));
+
+  assert(common.diagnoseVerifyFailure('Command failed after 5000ms\nSIGTERM timed out').category === 'TIMEOUT');
+  assert(common.diagnoseVerifyFailure('Error: EACCES: permission denied, open foo.txt').category === 'PERMISSION_OR_ENV');
+
+  const dSyn = common.diagnoseVerifyFailure("SyntaxError: Unexpected token '}' at src/parser.js:14:2");
+  assert(dSyn.category === 'SYNTAX_OR_PARSE' && dSyn.files.includes('src/parser.js:14'), JSON.stringify(dSyn));
+
+  // ANSI escapes stripped cleanly + tsc format line extraction
+  const dTs = common.diagnoseVerifyFailure("\x1b[31msrc/app.ts(22,5): error TS2322: Type 'string' is not assignable to type 'number'.\x1b[0m");
+  assert(dTs.category === 'TYPECHECK' && dTs.files.includes('src/app.ts:22') && !/\x1b\[/.test(dTs.headline), JSON.stringify(dTs));
+
+  // TAP/node:test AssertionError + Go + pytest failing test extraction & owner attribution
+  const tapTrace = [
+    'not ok 1 - slugify rejects numbers',
+    '  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:',
+    '    at Context.<anonymous> (tests/slug.test.js:19:5)',
+    '    at src/slug.js:7:3'
+  ].join('\n');
+  const dTap = common.diagnoseVerifyFailure(tapTrace, {
+    subtasks: [
+      { id: 'dev', targetFiles: ['src/slug.js'] },
+      { id: 'qa', targetFiles: ['tests/'] }
+    ]
+  });
+  assert(dTap.category === 'TEST_ASSERTION' && dTap.tests.includes('slugify rejects numbers'), JSON.stringify(dTap));
+  assert(dTap.likelyOwners.includes('qa') && dTap.likelyOwners.includes('dev'), JSON.stringify(dTap));
+
+  const goDiag = common.diagnoseVerifyFailure('--- FAIL: TestAuthToken (0.01s)\n    internal/auth/auth_test.go:42: assertion failed');
+  assert(goDiag.category === 'TEST_ASSERTION' && goDiag.tests.includes('TestAuthToken') && goDiag.files.includes('internal/auth/auth_test.go:42'), JSON.stringify(goDiag));
+
+  const pyDiag = common.diagnoseVerifyFailure('FAILED tests/test_api.py::test_login - AssertionError: 200 != 401\nFile "tests/test_api.py", line 18, in test_login');
+  assert(pyDiag.category === 'TEST_ASSERTION' && pyDiag.tests.includes('tests/test_api.py::test_login') && pyDiag.files.includes('tests/test_api.py:18'), JSON.stringify(pyDiag));
+
+  const rtDiag = common.diagnoseVerifyFailure("TypeError: Cannot read properties of undefined (reading 'id')\n    at getUser (src/users.js:11:9)");
+  assert(rtDiag.category === 'RUNTIME_ERROR' && rtDiag.files.includes('src/users.js:11'), JSON.stringify(rtDiag));
+
+  // Signature stability & repeat detection across minor line/timing/tmp-path differences
+  const prevSame = "TypeError: Cannot read properties of undefined (reading 'id')\n    at getUser (src/users.js:11:9) (15ms)";
+  const curSame = "TypeError: Cannot read properties of undefined (reading 'id')\n    at getUser (src/users.js:48:3) (92ms)";
+  const dRep = common.diagnoseVerifyFailure(curSame, { previousTrace: prevSame });
+  const dDiff = common.diagnoseVerifyFailure("SyntaxError: Unexpected token ';' at src/other.js:4:1", { previousTrace: prevSame });
+  assert(dRep.repeat === true && dDiff.repeat === false, `repeat checks: same=${dRep.repeat}, diff=${dDiff.repeat}`);
+  assert(common.formatDiagnosis(dRep).includes('[REPEAT FAILURE') && !common.formatDiagnosis(dDiff).includes('[REPEAT FAILURE'));
+
+  // 2. End-to-end daemon.mjs telemetry + [FAILURE DIAGNOSIS] + [REPEAT FAILURE] in retry prompts
+  const dd = sandbox();
+  const failRt = `node -e "console.error(\\"TypeError: Cannot read properties of undefined (reading 'x')\\\\n    at run (src/calc.js:8:5)\\"); process.exit(1)"`;
+  drop(dd, { id: 'diag-rep', title: 'diag repeat', verifyCmd: failRt, subtasks: [{ id: 'w', targetFiles: ['src/calc.js'], prompt: 'WRITE src/calc.js export const x = 1;' }] });
+  runOnce(dd);
+  const diagEvs = log(dd).filter((e) => e.phase === 'FAILURE_DIAGNOSED');
+  assert(diagEvs.length === 3 && diagEvs[0].category === 'RUNTIME_ERROR' && diagEvs[0].repeat === false, JSON.stringify(diagEvs));
+  assert(diagEvs[1].repeat === true && diagEvs[2].repeat === true, `expected cycle 2 & 3 repeat=true: ${JSON.stringify(diagEvs)}`);
+  const finalPrompt = promptOf(dd, 'w');
+  assert(finalPrompt.includes('[FAILURE DIAGNOSIS]:') && finalPrompt.includes('Category: RUNTIME_ERROR [REPEAT FAILURE'), finalPrompt);
+  assert(finalPrompt.includes('Likely owner(s): w'), finalPrompt);
+
+  // 3. End-to-end visible.mjs verify + handoff show diagnosis on FAILED and omit it on PASSED
+  const dv = sandbox();
+  const checkTypeErr = `node -e "if(require('fs').readFileSync('src/ok.js','utf8').includes('FIXED'))process.exit(0);console.error(\\"AssertionError: expected fixed\\\\n    at src/ok.js:3:1\\");process.exit(1)"`;
+  const vid = runIdOf(vis(dv, 'brief', '--goal', 'Fix type/assertion error', '--check', checkTypeErr));
+  assert(vis(dv, 'assign', vid, deleg([{ lead: 'lead-dev', goal: 'fix', files: ['src/ok.js'] }])).status === 0);
+  agentsWrite(dv, [['src/ok.js', 'BROKEN']]);
+
+  const v1 = vis(dv, 'verify', vid);
+  assert(v1.status === 1 && /Failure diagnosis:/.test(v1.stdout) && /Category: TEST_ASSERTION/.test(v1.stdout) && !/\[REPEAT FAILURE/.test(v1.stdout), v1.stdout);
+  assert(runJson(dv, vid).lastVerify.diagnosis.category === 'TEST_ASSERTION' && runJson(dv, vid).lastVerify.diagnosis.repeat === false);
+
+  const v2 = vis(dv, 'verify', vid);
+  assert(v2.status === 1 && /\[REPEAT FAILURE/.test(v2.stdout) && runJson(dv, vid).lastVerify.diagnosis.repeat === true, v2.stdout);
+
+  const hTxt = vis(dv, 'handoff', vid);
+  assert(hTxt.status === 0 && /TEST_ASSERTION \[REPEAT FAILURE/.test(hTxt.stdout), hTxt.stdout);
+  const hPrompt = vis(dv, 'handoff', vid, '--prompt');
+  assert(hPrompt.status === 0 && /Diagnosis:/.test(hPrompt.stdout) && /TEST_ASSERTION \[REPEAT FAILURE/.test(hPrompt.stdout), hPrompt.stdout);
+
+  agentsWrite(dv, [['src/ok.js', 'FIXED']]);
+  const v3 = vis(dv, 'verify', vid);
+  assert(v3.status === 0 && /PASSED ✔/.test(v3.stdout) && !/Failure diagnosis:/.test(v3.stdout) && runJson(dv, vid).lastVerify.diagnosis === undefined, v3.stdout);
+});
+
+await test('pre-commit diff-aware patch safety gate (Point 5): blocks leaked secrets & unresolved conflict markers across extensions, warns on debugger, strictly redacts everywhere, blocks uat advanceBranch', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-safety-cur-'));
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-safety-base-'));
+  const writePair = (rel, baseText, curText) => {
+    if (baseText !== null) {
+      const bf = path.join(baseDir, rel);
+      fs.mkdirSync(path.dirname(bf), { recursive: true });
+      fs.writeFileSync(bf, baseText);
+    }
+    const cf = path.join(root, rel);
+    fs.mkdirSync(path.dirname(cf), { recursive: true });
+    fs.writeFileSync(cf, curText);
+  };
+
+  // Synthetic secrets constructed by joining segments so static scanners never see literal credentials
+  const sAws = ['AKIA', 'IOSFODNN7', 'REALKEY'].join('');
+  const sGh = ['ghp_', 'x9K2mP7qR4', 'tY5nL8wZ1c', 'Ab34'].join('');
+  const sAnt = ['sk-ant-', 'api03-', 'Zy98Xw76Vu54Ts32Rq10'].join('');
+  const sSlack = ['xoxb-', '9876543210-', 'AbCdEf123456'].join('');
+  const sGoogle = ['AIza', 'SyD_RealLookingKey1234567890_abcde'].join('');
+  const sStripe = ['sk_live_', '9876543210abcdefgh'].join('');
+  const sPriv = ['-----BEGIN ', 'RSA PRIVATE KEY-----'].join('');
+  const sCredVal = ['S3cr3tPr0d', 'P@ssw0rd!99'].join('');
+  const sDbPass = ['DbR00tPass', '2026Prod'].join('');
+  const sDbUrl = `postgres://appadmin:${sDbPass}@prod-db.internal:5432/billing`;
+
+  // 1. Diff-only check: pre-existing secret in unchanged header line + clean edit elsewhere must NOT block
+  writePair('src/existing.js', `// legacy: ${sAws}\nexport const v = 1;\n`, `// legacy: ${sAws}\nexport const v = 2;\n`);
+  const cleanDiff = gov.scanPatchSafety({ baseFiles: { 'src/existing.js': 'b' }, curFiles: { 'src/existing.js': 'c' }, root, baselineDir: baseDir });
+  assert(cleanDiff.blocked === false && cleanDiff.blocking.length === 0, `unchanged line triggered block: ${JSON.stringify(cleanDiff)}`);
+
+  // 2. Detects provider secrets, private keys, hardcoded assignments, and credentialed URLs across .js/.json/.yml/.env.example; skips .harness/releases/
+  writePair('src/aws.js', 'export const a = 1;\n', `export const a = 1;\nexport const k = "${sAws}";\n`);
+  writePair('config/gh.json', null, `{"token":"${sGh}"}\n`);
+  writePair('.github/workflows/ci.yml', null, `env:\n  ANTHROPIC_KEY: "${sAnt}"\n  SLACK: "${sSlack}"\n  GOOG: "${sGoogle}"\n  STRIPE: "${sStripe}"\n`);
+  writePair('.env.example', 'KEY=\n', `KEY=\nDB_URL=${sDbUrl}\n`);
+  writePair('src/pem.js', null, `const key = "${sPriv}";\nconst client_secret = "${sCredVal}";\n`);
+  writePair('.harness/releases/r1/old.js', null, `const k = "${sAws}";\n`);
+
+  const allSecrets = [sAws, sGh, sAnt, sSlack, sGoogle, sStripe, sPriv, sCredVal, sDbPass];
+  const rSec = gov.scanPatchSafety({
+    baseFiles: { 'src/aws.js': 'b1', '.env.example': 'b2' },
+    curFiles: {
+      'src/aws.js': 'c1', 'config/gh.json': 'c2', '.github/workflows/ci.yml': 'c3',
+      '.env.example': 'c4', 'src/pem.js': 'c5', '.harness/releases/r1/old.js': 'c6'
+    },
+    root, baselineDir: baseDir
+  });
+  assert(rSec.blocked === true && rSec.blocking.length >= 9, JSON.stringify(rSec));
+  for (const needle of allSecrets) {
+    assert(!JSON.stringify(rSec).includes(needle), `RAW SECRET LEAKED IN scanPatchSafety OUTPUT: ${needle}`);
+  }
+  assert(rSec.blocking.every((b) => b.includes('(redacted)')), JSON.stringify(rSec.blocking));
+  assert(!rSec.secretFiles.includes('.harness/releases/r1/old.js'), '.harness/releases/** must be skipped');
+
+  // 3. Placeholders, env lookups, localhost/example URLs, and example private keys do NOT block
+  const pTestStripe = ['sk_test_', '1234567890abcdef12'].join('');
+  writePair('src/safe.js', null, [
+    'const api_key = process.env.API_KEY;',
+    'const token = "YOUR_API_KEY_HERE";',
+    `const stripe = "${pTestStripe}";`,
+    'const localDb = "postgres://user:localpass123@localhost:5432/dev";',
+    'const tmpl = "https://${DB_USER}:${DB_PASS}@db.prod.local/app";',
+    'const sampleKey = "-----BEGIN EXAMPLE PRIVATE KEY-----";'
+  ].join('\n'));
+  const rSafe = gov.scanPatchSafety({ baseFiles: {}, curFiles: { 'src/safe.js': 'c' }, root, baselineDir: baseDir });
+  assert(rSafe.blocked === false && rSafe.blocking.length === 0, `placeholders false-positived: ${JSON.stringify(rSafe)}`);
+
+  // 4. Conflict markers vs Markdown Setext H1 headings + JS/TS debugger warnings
+  writePair('src/conf.js', 'export const x = 1;\n', 'export const x = 1;\n<' + '<<<<<< HEAD\na\n=======\nb\n>>>>>>> feat\n');
+  writePair('docs/setext.md', null, 'Main Heading\n=======\nBody paragraph.\n');
+  writePair('docs/realconf.md', null, '<' + '<<<<<< HEAD\nold text\n=======\nnew text\n>>>>>>> branch\n');
+  writePair('src/dbg.ts', 'export const y = 1;\n', 'export const y = 1;\n// debugger;\nexport function f() { debugger; return y; }\n');
+
+  const rConf = gov.scanPatchSafety({
+    baseFiles: { 'src/conf.js': 'b1', 'src/dbg.ts': 'b2' },
+    curFiles: { 'src/conf.js': 'c1', 'docs/setext.md': 'c2', 'docs/realconf.md': 'c3', 'src/dbg.ts': 'c4' },
+    root, baselineDir: baseDir
+  });
+  assert(rConf.blocked === true && rConf.conflictFiles.includes('src/conf.js') && rConf.conflictFiles.includes('docs/realconf.md'), JSON.stringify(rConf));
+  assert(!rConf.conflictFiles.includes('docs/setext.md'), 'Markdown Setext heading ======= must not false-positive');
+  assert(rConf.debugFiles.includes('src/dbg.ts') && rConf.warnings.some((w) => /debug statement \(debugger\) added in src\/dbg\.ts/.test(w)), JSON.stringify(rConf));
+
+  // 5. visible.mjs verify: blocks secret even when check passes, redacts everywhere, warns cleanly on debugger, clears on fix
+  const dv = sandbox();
+  fs.rmSync(path.join(dv, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+  const vid = runIdOf(vis(dv, 'brief', '--goal', 'Add auth helper', '--check', PASS));
+  assert(vis(dv, 'assign', vid, deleg([{ lead: 'lead-dev', goal: 'write auth', files: ['src/auth.js'] }])).status === 0);
+  agentsWrite(dv, [['src/auth.js', `export const k = "${sGh}";\n`]]);
+  const vFail = vis(dv, 'verify', vid);
+  assert(vFail.status === 1 && /Safety gate BLOCKED/.test(vFail.stdout) && /\(redacted\)/.test(vFail.stdout) && /Failure diagnosis:/.test(vFail.stdout), vFail.stdout);
+  assert(!vFail.stdout.includes(sGh) && !read(dv, `.harness/visible/${vid}/report.md`).includes(sGh) && !read(dv, `.harness/visible/${vid}/run.json`).includes(sGh), 'raw secret leaked in visible verify output');
+  assert(/Patch safety block in "Add auth helper":.*\(redacted\)/.test(read(dv, '.harness/memory/auto-lessons.md')) && !read(dv, '.harness/memory/auto-lessons.md').includes(sGh), read(dv, '.harness/memory/auto-lessons.md'));
+  const hv = vis(dv, 'handoff', vid);
+  assert(hv.status === 0 && /PATCH_SAFETY:/.test(hv.stdout) && !hv.stdout.includes(sGh), hv.stdout);
+
+  // Fixing secret (leaving only a debugger warning) passes verify with warning + no safety block section
+  agentsWrite(dv, [['src/auth.js', 'export const k = process.env.GH_TOKEN;\ndebugger;\n']]);
+  const vPass = vis(dv, 'verify', vid);
+  assert(vPass.status === 0 && /PASSED ✔/.test(vPass.stdout) && /Safety warnings \(non-blocking\):/.test(vPass.stdout) && /debug statement/.test(vPass.stdout) && !/Safety gate BLOCKED/.test(vPass.stdout), vPass.stdout);
+
+  // 6. daemon.mjs in-place: cycle 1 blocked by safety gate (debugger warning too) -> cycle 2 FIX clears -> COMMITTED + zero secret leak
+  const dd = sandbox();
+  fs.rmSync(path.join(dd, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+  drop(dd, {
+    id: 'sec-rec', title: 'Secret Retry', verifyCmd: PASS,
+    subtasks: [{ id: 'w', targetFiles: ['src/cfg.js'], prompt: `WRITE src/cfg.js export const key = "${sAnt}"; debugger;\nFIX src/cfg.js export const key = process.env.KEY;` }]
+  });
+  runOnce(dd);
+  assert(stateOf(dd).phase === '4_COMMITTED' && stateOf(dd).cycle === 2, JSON.stringify(stateOf(dd)));
+  assert(log(dd).some((e) => e.phase === 'PATCH_SAFETY_BLOCKED' && /\(redacted\)/.test(e.message)), 'missing PATCH_SAFETY_BLOCKED telemetry');
+  assert(log(dd).some((e) => e.phase === 'PATCH_SAFETY_WARNING' && /debugger/.test(e.message)), 'missing PATCH_SAFETY_WARNING telemetry');
+  for (const relF of ['.harness/state.json', '.harness/telemetry.log', '.harness/memory/auto-lessons.md']) {
+    if (fs.existsSync(path.join(dd, relF))) assert(!read(dd, relF).includes(sAnt), `raw secret leaked into ${relF}`);
+  }
+
+  // 7. daemon.mjs 3-cycle safety halt deduplicates "Patch safety block in" auto-lesson across tasks without secret leak
+  const dHalt = sandbox();
+  fs.rmSync(path.join(dHalt, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+  drop(dHalt, { id: 'sec-h1', title: 'Safety Halt One', verifyCmd: PASS, subtasks: [{ id: 'w1', targetFiles: ['src/s.js'], prompt: `WRITE src/s.js export const k = "${sAws}";` }] });
+  runOnce(dHalt);
+  assert(stateOf(dHalt).phase === 'HALTED_HITL_REQUIRED', stateOf(dHalt).phase);
+  drop(dHalt, { id: 'sec-h2', title: 'Safety Halt Two', verifyCmd: PASS, subtasks: [{ id: 'w2', targetFiles: ['src/s.js'], prompt: `WRITE src/s.js export const k = "${sAws}";` }] });
+  runOnce(dHalt);
+  const autoH = read(dHalt, '.harness/memory/auto-lessons.md');
+  assert(/Patch safety block in "Safety Halt One".*\(seen \d+x; latest: "Safety Halt Two"\)/.test(autoH) && !autoH.includes(sAws), autoH);
+  const failTrace = read(dHalt, `.harness/failed/${ls(dHalt, 'failed')[0].replace('.json', '.trace.txt')}`);
+  assert(/PATCH_SAFETY:.*\(redacted\)/.test(failTrace) && !failTrace.includes(sAws), failTrace);
+
+  // 8. daemon.mjs uat integration branch: secret/conflict marker NEVER advances uat branch even when verifyCmd passes
+  const { d: du, g, sha } = gitSandbox();
+  const mainBefore = sha('main');
+  setBacklog(du, [{
+    id: 'U-SEC', title: 'UAT secret guard', priority: 1, status: 'READY', verifyCmd: PASS,
+    subtasks: [{ id: 'dev', role: 'DEV_ENGINEER', targetFiles: ['src/u.js'], prompt: `WRITE src/u.js export const s = "${sStripe}";` }]
+  }]);
+  const rUat = tick(du);
+  assert(rUat.status === 1 && byId(du, 'U-SEC').status === 'BLOCKED', `${byId(du, 'U-SEC').status} ${byId(du, 'U-SEC').blockedReason}`);
+  assert((sha('uat') === null || sha('uat') === mainBefore) && onBranch(g, 'uat', 'src/u.js') === null, 'secret reached uat branch!');
+  assert(!read(du, '.harness/telemetry.log').includes(sStripe) && !read(du, '.harness/memory/auto-lessons.md').includes(sStripe), 'raw secret leaked on uat run');
+});
+
+await test('cross-tool rule parity & doctor check (Point 6): all 6 instruction files stay in sync with AGENTS.md & memory, install.mjs updates POINTER idempotently, doctor emits non-warning parity notes', () => {
+  const RULE_FILES = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.github/copilot-instructions.md', '.cursor/rules/harness.mdc', '.windsurfrules'];
+
+  // 1. All 6 shipped rule files in REPO have memory/AGENTS.md parity, and CLAUDE.md/GEMINI.md preserve @imports
+  for (const rel of RULE_FILES) {
+    const txt = fs.readFileSync(path.join(REPO, rel), 'utf8');
+    if (rel !== 'AGENTS.md') assert(txt.includes('AGENTS.md'), `${rel} missing AGENTS.md reference`);
+    for (const token of ['profile.md', 'lessons.md', 'auto-lessons.md', 'remember', 'learn', 'memory.mjs context']) {
+      assert(txt.includes(token), `${rel} missing "${token}"`);
+    }
+    if (['CLAUDE.md', 'GEMINI.md'].includes(rel)) {
+      for (const imp of ['@AGENTS.md', '@.harness/memory/profile.md', '@.harness/memory/lessons.md']) {
+        assert(new RegExp(`^${imp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm').test(txt), `${rel} missing standalone @import "${imp}"`);
+      }
+    }
+  }
+
+  const makeValidProject = (dir) => {
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'parity-proj', scripts: { test: PASS } }, null, 2));
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    execFileSync('git', ['add', '-A'], { cwd: dir });
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+  };
+
+  // 2. Fresh install passes doctor cross-tool rules check cleanly (Failures: 0, Warnings: 0)
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-parity-fresh-'));
+  makeValidProject(fresh);
+  assert(node(REPO, ['install.mjs', fresh, '--no-auto-assign', '--no-skills']).status === 0);
+  const fCfg = path.join(fresh, '.harness', 'config.json');
+  const cFresh = json(fCfg);
+  cFresh.profiles.mock = { verified: true, binary: process.execPath, args: [MOCK], promptVia: 'stdin', allowedTools: [] };
+  cFresh.activeProfile = 'mock'; cFresh.autoOrder = ['mock'];
+  fs.writeFileSync(fCfg, JSON.stringify(cFresh, null, 2));
+  fs.writeFileSync(path.join(fresh, '.harness', 'approvals.json'), JSON.stringify({ engines: { mock: true } }));
+
+  const docFresh = node(fresh, ['.harness/doctor.mjs']);
+  assert(docFresh.status === 0 && /✔ cross-tool rules in sync \(6 files point to AGENTS\.md \+ memory\)/.test(docFresh.stdout) && /Failures: 0 · Warnings: 0/.test(docFresh.stdout), docFresh.stdout);
+
+  // 3. Removing one rule file or breaking parity triggers non-warning ℹ note (Warnings stays 0)
+  fs.rmSync(path.join(fresh, '.windsurfrules'));
+  fs.writeFileSync(path.join(fresh, '.cursor', 'rules', 'harness.mdc'), '# custom cursor rule without harness pointer\n');
+  const docDrift = node(fresh, ['.harness/doctor.mjs']);
+  assert(docDrift.status === 0 && /Warnings: 0/.test(docDrift.stdout), docDrift.stdout);
+  assert(/ℹ missing cross-tool rule file\(s\): \.windsurfrules/.test(docDrift.stdout), docDrift.stdout);
+  assert(/ℹ cross-tool rule file\(s\) need memory\/AGENTS\.md parity: \.cursor\/rules\/harness\.mdc/.test(docDrift.stdout), docDrift.stdout);
+
+  // 4. Existing project with custom CLAUDE.md + .windsurfrules gets updated POINTER idempotently and passes doctor check
+  const existing = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-parity-existing-'));
+  makeValidProject(existing);
+  fs.writeFileSync(path.join(existing, 'CLAUDE.md'), '# Project Claude Rules\nKeep my custom note.\n');
+  fs.writeFileSync(path.join(existing, '.windsurfrules'), 'Prefer TypeScript.\n');
+  assert(node(REPO, ['install.mjs', existing, '--no-auto-assign', '--no-skills']).status === 0);
+  const clTxt = read(existing, 'CLAUDE.md');
+  assert(clTxt.includes('Keep my custom note.') && clTxt.includes('auto-lessons.md') && clTxt.includes('memory.mjs learn') && clTxt.includes('memory.mjs context'), clTxt);
+  assert(read(existing, '.windsurfrules').includes('Prefer TypeScript.') && read(existing, '.windsurfrules').includes('auto-lessons.md'));
+  assert(node(REPO, ['install.mjs', existing, '--no-auto-assign', '--no-skills']).status === 0);
+  assert((read(existing, 'CLAUDE.md').match(/<!-- agentic-harness -->/g) || []).length === 1, 'install.mjs appended POINTER twice');
+
+  const eCfg = path.join(existing, '.harness', 'config.json');
+  const cEx = json(eCfg);
+  cEx.profiles.mock = { verified: true, binary: process.execPath, args: [MOCK], promptVia: 'stdin', allowedTools: [] };
+  cEx.activeProfile = 'mock'; cEx.autoOrder = ['mock'];
+  fs.writeFileSync(eCfg, JSON.stringify(cEx, null, 2));
+  fs.writeFileSync(path.join(existing, '.harness', 'approvals.json'), JSON.stringify({ engines: { mock: true } }));
+  const docEx = node(existing, ['.harness/doctor.mjs']);
+  assert(docEx.status === 0 && /✔ cross-tool rules in sync \(6 files point to AGENTS\.md \+ memory\)/.test(docEx.stdout) && /Failures: 0 · Warnings: 0/.test(docEx.stdout), docEx.stdout);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
 

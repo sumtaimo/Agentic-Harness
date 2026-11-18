@@ -25,9 +25,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, buildRepoMap, memoryContext, recordSession, remember, normalizeTarget, helpIfAsked, pendingCostReasons, aiUsageSince, usageTodayLine } from './lib/common.mjs';
+import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, buildRepoMap, memoryContext, recordSession, remember, normalizeTarget, clipErrorTrace, diagnoseVerifyFailure, formatDiagnosis, helpIfAsked, pendingCostReasons, aiUsageSince, usageTodayLine } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
-import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor, runsNode, ENGINE_SCRIPTS, isTestFilePath, auditPatchSignals } from './lib/governance.mjs';
+import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor, runsNode, ENGINE_SCRIPTS, isTestFilePath, auditPatchSignals, scanPatchSafety } from './lib/governance.mjs';
 import { VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, listVisibleRuns, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
 
 if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must not use the editor workflow.'); process.exit(2); }
@@ -88,7 +88,14 @@ function teamOrDie() {
 function leadPrompt(run, lead, a, roles, skills) {
   const role = roles[String(lead.role).toUpperCase()] || {};
   const sk = matchSkills({ skills: lead.skills || [], prompt: a.goal }, String(lead.role).toUpperCase(), skills).chosen; // same rule as headless workers: explicit + autoApply + keywords in this assignment
-  const memory = memoryContext(config);
+  const memory = memoryContext(config, {
+    query: {
+      title: run.title,
+      goal: `${a.goal || ''}\n${run.goal || ''}`,
+      files: a.files || [],
+      error: run.lastVerify && !run.lastVerify.passed ? (run.lastVerify.trace || run.lastVerify.check || '') : ''
+    }
+  });
   return [
     `You are ${lead.id} (role ${lead.role}), a lead on the agent team. The orchestrator delegated this to you in run ${run.id}. Work ONLY inside the project folder ${ROOT}.`,
     `\nYour assignment: ${a.goal}`,
@@ -123,7 +130,10 @@ function reportText(run, v) {
     '    Look at that diff: the tests must have been FIXED, not weakened until they passed.');
   if (v.testsDeleted?.length) L.push(`  ⚠ ${v.testsDeleted.length} test file(s) that existed before this run were DELETED (${v.testsDeleted.slice(0, 4).join(', ')}${v.testsDeleted.slice(0, 4).length < v.testsDeleted.length ? ', …' : ''}). Make sure that was intended.`);
   if (v.skipped) L.push(`  ⚠ ${v.skipped} test(s) were SKIPPED. A skipped test proves nothing: find out why (for example a missing browser) before trusting this result.`);
+  if (v.patchSafety?.blocking?.length) L.push('', 'Safety gate BLOCKED (remove secrets/conflict markers before passing verify):', ...v.patchSafety.blocking.map((s) => `  ✖ ${s}`));
+  if (v.patchSafety?.warnings?.length) L.push('', 'Safety warnings (non-blocking):', ...v.patchSafety.warnings.map((w) => `  ⚠ ${w}`));
   if (v.antiCheatSignals?.length) L.push('', 'Anti-cheat & root-cause signals:', ...v.antiCheatSignals.map((s) => `  ⚠ ${s}`));
+  if (v.status !== 'PASSED' && v.diagnosis?.headline) L.push('', 'Failure diagnosis:', ...formatDiagnosis(v.diagnosis).split('\n').map((l) => `  ${l}`));
   if (visual) L.push('', `Visual review needed: ${v.uiFiles.length} UI file(s) changed (${v.uiFiles.slice(0, 6).join(', ')}${v.uiFiles.length > 6 ? ', …' : ''}).`,
     `  Passing tests do not prove a page looks right${v.browserCheck ? '' : ', and this check never opened a browser (a broken page script would still pass)'}.`,
     '  Open it at desktop and phone width, in light and dark, and compare it with the spec before you commit.');
@@ -229,7 +239,7 @@ function brief() {
   saveRun(run);
   if (item) updateBacklogItem(item.id, { status: 'IN_PROGRESS', startedAt: new Date().toISOString(), visibleRun: id });
   const { files } = listProjectFiles(ROOT, 60);
-  const memory = memoryContext(config);
+  const memory = memoryContext(config, { query: { title: run.title, goal, files: userAllowed } });
   const repoMap = buildRepoMap(ROOT, { maxChars: 1200 });
   console.log(`RUN_ID=${id}`);
   console.log(`\nORCHESTRATOR BRIEF — run ${id}${auto ? ' (autonomous mode)' : ''}${run.bugfix ? ' (bugfix)' : ''}`);
@@ -349,6 +359,7 @@ function runCheck(run) {
 function verify() {
   const run = loadRun(positional[0]);
   if (!['DELEGATED', 'FAILED'].includes(run.status)) die(`Run ${run.id} is ${run.status}; it can only be verified after assign (DELEGATED) or after a failed verify.`);
+  const prevTrace = run.lastVerify && !run.lastVerify.passed ? (run.lastVerify.trace || run.lastVerify.check || '') : '';
   let reports = {}; try { reports = flag('--reports') ? JSON.parse(flag('--reports')) : {}; } catch { /* ignore a malformed summary */ }
   run.cycles += 1;
   const scopeGlobs = run.userAllowed?.length ? run.userAllowed : (run.charter?.allowedPaths || []);
@@ -403,30 +414,71 @@ function verify() {
     return r === 'DEV_ENGINEER' || (!r && id === 'lead-dev');
   });
   const audit = auditPatchSignals({ baseFiles: auditBase, curFiles: auditCur, root: ROOT, baselineDir, testsChangedAfterFail, reports, cycle: run.cycles, isBugFix, devIds });
-  const passed = !violations.length && check.ok;
+  const safety = scanPatchSafety({ baseFiles: auditBase, curFiles: auditCur, root: ROOT, baselineDir });
+  const passed = !violations.length && check.ok && !safety.blocked;
   const maxCycles = config.maxCycles ?? 3;
   const halted = !passed && run.cycles >= maxCycles;
   let autoRolledBack = false;
   if (halted) { const r = restoreFiles(run, diffSnapshots(run.baseline.files, snap()).all); autoRolledBack = r.failed.length === 0 && run.baseline.rollbackAvailable; }
   run.status = passed ? 'PASSED' : halted ? 'HALTED_HITL_REQUIRED' : 'FAILED';
   delete run.pendingJobId;
-  const failSummary = !passed ? String(violations[0] || check.text.split('\n')[0]).replace(/\s+/g, ' ').slice(0, 180) : '';
+  const rawTrace = !passed ? [
+    ...violations,
+    ...safety.blocking.map((b) => `PATCH_SAFETY: ${b}`),
+    ...(check.ok ? [] : [check.text])
+  ].filter(Boolean).join('\n') : '';
+  const diagnosis = !passed ? diagnoseVerifyFailure(rawTrace, {
+    previousTrace: prevTrace,
+    targetFiles: run.assignments.flatMap((a) => a.files || []),
+    subtasks: run.assignments.map((a) => ({ id: a.lead, targetFiles: a.files || [] })),
+    verifyCmd: run.check?.cmd || ''
+  }) : null;
+  const failSummary = !passed ? String(violations[0] || safety.blocking[0] || check.text.split('\n')[0]).replace(/\s+/g, ' ').slice(0, 180) : '';
   if (!passed && !run.firstFailureSummary) run.firstFailureSummary = failSummary;
   if (!passed) run.lastFailureSummary = failSummary;
-  run.lastVerify = { at: new Date().toISOString(), passed, violations, reverted, check: check.text, antiCheatSignals: audit.signals };
+  run.lastVerify = {
+    at: new Date().toISOString(),
+    passed,
+    violations,
+    reverted,
+    check: check.text,
+    antiCheatSignals: audit.signals,
+    patchSafety: { blocking: safety.blocking, warnings: safety.warnings },
+    ...(diagnosis ? { diagnosis } : {}),
+    ...(rawTrace ? { trace: clipErrorTrace(rawTrace, 4000) } : {})
+  };
   if (passed || halted) delete run.cycleSnapshot; else run.cycleSnapshot = snap(); // what the project looked like when this check failed
   run.lastVerify.skipped = check.skipped || 0; run.lastVerify.needsVisualReview = passed && uiFiles.length > 0;
-  const v = { status: run.status, changes, violations, reverted, revertFailed, checkResult: check.text, reports, autoRolledBack, skipped: check.skipped || 0, uiFiles, checkCreated, browserCheck: BROWSER_CHECK.test(run.check.cmd), testsChangedAfterFail, testsDeleted, antiCheatSignals: audit.signals };
+  const v = {
+    status: run.status,
+    changes,
+    violations,
+    reverted,
+    revertFailed,
+    checkResult: check.text,
+    reports,
+    autoRolledBack,
+    skipped: check.skipped || 0,
+    uiFiles,
+    checkCreated,
+    browserCheck: BROWSER_CHECK.test(run.check.cmd),
+    testsChangedAfterFail,
+    testsDeleted,
+    antiCheatSignals: audit.signals,
+    patchSafety: { blocking: safety.blocking, warnings: safety.warnings },
+    diagnosis
+  };
   const text = reportText(run, v);
   fs.writeFileSync(path.join(runDir(run.id), 'report.md'), `${text}\n`);
   saveRun(run);
 
   if (passed && run.backlogId) updateBacklogItem(run.backlogId, { status: 'DONE', completedAt: new Date().toISOString(), result: 'VERIFIED', cyclesUsed: run.cycles, visibleRun: run.id });
-  if (halted && run.backlogId) updateBacklogItem(run.backlogId, { status: 'BLOCKED', blockedReason: `HALTED_HITL_REQUIRED after ${run.cycles} cycles: ${violations[0] || check.text.split('\n')[0]}` });
+  if (halted && run.backlogId) updateBacklogItem(run.backlogId, { status: 'BLOCKED', blockedReason: `HALTED_HITL_REQUIRED after ${run.cycles} cycles: ${violations[0] || safety.blocking[0] || check.text.split('\n')[0]}` });
   const recordAuto = (config.memory || {}).autoLessons !== false && !String(run.id).startsWith('V-test');
   if (recordAuto) {
     try {
       if (violations.length) remember(`Scope violation in "${run.title}": ${violations.slice(0, 2).join('; ').replace(/\s+/g, ' ').slice(0, 180)} — keep edits inside assigned files (tests belong to lead-qa).`, FILES.autoLessons);
+      if (safety.blocking.length) remember(`Patch safety block in "${run.title}": ${safety.blocking[0].replace(/\s+/g, ' ').slice(0, 180)} — remove secrets or conflict markers before verifying.`, FILES.autoLessons);
       if (audit.signals.length) remember(`Quality/root-cause signal in "${run.title}": ${audit.signals[0].replace(/\s+/g, ' ').slice(0, 180)} — fix root cause cleanly without skipped tests or empty catches.`, FILES.autoLessons);
     } catch { /* memory is best effort */ }
   }
@@ -436,11 +488,11 @@ function verify() {
         taskId: run.id, title: run.title, result: passed ? 'VERIFIED' : 'HALTED_HITL_REQUIRED', cycles: run.cycles, maxCycles, goal: run.goal,
         engine: `${editorDisplayName(run.editor || 'claude-code')} editor agents`, verifyCmd: run.check.cmd, verifySource: run.check.source, planner: `editor workflow: ${run.orchestrator} → ${run.assignments.map((a) => a.lead).join(', ')}`,
         team: { orchestrator: run.orchestrator, assignments: run.assignments.map((a) => ({ lead: a.lead, goal: a.goal, files: a.files, workers: [{ id: a.lead, files: a.files }] })) },
-        subtasks: run.assignments.map((a) => ({ id: a.lead, targetFiles: a.files, prompt: a.goal })), errors: passed ? [] : [violations.join('\n') || check.text],
+        subtasks: run.assignments.map((a) => ({ id: a.lead, targetFiles: a.files, prompt: a.goal })), errors: passed ? [] : [rawTrace || violations.join('\n') || check.text],
         outputs: Object.entries(reports).map(([id, output]) => ({ id, output })), finishedAt: new Date().toISOString()
       });
       if (recordAuto && passed && run.cycles > 1) remember(`"${run.title}": first attempt failed (${run.firstFailureSummary || run.lastFailureSummary || 'earlier check failure'}) — passed after ${run.cycles} cycles. Check for this earlier next time.`, FILES.autoLessons);
-      if (recordAuto && !passed) remember(`"${run.title}": editor run ${run.status} — ${(violations[0] || check.text.split('\n')[0]).replace(/\s+/g, ' ').slice(0, 200)}. Needs a human decision before retrying.`, FILES.autoLessons);
+      if (recordAuto && !passed) remember(`"${run.title}": editor run ${run.status} — ${(violations[0] || safety.blocking[0] || check.text.split('\n')[0]).replace(/\s+/g, ' ').slice(0, 200)}. Needs a human decision before retrying.`, FILES.autoLessons);
     } catch { /* memory is best effort */ }
   }
   if (run.baseline.dir && (passed || (halted && autoRolledBack)) && fs.existsSync(path.join(ROOT, run.baseline.dir))) {

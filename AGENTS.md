@@ -9,8 +9,8 @@ runs AI coding agents (Claude Code, Antigravity, Codex) in a checked loop:
 ```
 
 It also holds the user's **memory** (`.harness/memory/`). This file is the single source of
-truth; `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md` and `.cursor/rules/harness.mdc`
-only point here.
+truth; `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.cursor/rules/harness.mdc`,
+and `.windsurfrules` only point here.
 
 ### Using the harness vs. maintaining it (read this first)
 
@@ -71,7 +71,7 @@ only point here.
   <!-- docs-drift:ignore -->
   1. **Brief & Assign:** Define exact task scope, allowed file paths, and deterministic verification command (`npm test`, typecheck, lint) before any worker edits code. On bug fixes, keep test files isolated to `lead-qa` and either run Red-Green sequencing — assign `lead-qa` and `lead-dev` in one `assign` call (run `lead-qa` first [Red] to confirm the bug test fails before running `lead-dev` [Green], then run `visible.mjs verify`), or run two separate `brief` runs (a Red reproduction run first, then a Green fix run), because `visible.mjs verify` transitions the run to `FAILED` which blocks calling `assign` again on the same `RUN_ID` — or require `lead-dev` to report `Symptom / Root Cause / Blast Radius`.
   2. **Audit / Investigation Output (`.agent-state/01-audit-and-plan.md`):** Document *Where (`file:line`) -> Current vs. Expected -> Rule & Permissions -> Gap/Root Cause -> System & Beyond-UI Impact -> Smallest Safe Fix Plan -> Validation Checklist*.
-  3. **Deterministic Verification:** Never claim `"PASSED"` based on LLM self-assessment—only report `"PASSED"` after the real controller check (`npm test` / linter / typecheck) succeeds and out-of-scope edits are reverted.
+  3. **Deterministic Verification:** Never claim `"PASSED"` based on LLM self-assessment—only report `"PASSED"` after the real controller check (`npm test` / linter / typecheck) succeeds, `scanPatchSafety` finds no newly introduced secrets/credentials (reported `(redacted)` only) or unresolved merge conflict markers, and out-of-scope edits are reverted. Failed checks receive deterministic `[FAILURE DIAGNOSIS]` / `[REPEAT FAILURE]` triage.
   4. **QA & Agent Report Audit (`.agent-state/02-qa-verdict.md`):** Verify `git diff` against acceptance criteria for missing requirements, scope creep, state/reload bugs, and regression risks; for bug fixes, enforce Adversarial Fail-First QA and a Root-Cause & Anti-Cheating Diff Audit (`reviewer` rejects fixes lacking a clear Root-Cause explanation or relying on hacks/weakened tests).
 
 ---
@@ -104,7 +104,7 @@ contract, stay inside your scoped files, and **never** run `.harness/dispatch.mj
 
 1. Read `.harness/memory/profile.md` (who the user is, how they want answers).
 2. Read `.harness/memory/lessons.md` — permanent rules the user taught (git-tracked). **These override your defaults.**
-3. Skim the last entries of `.harness/memory/auto-lessons.md` (git-ignored mistakes, retry recoveries, scope violations, and local technical lessons recorded by the harness or via `learn`).
+3. Skim `.harness/memory/auto-lessons.md` (git-ignored mistakes, retry recoveries, scope violations, and local technical lessons recorded by the harness or via `learn`), or retrieve task-ranked entries with `node .harness/memory.mjs context --goal "<task>" --files "<paths>"`.
 4. If `profile.md` still contains `(fill me)`, ask the user those questions — a few at a time,
    in simple words — and write the answers into `profile.md`.
 
@@ -121,10 +121,11 @@ contract, stay inside your scoped files, and **never** run `.harness/dispatch.mj
   node .harness/memory.mjs learn "<one clear technical rule or pitfall>"
   ```
   If a local lesson proves valuable for everyone on the repo, promote it with `node .harness/memory.mjs promote <id>` (e.g. `L2`).
+- Retrieve relevant rules and task-ranked `auto-lessons.md` before non-trivial work via `node .harness/memory.mjs context --goal "<task>" --files "<paths>"`.
 - If a saved rule is wrong or outdated, remove it: `node .harness/memory.mjs forget L3` (or `forget-auto L2`).
-- **Never** store passwords, API keys, tokens or private personal data in memory.
+- **Never** store passwords, API keys, tokens or private personal data in memory or source diffs (`scanPatchSafety` blocks newly introduced secrets and merge conflict markers).
 - Memory is plain Markdown. It does not train or change any AI model; it works because every
-  AI re-reads it (orchestrators/chats via this file, harness workers via prompt injection).
+  AI re-reads it (orchestrators/chats via this file and its 5 aligned rule pointers, harness workers via task-ranked prompt injection).
 
 ## 3. How to talk to this user
 
@@ -293,8 +294,8 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 |---|---|
 | `.harness/daemon.mjs` | the controller + live screen (HUD) |
 | `.harness/dispatch.mjs` | put a job in the inbox (`--help` for options) |
-| `.harness/memory.mjs` | remember / learn / promote / list / forget / forget-auto / context / sessions |
-| `.harness/doctor.mjs` · `status.mjs` | setup check (incl. duplicate `agy` PATH guard) · current state |
+| `.harness/memory.mjs` | remember / learn / promote / list / forget / forget-auto / context (`--goal`, `--files`) / sessions |
+| `.harness/doctor.mjs` · `status.mjs` | setup check (incl. duplicate `agy` PATH guard & cross-tool rule parity) · current state |
 | `.harness/config.json` | engines, max cycles, timeouts, worktrees, auto git commit |
 | `.harness/memory/` | `profile.md`, `lessons.md` (committed); `auto-lessons.md`, `sessions/` (git-ignored) |
 | `.harness/inbox/` → `completed/` or `failed/` | job files (`failed/` also has `.trace.txt`) |

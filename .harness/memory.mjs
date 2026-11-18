@@ -8,7 +8,7 @@
  *   node .harness/memory.mjs list                show taught rules + auto lessons
  *   node .harness/memory.mjs forget L3           remove taught rule L3
  *   node .harness/memory.mjs forget-auto L2      remove auto lesson L2
- *   node .harness/memory.mjs context             print exactly what workers and AIs receive
+ *   node .harness/memory.mjs context [--goal "..."] [--files "a,b"]  print what workers/AIs receive (task-ranked when filtered)
  *   node .harness/memory.mjs sessions [n]        list the last n task records (default 10)
  *
  * Nothing here trains or changes an AI model. Memory works by being re-read:
@@ -63,9 +63,26 @@ switch (cmd) {
     console.log(`\nProfile: ${path.relative(process.cwd(), FILES.profile)}`);
     break;
   }
-  case 'context':
-    console.log(memoryContext(loadConfig()) || '(memory is empty or disabled)');
+  case 'context': {
+    let goalArg = '';
+    let queryArg = '';
+    const filesArg = [];
+    const positionalArgs = [];
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[i];
+      if (a.startsWith('--goal=')) goalArg = a.slice(7);
+      else if (a === '--goal' && rest[i + 1] && !rest[i + 1].startsWith('--')) goalArg = rest[++i];
+      else if (a.startsWith('--query=')) queryArg = a.slice(8);
+      else if (a === '--query' && rest[i + 1] && !rest[i + 1].startsWith('--')) queryArg = rest[++i];
+      else if (a.startsWith('--files=')) filesArg.push(...a.slice(8).split(',').map((s) => s.trim()).filter(Boolean));
+      else if (a === '--files' && rest[i + 1] && !rest[i + 1].startsWith('--')) filesArg.push(...rest[++i].split(',').map((s) => s.trim()).filter(Boolean));
+      else if (!a.startsWith('--')) positionalArgs.push(a);
+    }
+    const qParts = [goalArg, queryArg, ...positionalArgs].filter(Boolean).join(' ');
+    const query = (qParts || filesArg.length) ? { goal: qParts, files: filesArg } : '';
+    console.log(memoryContext(loadConfig(), { query }) || '(memory is empty or disabled)');
     break;
+  }
   case 'sessions': {
     const n = Number(text) || 10;
     const files = fs.readdirSync(DIRS.sessions).filter((f) => f.endsWith('.md')).sort().slice(-n);

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { ROOT, HARNESS_DIR, atomicWriteJson, readJsonSafe, listProjectFiles, engineUsable, ROUTABLE_ENGINES } from './common.mjs';
+import { ROOT, HARNESS_DIR, atomicWriteJson, readJsonSafe, listProjectFiles, engineUsable, ROUTABLE_ENGINES, formatDiagnosis } from './common.mjs';
 import { matchesAny, leadOwns } from './governance.mjs';
 
 export const VISIBLE_DIR = path.join(HARNESS_DIR, 'visible');
@@ -333,6 +333,8 @@ export function buildHandoffPrompt(run, info, config) {
   if (run.lastVerify && !run.lastVerify.passed) {
     lines.push('', `Last verification error (${run.lastVerify.at || 'recent'}):`);
     if (run.lastVerify.violations?.length) lines.push(...run.lastVerify.violations.map((v) => `- ${v}`));
+    if (run.lastVerify.patchSafety?.blocking?.length) lines.push(...run.lastVerify.patchSafety.blocking.map((b) => `- PATCH_SAFETY: ${b}`));
+    if (run.lastVerify.diagnosis?.headline) lines.push('Diagnosis:', ...formatDiagnosis(run.lastVerify.diagnosis).split('\n').map((l) => `  ${l}`));
     if (run.lastVerify.check) lines.push(String(run.lastVerify.check).slice(0, 2500));
   }
 
@@ -387,6 +389,8 @@ export function formatHandoffText(run, info, config) {
   if (run.lastVerify && !run.lastVerify.passed) {
     lines.push('', 'Last verify failure:');
     if (run.lastVerify.violations?.length) for (const v of run.lastVerify.violations) lines.push(`  ✖ ${v}`);
+    if (run.lastVerify.patchSafety?.blocking?.length) for (const b of run.lastVerify.patchSafety.blocking) lines.push(`  ✖ PATCH_SAFETY: ${b}`);
+    if (run.lastVerify.diagnosis?.headline) for (const l of formatDiagnosis(run.lastVerify.diagnosis).split('\n')) lines.push(`  ${l}`);
     if (run.lastVerify.check) for (const l of String(run.lastVerify.check).split('\n').slice(0, 12)) lines.push(`  ${l}`);
   }
 

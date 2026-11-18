@@ -30,7 +30,7 @@ import { exec, execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
-  resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd, buildRepoMap, clipErrorTrace,
+  resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd, buildRepoMap, clipErrorTrace, diagnoseVerifyFailure, formatDiagnosis,
   listProjectFiles, safeTarget, normalizeTarget, isSecretFile, isSameDir, validateExternalWorkRoot,
   winQuote, winCommandLine, needsWinShell, MODEL_TIERS, chooseModelTier, resolveModel, compatibleModelFor, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
 } from './lib/common.mjs';
@@ -43,7 +43,7 @@ const highAlwaysAllowed = () => (loadApprovals().alwaysAllow || []).includes('hi
 import {
   readCharter, loadRoles, loadSkills, matchSkills, computeAllowedTools, computeDisallowedTools,
   matchesAny, withinAll, skillRulesNotGranted, readBacklog, writeBacklog, updateBacklogItem, nextReady, backlogCounts, itemToJob,
-  loadTeam, validateTeam, leadOwns, validateDelegation, isTestFilePath, auditPatchSignals
+  loadTeam, validateTeam, leadOwns, validateDelegation, isTestFilePath, auditPatchSignals, scanPatchSafety
 } from './lib/governance.mjs';
 import {
   isRepoWithCommits, branchSha, ensureBranch, protectedShas, ensureWorkerWorktree, commitScoped,
@@ -485,13 +485,23 @@ function autoLoadedMemory(profile, cwd) {
   return skip;
 }
 
-function buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov = {}, cycle = 1) {
+function buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov = {}, cycle = 1, diagnosis = null) {
   let skip = [];
   try { skip = autoLoadedMemory(config.profiles[profileName] || {}, cwd); } catch { /* inject everything */ }
-  const memory = memoryContext(config, { skip });
+  const memory = memoryContext(config, {
+    skip,
+    query: {
+      title: subtask.id,
+      goal: subtask.goal || '',
+      prompt: subtask.prompt || '',
+      targetFiles: subtask.targetFiles || [],
+      error: errorContext || ''
+    }
+  });
   const scoped = (subtask.targetFiles || []).length > 0;
   const role = gov.role;
   const ac = subtask.acceptanceCriteria;
+  const diagText = diagnosis && errorContext ? formatDiagnosis(diagnosis) : '';
   return [
     `[HARNESS WORKER ID: ${subtask.id} | ENGINE: ${String(profileName).toUpperCase()}${role ? ` | ROLE: ${role.name}` : ''}]`,
     '[YOU ARE A HARNESS WORKER: do the task below directly. Do NOT dispatch new harness tasks.]',
@@ -504,6 +514,7 @@ function buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov = {}, cy
     subtask.goal ? `[OVERALL GOAL (other workers handle the other parts in parallel)]:\n${subtask.goal}` : '',
     subtask.interfaceContract ? `[SHARED INTERFACE CONTRACT — other workers build against exactly this; do not deviate]:\n${subtask.interfaceContract}` : '',
     Array.isArray(ac) && ac.length ? `[ACCEPTANCE CRITERIA]:\n${ac.map((c) => `- ${c}`).join('\n')}` : '',
+    diagText ? `[FAILURE DIAGNOSIS]:\n${diagText}` : '',
     errorContext ? `[PREVIOUS VERIFIER ERROR TO FIX]:\n${clipErrorTrace(errorContext, 6000)}` : '',
     cycle > 1 ? `[TWO-PHASE ROOT-CAUSE DIRECTIVE — cycle ${cycle}]:\nPhase 1 (read-only): state Symptom, Root Cause, and Blast Radius from the failure trace. Phase 2: apply the minimal root-cause fix — never hardcode returns, add test-input special cases, weaken assertions, disable validation, or swallow errors.` : '',
     `[TASK INSTRUCTIONS]:\n${subtask.prompt}`
@@ -534,7 +545,7 @@ function resolveGovernance(sub, gov) {
   return sub;
 }
 
-function runWorker(subtask, cwd, errorContext, { cycle = 1, model = null } = {}) {
+function runWorker(subtask, cwd, errorContext, { cycle = 1, model = null, diagnosis = null } = {}) {
   const timeoutMs = subtask.timeoutMs || config.workerTimeoutMs || 300000;
   // Plain shell command worker (no AI): used by the self-test and for scripted steps.
   if (subtask.cliCommand && !subtask.prompt) {
@@ -552,7 +563,7 @@ function runWorker(subtask, cwd, errorContext, { cycle = 1, model = null } = {})
     role: subtask.resolvedRole ? roles[subtask.resolvedRole] : null,
     skills: (subtask.resolvedSkills || []).map((n) => skills[n]).filter(Boolean)
   };
-  const prompt = buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov, cycle);
+  const prompt = buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov, cycle, diagnosis);
   return spawnEngine({
     id: subtask.id, engine: subtask.engine, prompt, cwd, timeoutMs,
     allowedTools: subtask.resolvedTools || subtask.allowedTools, disallowedTools: subtask.deniedTools,
@@ -798,7 +809,7 @@ async function aiDecompose(task, gov, workRoot = ROOT) {
   const { files, total } = listProjectFiles(workRoot, pc.maxFilesListed || 400);
   const scripts = readJsonSafe(path.join(workRoot, 'package.json'), null)?.scripts;
   const repoMap = buildRepoMap(workRoot, { maxChars: 1200 });
-  const memory = memoryContext(config);
+  const memory = memoryContext(config, { query: { title: task.title, goal: task.goal || task.prompt || '', targetFiles: allowed } });
   const hasRoles = Object.keys(gov.roles).length > 0;
   let feedback = '';
   const attempts = pc.maxAttempts || 2;
@@ -883,7 +894,7 @@ async function hierDecompose(task, gov, workRoot = ROOT) {
   const { files, total } = listProjectFiles(workRoot, pc.maxFilesListed || 400);
   const scripts = readJsonSafe(path.join(workRoot, 'package.json'), null)?.scripts;
   const repoMap = buildRepoMap(workRoot, { maxChars: 1200 });
-  const memory = memoryContext(config);
+  const memory = memoryContext(config, { query: { title: task.title, goal: String(goalText || ''), targetFiles: userAllowed } });
   const readOnly = ['Read', 'Glob', 'Grep'];
   const deny = computeDisallowedTools(gov.charter);
   const persona = (m) => { const r = gov.roles[String(m.role).toUpperCase()]; return r?.mission || r?.description || m.role; };
@@ -1003,7 +1014,7 @@ async function hierDecompose(task, gov, workRoot = ROOT) {
   return { subtasks, interfaceContract: contract, verifySuggestion: typeof plan.verifySuggestion === 'string' ? plan.verifySuggestion.slice(0, 300) : '', team: teamPlan };
 }
 
-async function runPlanner(task, errorTrace = null, previous = null, workRoot = ROOT) {
+async function runPlanner(task, errorTrace = null, previous = null, workRoot = ROOT, diagnosis = null) {
   const allShell = (subs) => subs.length > 0 && subs.every((s) => s.cliCommand && !s.prompt);
   const engineLabel = (subs) => {
     if (allShell(subs)) return String(task.engine || 'shell').toUpperCase(); // no AI involved
@@ -1012,8 +1023,11 @@ async function runPlanner(task, errorTrace = null, previous = null, workRoot = R
 
   if (previous) { // later cycles keep the same workers + files; only the error context changes
     writeState({ phase: '1_PLANNER', taskTitle: task.title, planSummary: `${previous.planSummary} (cycle retry with error)` });
-    logTelemetry('1_PLANNER', 'Re-using plan; feeding verifier error to workers', { errorTrace: String(errorTrace).slice(0, 2000) });
-    return { ...previous, errorContext: errorTrace };
+    logTelemetry('1_PLANNER', 'Re-using plan; feeding verifier error to workers', {
+      errorTrace: String(errorTrace).slice(0, 2000),
+      ...(diagnosis ? { diagnosis: { category: diagnosis.category, repeat: !!diagnosis.repeat, signature: diagnosis.signature } } : {})
+    });
+    return { ...previous, errorContext: errorTrace, diagnosis };
   }
 
   const gov = loadGov();
@@ -1065,7 +1079,8 @@ async function runPlanner(task, errorTrace = null, previous = null, workRoot = R
     goal: task.goal || task.prompt || task.title || '',
     engine: engineLabel(subtasks), mode, subtasks, verifyCmd, verifySource, verifySuggestion, planSummary, interfaceContract, team: teamPlan,
     workRoot,
-    errorContext: errorTrace
+    errorContext: errorTrace,
+    diagnosis
   };
 }
 
@@ -1100,7 +1115,7 @@ async function runExecutorSwarm(plan, gitCtx = null) {
         linkShared(wtPath, config.git?.linkIntoWorktrees || ['node_modules'], workRoot);
         workerCwd = wtPath;
       }
-      const result = await runWorker(sub, workerCwd, plan.errorContext, { cycle: plan.cycle || 1, model: plan.model || null });
+      const result = await runWorker(sub, workerCwd, plan.errorContext, { cycle: plan.cycle || 1, model: plan.model || null, diagnosis: plan.diagnosis || null });
       // per-agent budget (a running agent cannot be stopped by cost, so this is checked when it reports back)
       if (typeof sub.maxCostUsd === 'number' && (taskCost.agents[sub.id] || 0) > sub.maxCostUsd + 1e-9) {
         logTelemetry('BUDGET_AGENT_EXCEEDED', `${sub.id} cost $${(taskCost.agents[sub.id] || 0).toFixed(4)} > its cap $${sub.maxCostUsd}`, { agent: sub.id });
@@ -1269,7 +1284,36 @@ async function auditDaemonPatch(plan, task, outputs, cycle, backup, gitCtx, preR
         } catch { /* memory is best effort */ }
       }
     }
-  } catch { /* non-blocking audit telemetry */ }
+    const safety = scanPatchSafety({
+      baseFiles,
+      curFiles,
+      root: auditRoot,
+      baselineDir,
+      baseRef
+    });
+    if (safety.warnings.length > 0) {
+      logTelemetry('PATCH_SAFETY_WARNING', safety.warnings.join('; '), { taskId: plan.taskId, warnings: safety.warnings });
+    }
+    if (safety.blocked) {
+      logTelemetry('PATCH_SAFETY_BLOCKED', safety.blocking.join('; '), {
+        taskId: plan.taskId,
+        blocking: safety.blocking,
+        secretFiles: safety.secretFiles,
+        conflictFiles: safety.conflictFiles
+      });
+      if ((config.memory || {}).autoLessons !== false && !String(plan.taskId || '').startsWith('self-test')) {
+        try {
+          remember(`Patch safety block in "${plan.title || plan.taskId}": ${safety.blocking[0].replace(/\s+/g, ' ').slice(0, 180)} — remove secrets or conflict markers before verifying.`, FILES.autoLessons);
+        } catch { /* memory is best effort */ }
+      }
+    }
+    return { audit, safety };
+  } catch {
+    return {
+      audit: { signals: [], skippedTests: [], emptyCatches: [], missingRootCause: false },
+      safety: { blocked: false, blocking: [], warnings: [], secretFiles: [], conflictFiles: [], debugFiles: [] }
+    };
+  }
 }
 
 // ───────────────────────────── Node 4: committer ─────────────────────────────
@@ -1366,7 +1410,9 @@ async function executeSquareCycle(taskFile) {
   }
 
   const errors = [];
-  let plan = null; let outputs = []; let cycle = 1; let lastErrorTrace = task.initialError || null; let haltReason = null; let backup = null; let preRunFiles = null;
+  let plan = null; let outputs = []; let cycle = 1; let lastErrorTrace = task.initialError || null;
+  let errorDiagnosis = task.initialError ? diagnoseVerifyFailure(task.initialError, { targetFiles: task.targetFiles || [], subtasks: task.subtasks || [], verifyCmd: task.verifyCmd || '' }) : null;
+  let haltReason = null; let backup = null; let preRunFiles = null;
   const integration = integrationFor(task); let gitCtx = null; let gitResult = null;
   let workRoot = ROOT;
   const title = task.title || path.basename(taskFile);
@@ -1392,7 +1438,7 @@ async function executeSquareCycle(taskFile) {
           throw fatal('Cannot combine task cwd with visibleRunId (visible runs target the main project root).');
         }
       }
-      plan = await runPlanner(task, lastErrorTrace, plan, workRoot);
+      plan = await runPlanner(task, lastErrorTrace, plan, workRoot, errorDiagnosis);
       plan.cycle = cycle; plan.model = task.model || null; // model tier: retries escalate; --model on the task overrides
       if (integration && !gitCtx) gitCtx = await startIntegration(task, integration);
       if (cycle === 1 && !backup && !gitCtx) backup = backupScope(plan, workRoot);
@@ -1401,7 +1447,16 @@ async function executeSquareCycle(taskFile) {
       outputs = await runExecutorSwarm(plan, gitCtx);
       enforceBudget(task, `cycle ${cycle} workers`);
       const verification = await runVerifier(plan);
-      await auditDaemonPatch(plan, task, outputs, cycle, backup, gitCtx, preRunFiles);
+      const { safety } = await auditDaemonPatch(plan, task, outputs, cycle, backup, gitCtx, preRunFiles);
+      if (safety?.blocked) {
+        const safetyLines = safety.blocking.map((b) => `PATCH_SAFETY: ${b}`).join('\n');
+        verification.trace = verification.passed
+          ? safetyLines
+          : `${safetyLines}\n${verification.trace || ''}`.trim();
+        verification.passed = false;
+        writeState({ phase: '3_VERIFY_FAILED', lastGateStatus: `FAIL: PATCH_SAFETY: ${safety.blocking[0]}` });
+        logTelemetry('3_VERIFY_FAILED', `Blocked by patch safety gate: ${safety.blocking[0]}`, { cycle, safety: safety.blocking });
+      }
       if (verification.passed) {
         const archiveExtra = await runCommitter(plan, task, taskFile, gitCtx, { archive: false });
         gitResult = await finishIntegration(gitCtx, true);
@@ -1414,10 +1469,31 @@ async function executeSquareCycle(taskFile) {
         writeState({ history: pushHistory(`✔ COMMITTED  ${title} (cycle ${cycle}/${MAX_CYCLES})`), currentTaskFile: null });
         return true;
       }
+      errorDiagnosis = diagnoseVerifyFailure(verification.trace, {
+        previousTrace: lastErrorTrace || '',
+        targetFiles: [...new Set((plan.subtasks || []).flatMap((s) => s.targetFiles || []))],
+        subtasks: plan.subtasks || [],
+        verifyCmd: plan.verifyCmd || ''
+      });
+      logTelemetry('FAILURE_DIAGNOSED', `${errorDiagnosis.category}${errorDiagnosis.repeat ? ' (REPEAT)' : ''}: ${errorDiagnosis.headline}`, {
+        cycle,
+        category: errorDiagnosis.category,
+        repeat: errorDiagnosis.repeat,
+        signature: errorDiagnosis.signature,
+        likelyOwners: errorDiagnosis.likelyOwners
+      });
       lastErrorTrace = verification.trace;
       errors.push(verification.trace);
       logTelemetry('SQUARE_RETRY', `Cycle ${cycle} failed verification; feeding trace to Planner`, { cycle, trace: lastErrorTrace.slice(0, 4000) });
     } catch (err) {
+      if (!err.fatal) {
+        errorDiagnosis = diagnoseVerifyFailure(err.message, {
+          previousTrace: lastErrorTrace || '',
+          targetFiles: plan ? [...new Set((plan.subtasks || []).flatMap((s) => s.targetFiles || []))] : (task.targetFiles || []),
+          subtasks: plan?.subtasks || task.subtasks || [],
+          verifyCmd: plan?.verifyCmd || task.verifyCmd || ''
+        });
+      }
       lastErrorTrace = err.message;
       errors.push(err.message);
       logTelemetry('CYCLE_EXCEPTION', err.message, { cycle, fatal: !!err.fatal });
@@ -1570,6 +1646,7 @@ async function poGenerate(gov, max) {
   const scripts = readJsonSafe(path.join(view.dir, 'package.json'), null)?.scripts;
   const detectedCheck = detectVerifyCmd(view.dir, config);
   const repoMap = buildRepoMap(view.dir, { maxChars: 1200 });
+  const poMemory = memoryContext(config, { query: { goal: gov.charter.text } });
   const maxWorkers = (config.planner || {}).maxWorkers || 4;
   const prompt = [
     '[HARNESS PO_ARCHITECT]',
@@ -1590,7 +1667,7 @@ async function poGenerate(gov, max) {
     detectedCheck.real ? `\n[DETECTED VERIFY COMMAND]: ${detectedCheck.cmd} (${detectedCheck.source})` : '',
     `\n[PROJECT FILES (${files.length} of ${total})${view.tip ? ` — the '${integrationFor({ autonomous: true })}' branch @ ${view.tip.slice(0, 8)}, which is what autonomous work builds on` : ''}]:\n${files.join('\n') || '(empty project)'}`,
     scripts ? `\n[package.json scripts]:\n${JSON.stringify(scripts, null, 2)}` : '',
-    memoryContext(config) ? `\n[USER MEMORY]:\n${memoryContext(config)}` : ''
+    poMemory ? `\n[USER MEMORY]:\n${poMemory}` : ''
   ].filter(Boolean).join('\n');
 
   writeState({ phase: '0_PO_ARCHITECT', taskTitle: 'PO_ARCHITECT is grooming the backlog from charter.md', planSummary: `generating ≤ ${max} task(s)` });

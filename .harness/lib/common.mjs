@@ -924,7 +924,7 @@ const SEEN_SUFFIX_RE = /\s+\(seen (\d+)x(?:;\s*latest:\s*"[^"]*")?\)\s*$/;
 const stripSeen = (t) => String(t || '').replace(SEEN_SUFFIX_RE, '').trim();
 
 function extractTaskTitle(t) {
-  const m = String(t || '').match(/^(?:Scope violation in |Quality\/root-cause signal in )?"([^"\n]+)"/);
+  const m = String(t || '').match(/^(?:Scope violation in |Quality\/root-cause signal in |Patch safety block in )?"([^"\n]+)"/);
   return m ? m[1].trim() : '';
 }
 
@@ -935,6 +935,7 @@ function autoLessonSignature(text) {
   let m;
   if ((m = s.match(/^Scope violation in "[^"\n]+":\s*(.+)$/))) { kind = 'scope'; rest = m[1]; }
   else if ((m = s.match(/^Quality\/root-cause signal in "[^"\n]+":\s*(.+)$/))) { kind = 'anticheat'; rest = m[1]; }
+  else if ((m = s.match(/^Patch safety block in "[^"\n]+":\s*(.+)$/))) { kind = 'safety'; rest = m[1]; }
   else if ((m = s.match(/^"[^"\n]+":\s*first attempt failed(?:\s+with|\s*\()\s*(.+?)(?:\s+—\s+passed|\s*\)\s*—\s+passed)/))) { kind = 'recover'; rest = m[1]; }
   else if ((m = s.match(/^"[^"\n]+":\s*(?:HALTED_HITL_REQUIRED|REJECTED|editor run [A-Z_]+)\s+—\s+(?:last error\s+)?(.+?)(?:\.\s+Needs a human|$)/))) { kind = 'halt'; rest = m[1]; }
   if (!kind || !rest) return '';
@@ -1013,13 +1014,283 @@ export function clipErrorTrace(trace, limit = 6000) {
   return `${s.slice(0, head)}\n…[truncated middle of log]…\n${s.slice(-tail)}`;
 }
 
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const MEMORY_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'from', 'that', 'this', 'have', 'not', 'are', 'was', 'were', 'been',
+  'will', 'can', 'into', 'out', 'all', 'any', 'but', 'use', 'add', 'fix', 'set', 'get', 'put', 'run',
+  'file', 'files', 'task', 'tasks', 'work', 'make', 'made', 'when', 'only', 'also', 'must', 'should',
+  'could', 'would', 'more', 'most', 'very', 'just', 'than', 'then', 'them', 'they', 'there', 'here',
+  'each', 'some', 'such', 'your', 'our', 'their', 'about', 'after', 'before', 'check', 'tests', 'test',
+  'code', 'edit', 'edits', 'change', 'changes', 'update', 'updated', 'error', 'errors', 'fail', 'failed',
+  'failure', 'pass', 'passed', 'src', 'dist', 'build'
+]);
+const SHORT_TECH_TOKENS = new Set(['go', 'py', 'ts', 'js', 'ui', 'db', 'ci', 'cd', 'id', 'pr', 'os', 'io', 'kv', 'ip', 'v2', 's3', 'sh']);
+
+function buildMemoryQuery(query) {
+  if (!query) return { hasQuery: false, tokens: [], paths: [] };
+  const texts = [];
+  const rawPaths = [];
+  const pushVal = (v) => {
+    if (!v) return;
+    if (Array.isArray(v)) { for (const x of v) pushVal(x); return; }
+    if (typeof v === 'object') {
+      pushVal(v.title); pushVal(v.goal); pushVal(v.prompt); pushVal(v.query); pushVal(v.error);
+      if (Array.isArray(v.files)) rawPaths.push(...v.files);
+      if (Array.isArray(v.targetFiles)) rawPaths.push(...v.targetFiles);
+      if (Array.isArray(v.targets)) rawPaths.push(...v.targets);
+      return;
+    }
+    texts.push(String(v));
+  };
+  pushVal(query);
+  const combined = texts.filter(Boolean).join(' ');
+  const normRoot = ROOT.replace(/\\/g, '/').toLowerCase();
+  for (const p of combined.matchAll(/[A-Za-z0-9_.\-\\/:]+\.[A-Za-z0-9]{1,8}/g)) rawPaths.push(p[0]);
+  const paths = new Set();
+  for (const rp of rawPaths) {
+    let p = String(rp || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '').toLowerCase();
+    if (!p) continue;
+    if (p.startsWith(`${normRoot}/`)) p = p.slice(normRoot.length + 1);
+    paths.add(p);
+  }
+  const tokenSet = new Set();
+  for (const w of norm(combined).split(' ')) {
+    if (!w) continue;
+    if ((w.length >= 3 && !MEMORY_STOPWORDS.has(w)) || SHORT_TECH_TOKENS.has(w)) tokenSet.add(w);
+  }
+  for (const p of paths) {
+    for (const seg of norm(p).split(' ')) {
+      if ((seg.length >= 3 && !MEMORY_STOPWORDS.has(seg)) || SHORT_TECH_TOKENS.has(seg)) tokenSet.add(seg);
+    }
+  }
+  return { hasQuery: tokenSet.size > 0 || paths.size > 0, tokens: [...tokenSet], paths: [...paths] };
+}
+
+function rankAutoLessons(allAuto, query, autoRoom) {
+  if (autoRoom <= 0 || !allAuto.length) return [];
+  const q = buildMemoryQuery(query);
+  if (!q.hasQuery) return allAuto.slice(-autoRoom);
+
+  const n = allAuto.length;
+  const scored = allAuto.map((entry, idx) => {
+    const clean = stripSeen(entry.text);
+    const rawLower = clean.toLowerCase().replace(/\\/g, '/');
+    const entryTokens = new Set(norm(clean).split(' ').filter(Boolean));
+    let matchedTokens = 0;
+    for (const t of q.tokens) if (entryTokens.has(t)) matchedTokens++;
+    let pathScore = 0;
+    for (const p of q.paths) {
+      const base = path.posix.basename(p);
+      if (p.includes('/') && rawLower.includes(p)) pathScore += 6;
+      else if (base.length >= 3 && rawLower.includes(base)) pathScore += 3;
+    }
+    const relevance = matchedTokens * 3 + pathScore;
+    const seenMatch = entry.text.match(SEEN_SUFFIX_RE);
+    const seenCount = seenMatch ? Number(seenMatch[1]) : 1;
+    const seenBonus = seenCount > 1 ? Math.min(Math.log2(seenCount) * 0.6, 2.0) : 0;
+    const recencyWeight = n > 1 ? (idx / (n - 1)) * 0.5 : 0.5;
+    return { entry, idx, relevance, totalScore: relevance + seenBonus + recencyWeight };
+  });
+
+  const top = [...scored]
+    .sort((a, b) => (b.totalScore - a.totalScore) || (b.idx - a.idx))
+    .slice(0, autoRoom);
+  const relevant = top.filter((x) => x.relevance > 0).sort((a, b) => (b.totalScore - a.totalScore) || (b.idx - a.idx));
+  const fallback = top.filter((x) => x.relevance === 0).sort((a, b) => a.idx - b.idx);
+  return [...relevant, ...fallback].map((x) => x.entry);
+}
+
+const DIAG_CATEGORIES = [
+  ['PATCH_SAFETY', /PATCH_SAFETY|Safety gate BLOCKED|leaked .* in .*\(redacted\)|unresolved merge conflict marker|merge conflict marker/i],
+  ['COMMAND_NOT_FOUND', /\bcommand not found\b|is not recognized as an internal or external command|not recognized as the name of a cmdlet|\bspawn\s+\S+\s+ENOENT\b|\bENOENT\b.*(?:spawn|exec)|exit code 127\b/i],
+  ['MISSING_DEPENDENCY', /Cannot find module\s+['"]|ERR_MODULE_NOT_FOUND|ModuleNotFoundError:\s*No module named|\bImportError:|Cannot resolve\s+['"]|Module not found:|could not find package|no required module provides package|failed to resolve import/i],
+  ['TIMEOUT', /\btimed?\s*out\b|ETIMEDOUT|\bSIGTERM\b|exit code timeout|Command failed after \d+ms/i],
+  ['PERMISSION_OR_ENV', /\b(?:EACCES|EPERM)\b|Permission denied|missing environment variable|env(?:ironment)? variable\s+\S+\s+not set|Must set [A-Z0-9_]+|\b(?:401|403)\s+(?:Unauthorized|Forbidden)\b|ECONNREFUSED|\bENOTFOUND\b|\bEAI_AGAIN\b/i],
+  ['SYNTAX_OR_PARSE', /\b(?:SyntaxError|IndentationError|TabError)\b|Unexpected token|Unterminated string literal|Unexpected end of JSON input|JSON\.parse\b|\bParse error:|syntax error(?:\s+near|\s+at line|:)/i],
+  ['TYPECHECK', /error TS\d{3,5}:|Type ['"][^'"]+['"] is not assignable to|Property ['"][^'"]+['"] does not exist on type|Argument of type ['"][^'"]+['"] is not assignable|\bmypy\b.*\berror:|\bpyright\b.*\berror:|\bcannot use .* as type\b/i],
+  ['TEST_ASSERTION', /\bAssertionError\b|\bERR_ASSERTION\b|\bAssertion failed\b|\bnot ok \d+\b|---\s*FAIL:|^\s*✖\s+\S|assert\.(?:equal|strictEqual|deepStrictEqual|ok|throws|rejects)\b|\bFAILED\s+[^\s]+::|\bFAIL\s+\S+\.(?:test|spec)\.|Expected[\s\S]{0,120}(?:Received|Actual|!==|to equal|to be)/m],
+  ['RUNTIME_ERROR', /\b(?:ReferenceError|TypeError|RangeError|URIError|RuntimeError|ValueError|KeyError|AttributeError|ZeroDivisionError)\b|\bpanic:|UnhandledPromiseRejection|Uncaught\s+\w*Error/i]
+];
+
+const DIAG_HINTS = {
+  PATCH_SAFETY: 'Remove leaked credentials/tokens or resolve git conflict markers before re-verifying.',
+  COMMAND_NOT_FOUND: 'Check CLI/tool installation, PATH, or the script/check command.',
+  MISSING_DEPENDENCY: 'Check module import paths, relative extensions, and installed packages.',
+  TIMEOUT: 'Investigate hangs, infinite loops, unclosed handles, or slow setup.',
+  PERMISSION_OR_ENV: 'Check file permissions, local env prerequisites, or network mocks without hardcoding secrets.',
+  SYNTAX_OR_PARSE: 'Fix the syntax, delimiter, or JSON/config parse error at the referenced location.',
+  TYPECHECK: 'Fix the type mismatch or interface signature across callers and definitions.',
+  TEST_ASSERTION: 'Inspect the failing assertion and fix the root cause (never skip or weaken assertions).',
+  RUNTIME_ERROR: 'Inspect the stack trace, boundary checks, and null/undefined handling at the referenced line.',
+  UNKNOWN: 'Read the failing command output carefully before making further changes.'
+};
+
+function cleanProjectPath(rawPath) {
+  let p = String(rawPath || '').trim().replace(/^["'`]+|["'`,;.)]+$/g, '').replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!p || p.includes('/node_modules/') || p.startsWith('node_modules/') || p.startsWith('node:')) return '';
+  const rootNorm = ROOT.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (p.toLowerCase().startsWith(`${rootNorm.toLowerCase()}/`)) p = p.slice(rootNorm.length + 1);
+  if (/^(?:[A-Za-z]:)?\//.test(p)) {
+    const sub = p.match(/(?:^|\/)((?:src|app|components|lib|tests?|__tests__|spec|docs?|backend|server|cmd|internal|pkg|website|scripts|modules|services|routes|utils)\/.+)$/);
+    if (!sub) return '';
+    p = sub[1];
+  }
+  if (p.startsWith('..') || !/\.[A-Za-z0-9]{1,8}$/.test(p)) return '';
+  return p;
+}
+
+function scopeOverlap(filePath, target) {
+  const f = String(filePath || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  const t = String(target || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/\*\*$/, '').replace(/\/\*$/, '').replace(/\/+$/, '');
+  if (!f || !t) return false;
+  if (f === t || f.startsWith(`${t}/`) || t.startsWith(`${f}/`)) return true;
+  if (/[*?]/.test(t)) {
+    const re = new RegExp(`^${t.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')}$`);
+    return re.test(f);
+  }
+  return false;
+}
+
+/**
+ * Deterministic failure triage for verifier & patch-safety output (zero tokens).
+ * Classifies error category, extracts referenced project files & failing tests, computes a stable
+ * failure signature, detects repeat failures across cycles, and maps likely owning subtasks.
+ */
+export function diagnoseVerifyFailure(trace, { previousTrace = '', targetFiles = [], subtasks = [], verifyCmd = '' } = {}, _depth = 0) {
+  const clean = String(trace || '').replace(ANSI_RE, '').trim();
+  const emptyResult = {
+    category: 'UNKNOWN',
+    headline: 'No failure output captured',
+    signature: 'unknown',
+    repeat: false,
+    files: [],
+    tests: [],
+    likelyTargets: [],
+    likelyOwners: [],
+    hint: DIAG_HINTS.UNKNOWN
+  };
+  if (!clean) return emptyResult;
+
+  let category = 'UNKNOWN';
+  for (const [cat, re] of DIAG_CATEGORIES) {
+    if (re.test(clean)) { category = cat; break; }
+  }
+
+  const lines = clean.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const files = [];
+  const filePaths = [];
+  const seenFileEntry = new Set();
+  const addFile = (raw, lineNo = '') => {
+    const rel = cleanProjectPath(raw);
+    if (!rel) return;
+    const entry = lineNo ? `${rel}:${lineNo}` : rel;
+    if (!seenFileEntry.has(entry) && files.length < 8) {
+      seenFileEntry.add(entry);
+      files.push(entry);
+    }
+    if (!filePaths.includes(rel) && filePaths.length < 8) filePaths.push(rel);
+  };
+
+  for (const l of lines) {
+    let m;
+    if ((m = l.match(/^File "([^"]+\.py)", line (\d+)/))) addFile(m[1], m[2]);
+    for (const tm of l.matchAll(/([^\s(:*?"'<>]+\.(?:tsx?|jsx?|mjs|cjs))\((\d+),\d+\)/g)) addFile(tm[1], tm[2]);
+    for (const fm of l.matchAll(/(?:[A-Za-z]:)?(?:\/[^\s:()"'<>]+|[A-Za-z0-9_.\-\\]+\/(?:[A-Za-z0-9_.\-\\]+\/)*[A-Za-z0-9_.-]+)\.(?:js|mjs|cjs|jsx|ts|tsx|py|go|rs|php|rb|java|kt|cs|c|cpp|h|vue|svelte|astro|css|scss|less|html|json|yml|yaml|toml|md)(?::(\d+)(?::\d+)?)?/g)) {
+      const full = fm[0];
+      const lineMatch = full.match(/^(.+?):(\d+)(?::\d+)?$/);
+      if (lineMatch) addFile(lineMatch[1], lineMatch[2]);
+      else addFile(full);
+    }
+  }
+
+  const tests = [];
+  const addTest = (name) => {
+    const t = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (t && !tests.includes(t) && tests.length < 6) tests.push(t);
+  };
+  for (const l of lines) {
+    let m;
+    if ((m = l.match(/^not ok \d+\s*-\s*(.+)$/))) addTest(m[1]);
+    else if ((m = l.match(/^✖\s+(.+?)(?:\s+\(\d+(?:\.\d+)?ms\))?$/))) addTest(m[1]);
+    else if ((m = l.match(/^---\s*FAIL:\s*(\S+)/))) addTest(m[1]);
+    else if ((m = l.match(/^FAILED\s+([^\s]+::[^\s]+|[^\s]+)/))) addTest(m[1]);
+    else if ((m = l.match(/^test\s+([A-Za-z0-9_:.-]+)\s+\.\.\.\s+FAILED/))) addTest(m[1]);
+    else if ((m = l.match(/^●\s+(.+)$/))) addTest(m[1]);
+  }
+
+  const NOISE_LINE = /^(?:exit code\b|FAIL\s*\(exit\b|Command failed:|npm error\b|npm ERR!\b|Node\.js v\d)/i;
+  const PRIORITY_LINE = /(?:PATCH_SAFETY|leaked .* in .*\(redacted\)|merge conflict marker|error TS\d+:|(?:Assertion|Syntax|Reference|Type|Range|URI|Runtime|Value|Key|Attribute|ModuleNotFound|Import)Error\b|ERR_ASSERTION|ERR_MODULE_NOT_FOUND|Cannot find module|command not found|not recognized|timed?\s*out|ETIMEDOUT|EACCES|EPERM|ECONNREFUSED)/i;
+  const pickLine = lines.find((l) => !NOISE_LINE.test(l) && PRIORITY_LINE.test(l))
+    || lines.find((l) => !NOISE_LINE.test(l) && /^(?:Error|FAIL|FAILED|not ok \d+|✖|--- FAIL:|panic:)\b/i.test(l))
+    || lines.find((l) => !NOISE_LINE.test(l))
+    || lines[0];
+  const headline = String(pickLine || verifyCmd || 'Verification failed').replace(/\s+/g, ' ').slice(0, 160);
+
+  const coreHeadline = headline
+    .replace(/[A-Za-z]:\\[^\s"']+|\/(?:tmp|var|home|Users)\/[^\s"']+/g, '<path>')
+    .replace(/\b\d+\s*ms\b/gi, '#ms')
+    .replace(/:\d+(?::\d+)?/g, '')
+    .replace(/\(\d+,\s*\d+\)/g, '')
+    .replace(/\d+/g, '#')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  const signature = [category, filePaths[0] || '', coreHeadline || (tests[0] ? norm(tests[0]) : '')].filter(Boolean).join('|').slice(0, 160);
+
+  let repeat = false;
+  if (_depth === 0 && String(previousTrace || '').trim()) {
+    const prev = diagnoseVerifyFailure(previousTrace, { targetFiles, subtasks, verifyCmd }, 1);
+    repeat = Boolean(prev && prev.signature && prev.signature === signature && (category !== 'UNKNOWN' || coreHeadline.length >= 12));
+  }
+
+  const allTargets = [
+    ...(Array.isArray(targetFiles) ? targetFiles : []),
+    ...(Array.isArray(subtasks) ? subtasks.flatMap((s) => s?.targetFiles || []) : [])
+  ];
+  const likelyTargets = filePaths.filter((fp) => allTargets.some((t) => scopeOverlap(fp, t)));
+  const finalTargets = likelyTargets.length ? likelyTargets : filePaths.slice(0, 4);
+  const likelyOwners = [];
+  if (Array.isArray(subtasks)) {
+    for (const sub of subtasks) {
+      if (!sub?.id || !Array.isArray(sub.targetFiles)) continue;
+      if (filePaths.some((fp) => sub.targetFiles.some((t) => scopeOverlap(fp, t)))) likelyOwners.push(sub.id);
+    }
+  }
+
+  return {
+    category,
+    headline,
+    signature,
+    repeat,
+    files,
+    tests,
+    likelyTargets: finalTargets,
+    likelyOwners,
+    hint: DIAG_HINTS[category] || DIAG_HINTS.UNKNOWN
+  };
+}
+
+export function formatDiagnosis(diag) {
+  if (!diag || !diag.headline) return '';
+  const lines = [
+    `Category: ${diag.category}${diag.repeat ? ' [REPEAT FAILURE — same error signature as previous cycle; do NOT repeat the same edit, inspect files and change approach]' : ''}`,
+    `Summary: ${diag.headline}`,
+    ...(diag.files?.length ? [`Files referenced: ${diag.files.join(', ')}`] : []),
+    ...(diag.likelyOwners?.length ? [`Likely owner(s): ${diag.likelyOwners.join(', ')}`] : []),
+    ...(diag.tests?.length ? [`Failing test(s): ${diag.tests.join('; ')}`] : []),
+    ...(diag.hint ? [`Action hint: ${diag.hint}`] : [])
+  ];
+  return lines.join('\n');
+}
+
 /**
  * Build the memory block injected into worker prompts.
  *  - skip: ['profile','lessons'] when the engine already auto-loads them (e.g. CLAUDE.md @imports)
+ *  - query: optional task/goal/files/error hint to prioritize relevant auto-lessons
  *  - lesson lines are de-duplicated and capped at memory.maxLessonLines (default 50):
- *    taught rules first (newest kept if over the cap), then the most recent auto lessons.
+ *    taught rules first (newest kept if over the cap), then relevant or most recent auto lessons.
  */
-export function memoryContext(config, { skip = [] } = {}) {
+export function memoryContext(config, { skip = [], query = '' } = {}) {
   const mem = config.memory || {};
   if (mem.enabled === false) return '';
   const maxLines = mem.maxLessonLines ?? 50;
@@ -1034,7 +1305,8 @@ export function memoryContext(config, { skip = [] } = {}) {
   const fresh = (l) => { const k = norm(stripSeen(l.text)); if (seen.has(k)) return false; seen.add(k); return true; };
   const taught = listLessons(FILES.lessons).filter(fresh).slice(-maxLines); // dedupe even if skipped,
   const autoRoom = Math.max(0, Math.min(mem.maxAutoLessons ?? 10, maxLines - (skip.includes('lessons') ? 0 : taught.length)));
-  const auto = listLessons(FILES.autoLessons).reverse().filter(fresh).slice(0, autoRoom).reverse(); // so auto never repeats a rule
+  const allAuto = listLessons(FILES.autoLessons).reverse().filter(fresh).reverse(); // newest kept if duplicate exists
+  const auto = rankAutoLessons(allAuto, query, autoRoom);
 
   if (taught.length && !skip.includes('lessons')) parts.push(`## Rules the user taught (always follow)\n${taught.map((l) => `- ${l.text}`).join('\n')}`);
   if (auto.length) parts.push(`## Lessons from earlier harness runs\n${auto.map((l) => `- ${l.text}`).join('\n')}`);
