@@ -23,7 +23,7 @@ harness controller ──spawn──▶ claude -p --output-format json ...   (pr
 ## 2. Log in to each tool (once per machine, per person)
 
 Everyone who uses the harness logs in with **their own** account on **their own** machine. Do not share logins,
-and do not put API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) in this project.
+commit secrets, or hardcode API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) — default to local subscriptions; if a budgeted team/CI setup uses an API key, keep it in a git-ignored `.env` or machine environment (`doctor` prints a non-blocking notice when an `*_API_KEY` env var is active).
 
 | Engine | Install (see the tool's own docs) | Log in once |
 |---|---|---|

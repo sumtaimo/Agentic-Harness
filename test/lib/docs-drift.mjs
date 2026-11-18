@@ -2,7 +2,7 @@
  * test/lib/docs-drift.mjs — pure, zero-dependency "do the docs still state the truth?" checks.
  * Used by test/audit.mjs (on the real docs) and test/run-tests.mjs (on synthetic strings).
  *
- * Facts come from the source of truth: { leads: ['lead-ba', ...], roles: ['BA_ANALYST', ...], version: '1.0.19', agentCount }.
+ * Facts come from the source of truth: { leads: ['lead-ba', ...], roles: ['BA_ANALYST', ...], version: '1.0.20', agentCount, skills: [...], allowedPaths: [...] }.
  * Every check returns [{ line, rule, msg }] (1-based line numbers).
  *
  * Opt-out: put `docs-drift:ignore` on a line (or the line right above it), e.g. `<!-- docs-drift:ignore -->` in
@@ -13,23 +13,30 @@ export const IGNORE_MARKER = 'docs-drift:ignore';
 
 const SHORT = (id) => id.replace(/^lead-/, '').toUpperCase();
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const isTreeBranch = (s) => /^\s*(?:[│|]\s*)*(?:[├└][-─]+|[+|\\`][-─]+)\s+\S/.test(s);
 
-/** Lines as claim units: [{ line, text }]. Skips ignored lines and example code fences; joins wrapped lists. */
+/** Lines as claim units: [{ line, text }]. Skips ignored lines and example code fences; joins wrapped lists & tree branches. */
 export function claimUnits(text) {
   const raw = String(text).replace(/\r\n/g, '\n').split('\n');
   const units = [];
+  const fenceRe = /^\s*```(\w*)/;
   let skipFence = false;
   for (let i = 0; i < raw.length; i++) {
     const t = raw[i];
-    const fence = t.match(/^\s*```(\w*)/);
+    const fence = t.match(fenceRe);
     if (fence) { skipFence = skipFence ? false : /^(json|jsonc|js|javascript|mjs|ts|tsx)$/i.test(fence[1]); continue; }
     if (skipFence) continue;
     const ignored = (k) => k >= 0 && raw[k].includes(IGNORE_MARKER);
     if (ignored(i) || ignored(i - 1)) continue;
-    let joined = t; let j = i;
-    // a list wrapped over lines ("`lead-ba`,\n`lead-dev`") is one claim, unless it ends a code object/array item (`},` or `],`)
-    while (j + 1 < raw.length && /(,|·|\band|\bor|&|\+|\/)\s*$/.test(joined.trimEnd()) && !/[}\]]\s*,?\s*$/.test(joined.trimEnd()) && raw[j + 1].trim() && !raw[j + 1].includes(IGNORE_MARKER)) { j++; joined += ' ' + raw[j].trim(); }
+    let joined = t; let j = i; let treeMerged = false;
+    // a list wrapped over lines ("`lead-ba`,\n`lead-dev`") or a tree diagram ("├─ lead-ba\n└─ lead-dev") is one claim
+    while (j + 1 < raw.length && !fenceRe.test(raw[j + 1]) && raw[j + 1].trim() && !raw[j + 1].includes(IGNORE_MARKER)) {
+      if (isTreeBranch(raw[j]) && isTreeBranch(raw[j + 1])) { j++; joined += ' ' + raw[j].trim(); treeMerged = true; }
+      else if (/(,|·|\band|\bor|&|\+|\/)\s*$/.test(joined.trimEnd()) && !/[}\]]\s*,?\s*$/.test(joined.trimEnd())) { j++; joined += ' ' + raw[j].trim(); }
+      else break;
+    }
     units.push({ line: i + 1, text: joined });
+    if (treeMerged) i = j;
   }
   return units;
 }
@@ -128,10 +135,64 @@ export function checkTestCounts(text) {
   return out;
 }
 
+/** g. a block naming 3+ built-in skills must name all of them (use docs-drift:ignore for partial examples). */
+export function checkSkillRoster(text, facts) {
+  const out = [];
+  const skills = Array.isArray(facts.skills) ? facts.skills : [];
+  if (skills.length < 4) return out;
+  const raw = String(text).replace(/\r\n/g, '\n').split('\n');
+  const re = new RegExp(`(?<![\\w-])(${skills.map(esc).join('|')})(?![\\w-])`, 'g');
+  const isStandaloneIgnore = (s) => /^(?:<!--[\s\S]*-->|\/\/.*|\/\*[\s\S]*\*\/)$/.test(s.trim()) && s.includes(IGNORE_MARKER);
+  let skipFence = false;
+  let ignoreBlock = false;
+  let i = 0;
+  while (i < raw.length) {
+    const t = raw[i];
+    const fence = t.match(/^\s*```(\w*)/);
+    if (fence) { skipFence = skipFence ? false : /^(json|jsonc|js|javascript|mjs|ts|tsx)$/i.test(fence[1]); ignoreBlock = false; i++; continue; }
+    if (skipFence) { i++; continue; }
+    if (!t.trim() || /^\s*(?:#{1,6}\s|---+\s*$)/.test(t)) { ignoreBlock = false; i++; continue; }
+    if (isStandaloneIgnore(t)) { ignoreBlock = true; i++; continue; }
+    const start = i;
+    const lines = [];
+    while (i < raw.length) {
+      const l = raw[i];
+      if (!l.trim() || /^\s*```/.test(l) || /^\s*(?:#{1,6}\s|---+\s*$)/.test(l)) break;
+      if (!l.includes(IGNORE_MARKER) && !(i > 0 && isStandaloneIgnore(raw[i - 1]))) lines.push(l);
+      i++;
+    }
+    if (!ignoreBlock && lines.length) {
+      const seen = new Set([...lines.join('\n').matchAll(re)].map((m) => m[1]));
+      if (seen.size >= 3 && seen.size < skills.length) {
+        out.push({ line: start + 1, rule: 'skill-roster', msg: `lists ${seen.size} of ${skills.length} built-in skills (missing ${skills.filter((x) => !seen.has(x)).join(', ')}; add them or mark with ${IGNORE_MARKER})` });
+      }
+    }
+    ignoreBlock = false;
+  }
+  return out;
+}
+
+/** h. `- allowedPaths: ...` lines quoting charter.md section 0 must list every path in charter.md. */
+export function checkCharterPaths(text, facts) {
+  const out = [];
+  const paths = Array.isArray(facts.allowedPaths) ? facts.allowedPaths : [];
+  if (!paths.length) return out;
+  for (const u of claimUnits(text)) {
+    const m = u.text.match(/^\s*[-*]\s*\*{0,2}`?allowedPaths`?\*{0,2}\s*:\s*(.+)$/i);
+    if (!m) continue;
+    const rhs = m[1].split('←')[0];
+    const missing = paths.filter((p) => !new RegExp(`(^|[\\s,\`])${esc(p)}(?=$|[\\s,\`|;])`).test(rhs));
+    if (missing.length) out.push({ line: u.line, rule: 'charter-paths', msg: `allowedPaths quote is missing ${missing.join(', ')} (charter.md has ${paths.join(', ')})` });
+  }
+  return out;
+}
+
 /** Every rule on one file. opts.testCounts: also apply rule f (README + website copy only). */
 export function checkDoc(text, facts, opts = {}) {
   return [
     ...checkLeadRoster(text, facts), ...checkAbbrevRoster(text, facts), ...checkCounts(text, facts),
-    ...checkRoleNames(text, facts), ...checkVersionClaims(text, facts), ...(opts.testCounts ? checkTestCounts(text) : []),
+    ...checkRoleNames(text, facts), ...checkVersionClaims(text, facts),
+    ...checkSkillRoster(text, facts), ...checkCharterPaths(text, facts),
+    ...(opts.testCounts ? checkTestCounts(text) : []),
   ].sort((a, b) => a.line - b.line);
 }

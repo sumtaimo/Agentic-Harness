@@ -36,12 +36,13 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 - **ជំហានទី៥៖** orchestrator រាយការណ៍ជូនអ្នក។ វានិយាយថា "PASSED" លុះត្រាតែ controller និយាយដូច្នោះ។
 - **បន្តការងារពេល session ឈប់ឬអស់ quota៖** បើ session editor ឈប់កណ្តាលទី ប្រើ `node .harness/visible.mjs handoff` ដើម្បីមើលការងារដែលបានកែរួច និងយក prompt បន្តទៅ editor ផ្សេង ឬប្រើ `node .harness/dispatch.mjs --resume-visible --wait` ដើម្បីឱ្យ terminal/engine ផ្សេងបន្តបញ្ចប់ការងារនោះដោយរក្សាការកែប្រែដើមទុក (ប្រើ `--editor <name>` លើ `visible.mjs brief` / `assign` ពេលចាប់ផ្តើមពី editor ផ្សេងក្រៅពី Claude Code)។
 - **ម៉ឺនុយលេខងាយប្រើ និងសង្ខេបខ្លី៖** វាយ `npm start` (`node .harness/start.mjs`, ឬ `--summary` មើលតែតារាងសង្ខេប) ដើម្បីបើកម៉ឺនុយ `[1]`–`[6]` សម្រាប់គ្រប់ការងារទាំងអស់ដោយមិនចាំបាច់ចាំ command វែង, វាយ `npm run ui` (`node .harness/ui.mjs`, តែលើ `127.0.0.1` ប៉ុណ្ណោះ) ដើម្បីមើលផ្ទាំង Web Dashboard អានតែប៉ុណ្ណោះ (ស្ថានភាព, backlog, quota, sessions និង logs) ឬរត់ `node .harness/hook-session.mjs --brief` សម្រាប់សង្ខេប ៤–៨ បន្ទាត់នៅក្នុង Antigravity, Cursor ឬ Terminal។
+- **ពាក្យបញ្ជា slash ផ្សេងទៀតក្នុង Claude Code៖** `/harness:sessions` (session កូនច្រើនព្រមគ្នា តាម `node .harness/sessions.mjs`), `/harness:team`, `/harness:status`, `/harness:doctor`, `/harness:tick`, `/harness:teach`។
 
 ## ៥. ការជ្រើសរើស engine
 
 - `auto` ជ្រើស engine ដំបូងក្នុង `autoOrder` (antigravity → claude → codex) ដែលបានដំឡើងរួច ហើយ flag របស់វាឆ្លងកាត់ការពិនិត្យ `--help`។
 - បើ engine ណាមិនរួចរាល់ harness នឹងប្តូរទៅ engine បន្ទាប់ ហើយកត់ត្រា `ENGINE_FALLBACK` ក្នុង `.harness/telemetry.log`។
-- `node .harness/doctor.mjs` ពិនិត្យសុខភាពនៃការរៀបចំទាំងមូល។
+- លំនាំដើមប្រើគណនី subscription (`claude`, `agy`, `codex`)។ បើមាន `*_API_KEY` ក្នុង shell env នោះ `node .harness/doctor.mjs` នឹងបង្ហាញសារជូនដំណឹងមិនរារាំងមួយបន្ទាត់ (មិនបញ្ឈប់ការងារទេ) ហើយក៏ពិនិត្យសុខភាពនៃការរៀបចំទាំងមូលផងដែរ។
 - ព័ត៌មានលម្អិតអំពី engine មាននៅក្នុង `docs/ENGINES.md`។
 
 ## ៦. ច្បាប់សុវត្ថិភាព
@@ -53,7 +54,8 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 - AI មិនដែល push ឬ merge ទៅ `main` ដោយគ្មានការអនុញ្ញាតពីម្ចាស់ project ទេ។
 - **ឧបករណ៍ AI នីមួយៗត្រូវអនុញ្ញាតម្តង** (`node .harness/engines.mjs`)៖ harness មិនប្រើឧបករណ៍ដែលបាន login ដោយស្ងាត់ៗទេ។
 - **ការងារធំសួរមុន** (របៀប team ឬ parallel, workers ៣+, model កម្រិតខ្ពស់)។ ក្នុង autopilot វាត្រូវផ្អាកជា «ត្រូវការការយល់ព្រមពីអ្នក» ហើយការងារផ្សេងបន្ត។ យល់ព្រមដោយ `node .harness/backlog.mjs approve <id>`។
-- **តួនាទីក្នុងក្រុម**៖ `lead-ba` (spec), `lead-dev` (កូដ), `lead-qa` (តេស្ត), `lead-ux` (UX/UI ឯកសារស្ទីល `*.css`, `*.scss`)។ ឯកសារនីមួយៗមានម្ចាស់តែមួយ។ ក្រោយតេស្តជាប់ `reviewer` និង `security` (អានតែប៉ុណ្ណោះ) ពិនិត្យការកែ ហើយរាយការណ៍ ដោយមិនកែអ្វីទេ។
+- **តួនាទីក្នុងក្រុម**៖ `lead-ba` (spec), `lead-dev` (កូដ), `lead-qa` (តេស្ត), `lead-ux` (UX/UI ឯកសារស្ទីល `*.css`, `*.scss`, `*.less`)។ ឯកសារនីមួយៗមានម្ចាស់តែមួយ។ ក្រោយតេស្តជាប់ `reviewer` និង `security` (អានតែប៉ុណ្ណោះ) ពិនិត្យការកែ ហើយរាយការណ៍ ដោយមិនកែអ្វីទេ។
+- **ការផ្គូផ្គង Skill និងការការពារឯកសារ**៖ Skills ក្នុង `.harness/skills/` គាំទ្រការបញ្ចូលតាម keyword (`SKILL_MATCH`) និងរឹតបន្តឹង tool តាម `additive-union` (`SKILL_COMPOSITION`) ដោយមិនបន្ថែមសិទ្ធិលើសតួនាទីឡើយ។ សម្រាប់អ្នកថែទាំ template រត់ `npm run audit` ដើម្បីការពារឯកសារកុំឱ្យដើរខុសពីប្រភពកូដ (`docs-drift`)។
 - **Session ច្រើនក្នុងពេលតែមួយ**៖ អ្នកនិយាយតែជាមួយ **Session A** (`/harness:sessions`) ហើយវាដំណើរការ session កូន **អតិបរមា ៤** ម្នាក់មួយការងារ (`FEAT-3 Login page` លើ branch ផ្ទាល់ខ្លួន)។ បញ្ចូលចូល base តែពេលអ្នកយល់ព្រម ហើយក្រោយការពិនិត្យជាប់ប៉ុណ្ណោះ រួច worktree និង branch របស់ session កូននោះត្រូវបានលុបដោយស្វ័យប្រវត្តិ។ ការងារមិនទាន់រួចមិនដែលត្រូវលុបទេ វាត្រូវបង្ហាញជា **HIGH RISK** រហូតដល់អ្នកសម្រេច។ មើលតារាង៖ `node .harness/sessions.mjs board`។ បើ session កូនជាប់គាំងឬប្តូរ engine កណ្តាលទី ប្រើ `node .harness/sessions.mjs checkpoint <ID>` ដើម្បី commit ការងារ WIP បណ្តោះអាសន្ន, `node .harness/sessions.mjs handoff [ID] [--checkpoint]` ដើម្បីពិនិត្យនិងយក prompt បន្ត ឬ `node .harness/dispatch.mjs --cwd <worktree> --goal "…" --wait` ដើម្បីបញ្ចប់ការងារក្នុង worktree នោះតាម headless controller។
 - **កំណត់ប្រចាំថ្ងៃ និងរបាយការណ៍ប្រើប្រាស់**៖ `config.json` → `dailyLimits` និង `node .harness/usage.mjs`។
 

@@ -193,7 +193,7 @@ One developer and a team of people get the same harness: the full AI agent team 
    (If it doesn't ask: Command Palette → `Tasks: Manage Automatic Tasks` → **Allow**.)
    The harness screen now opens by itself every time you open the folder.
 5. Command Palette (**Ctrl+Shift+P** / **Cmd+Shift+P**) → **Tasks: Run Task** → **Harness: Doctor (check my setup)**.
-   Fix anything marked ✖. Doctor also tests each installed AI engine's command-line flags.
+   Fix anything marked ✖. Doctor probes installed AI CLIs' command-line flags and prints a non-blocking 1-line notice if an `*_API_KEY` env var is active in your shell when you meant to use a subscription.
 6. Recommended: let your AI fill in your profile. In your editor's AI chat, type:
    > Read AGENTS.md and fill in my profile.
 
@@ -242,10 +242,12 @@ For a big goal, three levels of real agents work together, defined in **`.harnes
 
 ```
 L1  orchestrator [PO_ARCHITECT]       plans only; read-only. Splits the goal between the leads.
-├─ L2  lead-ba  [BA_ANALYST]    owns docs/**   → plans its own workers
-├─ L2  lead-dev [DEV_ENGINEER]  owns src/**    → plans its own workers
-└─ L2  lead-qa  [QA_AUDITOR]    owns tests/**  → plans its own workers
+├─ L2  lead-ba  [BA_ANALYST]    owns docs/**                                                → plans its own workers
+├─ L2  lead-dev [DEV_ENGINEER]  owns src/**                                                 → plans its own workers
+├─ L2  lead-ux  [UX_DESIGNER]   owns src/**/*.css, src/**/*.scss, src/**/*.less             → plans its own workers
+└─ L2  lead-qa  [QA_AUDITOR]    owns tests/**, test/**, __tests__/**, src/**/*.test.*, *.spec.* → plans its own workers
       └─ L3  workers (created by each lead, with the lead's role): they do the work, in parallel
+(after the real check passes on code changes, read-only `reviewer` and `security` agents audit the diff)
 ```
 `node .harness/team.mjs show` prints it with every member's set-up (role, engine, scope, tools, budget). Each member has its own set-up in that file.
 Each member can run on its own AI engine (`"engine"` in `team.json`); `node .harness/team.mjs auto-assign` sets that from the engines you have installed ([`docs/MULTI-MODEL-SETUP.md`](docs/MULTI-MODEL-SETUP.md)).
@@ -345,7 +347,7 @@ The controller works **on your behalf**, but only inside the rules you write in
 ```
 - autonomous: off            ← switch to "on" when the objectives below describe your project
 - maxAutoTasksPerRun: 3      ← most tasks it may start in one run (one start of task 6, or one tick)
-- allowedPaths: src/**, docs/**, tests/**, test/**
+- allowedPaths: src/**, docs/**, tests/**, test/**, __tests__/**
 - forbiddenPaths: .git/**, .harness/**, node_modules/**, .env*, production-credentials/**
 - forbiddenTools: Bash(git push:*), Bash(git remote:*), Bash(rm -rf:*), Bash(npm publish:*)
 - requireRealCheck: yes      ← never run autonomous work that nothing can check
@@ -409,9 +411,13 @@ full-screen dashboard returns whenever the harness is idle.
 | Role | Does | May own files | Engine tools (Claude Code) |
 |---|---|---|---|
 | `PO_ARCHITECT` | plans the backlog from the charter | none (read-only) | Read, Glob, Grep, `git status`/`git log` |
-| `BA_ANALYST` | requirements, edge cases, acceptance criteria | `docs/**` | Read + Edit/Write **only its own files** |
-| `DEV_ENGINEER` | implements code | anything allowed | Read + Edit/Write its own files, `npm`, `node`, read-only git |
-| `QA_AUDITOR` | writes/runs tests against the criteria | `tests/**`, `test/**`, `*.test.*`, `*.spec.*` | Read + Edit/Write its own files, `npm test` |
+| `COORDINATOR` | runs Session A & up to 4 child task sessions (`/harness:sessions`) | none (read-only) | Read, Glob, Grep, `node .harness/sessions.mjs`, read-only git |
+| `BA_ANALYST` | requirements, edge cases, acceptance criteria | `docs/**` | Read + Edit/Write **only its own files**, `git status` |
+| `DEV_ENGINEER` | implements code using Two-Phase Root-Cause protocol (no test edits in team/visible runs) | `**` (code inside `src/**` on team runs) | Read + Edit/Write its own files, `npm`, `node`, read-only git |
+| `UX_DESIGNER` | styles, design tokens, visual states, WCAG contrast | `src/**/*.css`, `src/**/*.scss`, `src/**/*.less` | Read + Edit/Write **only its own files**, `git status` |
+| `QA_AUDITOR` | writes/runs tests (Red-Green & anti-hardcode coverage) | `tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*` | Read + Edit/Write its own files, `npm test`, `npm run test` |
+| `REVIEWER` | independent read-only audit after PASSED (flags anti-cheating & missing root cause) | none (read-only) | Read, Glob, Grep, read-only git (`diff`/`status`/`log`) |
+| `SECURITY` | read-only security audit (secrets, injection, auth, deps) | none (read-only) | Read, Glob, Grep, `git diff`/`git status` |
 
 Roles live in `.harness/roles/*.json` (persona, tools, allowed paths), so you can edit them or add
 new ones. With Claude Code, the file limits are **enforced by the engine**: a live Claude Code call
@@ -509,7 +515,7 @@ Set in `.harness/config.json` → `"activeProfile"`. The default is `"auto"`; yo
 | Engine | Status |
 |---|---|
 | `claude` (Claude Code) | ✅ verified end-to-end, including the AI planner and two parallel workers |
-| `antigravity` (`agy`) | ✅ verified on Windows 11 with `agy` 1.5.8 (2026-11-14; re-verified 2026-11-16): a scoped file task ran on Cycle 1 and the real check passed, also with a 3,049-character goal and live quota-fallback step-down. The prompt goes as an argument (`-p "<prompt>"`), because stdin with `-p ""` is rejected (`empty prompt`). Native `agy.exe` is spawned with `shell: false` so `cmd.exe` never truncates multi-line prompts or drops `--model` (Windows command-line limit: 32,767 chars; 8,191 through `cmd.exe`). No auto-approve. `agy.exe` lives in `%LOCALAPPDATA%\agy\bin` or `~/.gemini/bin`: add it to PATH. All three model tiers (fast, medium, high) passed real runs |
+| `antigravity` (`agy`) | ✅ verified on Windows 11 with `agy` 1.5.8 (2026-11-14; re-verified 2026-11-16) and `agy` 1.5.9 (2026-11-18): a scoped file task ran on Cycle 1 and the real check passed, also with a 3,049-character goal, live quota-fallback step-down, `--hierarchy`, `--resume-visible`, `--cwd`, and `SDK` checks. The prompt goes as an argument (`-p "<prompt>"`), because stdin with `-p ""` is rejected (`empty prompt`). Native `agy.exe` is spawned with `shell: false` so `cmd.exe` never truncates multi-line prompts or drops `--model` (Windows command-line limit: 32,767 chars; 8,191 through `cmd.exe`). No auto-approve. `agy.exe` lives in `%LOCALAPPDATA%\agy\bin` or `~/.gemini/bin`: add it to PATH. All three model tiers (fast, medium, high) passed real runs |
 | `codex` (OpenAI Codex CLI) | ⚠️ partly verified (codex-cli 0.169.0): `exec --sandbox workspace-write`, a model plus a reasoning effort per tier; flags and model accepted, a full task is still to be run |
 | ~~`gemini`~~ (Gemini CLI) | ❌ removed: Google no longer lets it run on personal "Gemini Code Assist for individuals" accounts (`IneligibleTierError`) and points to Antigravity. `--engine gemini` stops with a clear message |
 
@@ -557,8 +563,10 @@ node .harness/usage.mjs                  # daily/7d/30d token & call usage + ≥
 node .harness/status.mjs --log 25        # state + recent JSONL events
 node .harness/watch.mjs --job <id>       # live feed of every agent action until that job finishes
 node test/run-tests.mjs                  # end-to-end tests with a mock engine (no AI account needed, free)
+npm run audit                            # template release audit (installs, commands, docs-drift, owner rules; --site builds website)
 npm run test:live                        # REAL Claude agents end to end, 6 scenarios (manual task, autonomous uat run, headless team, the editor workflow with named agents, autonomous editor mode, editor config); ~$2.5, needs `claude` logged in
 node .harness/visible.mjs status          # runs of the editor workflow
+node .harness/visible.mjs brief --bugfix --goal "…"   # start a bug-fix editor run (root-cause & anti-cheat audit)
 node .harness/visible.mjs handoff         # inspect an unfinished run and get a prompt/command to continue it
 node .harness/dispatch.mjs --resume-visible --wait   # finish an unfinished editor run headlessly (keeps partial edits)
 node .harness/dispatch.mjs --cwd <dir> --goal "…" --wait   # run workers & checks inside another folder/worktree
@@ -667,7 +675,7 @@ problems were then found and fixed:
    regression test that fails when the bug is put back.
 10. v2.3 added **Normal vs. Autopilot** shortcuts, **dynamic execution routing** (`--mode normal|parallel|team`),
     the **JavaScript SDK** (`.harness/sdk.mjs`), **MCP optional presets** (`.harness/mcp.json`), and expanded
-    **skills** (`security-guard`, `test-champion`, `api-craft`, `spec-writer`).
+    **skills** (`security-guard`, `test-champion`, `api-craft`, `spec-writer`). <!-- docs-drift:ignore -->
 
 ---
 
@@ -716,6 +724,7 @@ Skills inject targeted rules and allowed tools only when relevant to the task's 
 - **`test-champion`**: Directs QA auditors to cover happy paths, boundary/edge cases, error shapes, and deterministic assertions.
 - **`api-craft`**: Enforces uniform REST/JSON error structures, HTTP status codes, and input validation.
 - **`spec-writer`**: Formulates concise Given/When/Then acceptance criteria and interface contracts without code leaks.
+- **`ui-craft`**: Enforces token-based styling, WCAG AA contrast, interactive focus/disabled states, mobile-to-desktop responsiveness, and light/dark themes.
 
 ### 4. Model Independence & MCP Presets (`.harness/mcp.json`)
 The harness connects to any CLI-driven AI engine (Claude, Codex, Antigravity, local Ollama models) without vendor lock-in. Optional MCP server presets are pre-configured for GitHub PR/issue inspection, Postgres databases, and web fetching.
@@ -729,7 +738,7 @@ Orchestrator (plans) → leads: `lead-ba` (specs, `docs/**`), `lead-dev` (code, 
 - **Interactive Launcher & Dashboard:** `npm start` (`node .harness/start.mjs`, `--summary`), `node .harness/hook-session.mjs --brief` (4–8 line status), `npm run ui` (`node .harness/ui.mjs`, read-only local web dashboard on `127.0.0.1`), and `npm run usage` (`node .harness/usage.mjs`, with ≥80% daily quota warnings).
 - **Cross-Editor Handoff & Resume:** `node .harness/visible.mjs handoff` and `node .harness/dispatch.mjs --resume-visible [RUN_ID]` preserve partial edits and remap cross-engine models when switching editors or hitting usage caps.
 - **Root-Cause & Anti-Cheating Enforcement:** `visible.mjs brief --bugfix`, strict test-file isolation (`isTestFilePath()` prevents non-QA leads from owning test files), Two-Phase Root-Cause retry directives (`daemon.mjs`), and `auditPatchSignals()` flagging `.skip`/`.only`/`.todo`, empty `catch {}` blocks, and missing root-cause notes.
-- **Skill Foundry Integration:** Automatic pointer wiring, `additive-union` explicit tool narrowing, `keywords-with-explicit` skill matching, and non-blocking background update checks (`.harness/lib/foundry-check.mjs`).
+- **Skill Matching & Composition:** `SKILL_MATCH` (`keywords` + explicit/`autoApply` selection) and `additive-union` (`SKILL_COMPOSITION`) explicit tool narrowing ensure skills inject targeted rules cleanly without ever exceeding a role's permissions.
 
 ## Many sessions at once (Session A + child sessions)
 

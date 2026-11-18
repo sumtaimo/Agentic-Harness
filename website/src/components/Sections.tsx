@@ -19,7 +19,7 @@ export function Flow({ n }: { n: number }) {
 }
 
 /** Where each duty is decided (shown on the tile, same in every language). */
-const DUTY_TAGS = ['charter.md', 'targetFiles', 'fast · medium · high', 'git worktree', 'exit code', '401 · 429'];
+const DUTY_TAGS = ['charter.md', 'targetFiles', 'fast · medium · high', 'git worktree', 'exit code', '401 · 429', 'tests/**', 'anti-cheat'];
 
 export function Controller({ n }: { n: number }) {
   const { t } = useLang();

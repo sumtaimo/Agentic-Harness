@@ -1,7 +1,7 @@
 # Engines
 
 Short version: the harness uses whichever AI command-line tool you have installed and logged in to.
-You log in with your subscription, never with an API key. Run `node .harness/doctor.mjs` to see
+It defaults to your local subscription login (`claude`, `agy`, `codex`) with no extra API middleware; optional paid API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) are only for budgeted projects or CI via git-ignored `.env`. Run `node .harness/doctor.mjs` to see
 which engine will be used.
 
 ## Engines and how one is picked
@@ -105,10 +105,11 @@ answered `a` for `--model high` once.
 
 Details and the full rules: [`MULTI-MODEL-SETUP.md`](MULTI-MODEL-SETUP.md#6-model-tiers-the-right-sized-model-for-each-job-saves-tokens).
 
-## Log in with your subscription (no API keys)
+## Log in with your subscription (or optional budgeted API key)
 
-- Policy: subscription only. Do **not** set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in your
-  environment or in any file in this project.
+- **Default (`subscription-first`):** log in with your own CLI session (`claude`, `agy`, `codex`) so no extra API fees or server middleware are needed.
+- **Optional paid API mode:** projects with an approved API budget or headless CI runners may set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in a git-ignored `.env` (or machine environment). Never hardcode or commit keys.
+- **Non-blocking notice:** if any `*_API_KEY` env var is active in your shell, `node .harness/doctor.mjs` prints a 1-line notice so you do not use paid API tokens when you meant to use your subscription.
 - Antigravity: log in through the Antigravity app with your Google account.
 - Claude Code: run `claude` once and log in with your subscription.
 - Codex: run `codex` once and log in.
@@ -152,7 +153,7 @@ Notes for Antigravity:
 - `-p` is an alias of `--print`. `agy` does NOT read the prompt from stdin when `-p` is empty (`error: empty prompt`), so the prompt is passed as an argument.
 - Because `agy.exe` is a native `.exe` (not a `.cmd` shim), the controller spawns it with `shell: false` on Windows so `cmd.exe` never truncates multi-line prompts or drops `--model`. Windows `CreateProcess` still has a 32,767-character command-line limit (8,191 through `cmd.exe`, which `.cmd` shims use); 3,049 characters worked, while a much longer prompt can still fail.
 - `agy` has no auto-approve flag in the profile on purpose (it has `--dangerously-skip-permissions` and `--mode`). Scoped file edits worked without it.
-- On 2026-11-18, v1.0.6 through v1.0.17 were verified end-to-end on Windows 11 / Node 24 with `agy` 1.5.9 in a live suite (covering `sessions.mjs` merge/checkpoint/handoff, `lead-ux`/`reviewer`/`security` roles, `team.mjs auto-assign`, `visible.mjs` brief/handoff and real `agy` `dispatch.mjs --resume-visible` with cross-engine model alias guard, `hook-session.mjs --brief` and `start.mjs`, real `agy` `dispatch.mjs --cwd <worktree>` with `--engine agy` alias, duplicate `agy` PATH guard and ≥80% quota warnings, `dailyLimits` `DAILY_LIMIT` → `QUOTA_FALLBACK` automatic agent/model switch, right-sized `MODEL_TIER` selection and retry escalation, 3-level `--hierarchy` L1 orchestrator → L2 lead → L3 worker with per-member `team.json` model overrides and `team.mjs sync-agents`, role/skill `allowedTools` additive union narrowing, charter `disallowedTools`, `mcp.json` presets, and Skill Foundry `SKILL_MATCH` keyword injection, `ui.mjs` local dashboard and `Host` header guard, secret/worktree boundary guards, and JavaScript SDK `.harness/sdk.mjs` live execution). No duplicate live re-testing of v1.0.6–v1.0.17 is needed unless engine flags or models change.
+- On 2026-11-18, v1.0.6 through v1.0.17 were verified end-to-end on Windows 11 / Node 24 with `agy` 1.5.9 in a live suite (covering `sessions.mjs` merge/checkpoint/handoff, `lead-ux`/`reviewer`/`security` roles, `team.mjs auto-assign`, `visible.mjs` brief/handoff and real `agy` `dispatch.mjs --resume-visible` with cross-engine model alias guard, `hook-session.mjs --brief` and `start.mjs`, real `agy` `dispatch.mjs --cwd <worktree>` with `--engine agy` alias, duplicate `agy` PATH guard and ≥80% quota warnings, `dailyLimits` `DAILY_LIMIT` → `QUOTA_FALLBACK` automatic agent/model switch, right-sized `MODEL_TIER` selection and retry escalation, 3-level `--hierarchy` L1 orchestrator → L2 lead → L3 worker with per-member `team.json` model overrides and `team.mjs sync-agents`, role/skill `allowedTools` additive union narrowing, charter `disallowedTools`, `mcp.json` presets, and `SKILL_MATCH` keyword injection, `ui.mjs` local dashboard and `Host` header guard, secret/worktree boundary guards, and JavaScript SDK `.harness/sdk.mjs` live execution). No duplicate live re-testing of v1.0.6–v1.0.17 is needed unless engine flags or models change.
 
 To fix a profile: run `<binary> --help`, propose the change to the owner, then edit
 `.harness/config.json` and run doctor again.

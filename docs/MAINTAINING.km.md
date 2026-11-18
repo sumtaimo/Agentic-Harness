@@ -68,11 +68,12 @@ backlog និង memory របស់អ្នកត្រូវបានរក�
 
 | ព័ត៌មាន | ប្រភពដើមពិត | ពិនិត្យដោយ `npm run audit`? |
 |---|---|---|
-| Leads, scopes, budgets | `.harness/team.json` | បាទ/ចាស (បញ្ជី leads និងចំនួន) |
-| តួនាទី (roles), ភារកិច្ច និងសិទ្ធិ tools | `.harness/roles/*.json` | បាទ/ចាស (ផ្ទៀងផ្ទាត់ឈ្មោះ role) |
-| Engines និង model IDs | `.harness/config.json` | បាទ/ចាស (ហាមឈ្មោះ model ក្នុងឯកសារ) |
+| Leads, scopes, budgets | `.harness/team.json` | បាទ/ចាស (បញ្ជី leads ក្នុងឃ្លា និង tree-diagram + ចំនួន) |
+| តួនាទី (roles), ភារកិច្ច និងសិទ្ធិ tools | `.harness/roles/*.json` | បាទ/ចាស (ឈ្មោះ role + `website/src/lib/routing.ts`) |
+| Skills ភ្ជាប់មកជាមួយ និងផ្លូវ charter | `.harness/skills/*/SKILL.md`, `.harness/charter.md` | បាទ/ចាស (`skill-roster` + បន្ទាត់ `- allowedPaths:`) |
+| Engines និង model IDs | `.harness/config.json` | បាទ/ចាស (ហាមឈ្មោះ model ក្នុងឯកសារ និង website) |
 | កំណែ Template និង npm scripts | `package.json` | បាទ/ចាស (`current`/`latest` version & scripts) |
-| ពាក្យបញ្ជា CLI និងឯកសារ agents/commands | `.harness/*.mjs`, `.claude/agents/`, `.claude/commands/harness/` | បាទ/ចាស (គ្រប់ command/link ត្រូវតែមានពិត) |
+| ពាក្យបញ្ជា CLI, slash commands និង website | `.harness/*.mjs`, `.claude/commands/harness/`, `website/src/` | បាទ/ចាស (links, `/harness:*` ទាំងអស់, UI parity, EN/KH parity) |
 
 ## ច្បាប់របស់ម្ចាស់
 

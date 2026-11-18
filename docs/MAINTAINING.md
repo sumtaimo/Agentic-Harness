@@ -68,11 +68,12 @@ Never copy lists, roles, counts, or versions into documentation by memory. Alway
 
 | Fact | Canonical source of truth | Checked by `npm run audit`? |
 |---|---|---|
-| Leads, scopes, budgets | `.harness/team.json` | Yes (lead rosters & counts) |
-| Roles, missions, tool rules | `.harness/roles/*.json` | Yes (role token existence) |
-| Engines & model IDs | `.harness/config.json` | Yes (model IDs forbidden in docs) |
+| Leads, scopes, budgets | `.harness/team.json` | Yes (inline & tree-diagram lead rosters + counts) |
+| Roles, missions, tool rules | `.harness/roles/*.json` | Yes (role token existence + `website/src/lib/routing.ts`) |
+| Built-in skills & charter paths | `.harness/skills/*/SKILL.md`, `.harness/charter.md` | Yes (`skill-roster` lists + `- allowedPaths:` quotes) |
+| Engines & model IDs | `.harness/config.json` | Yes (model IDs forbidden in docs & website) |
 | Template version & npm scripts | `package.json` | Yes (`current`/`latest` version & scripts) |
-| CLI commands & agent/command files | `.harness/*.mjs`, `.claude/agents/`, `.claude/commands/harness/` | Yes (every referenced file/command must exist) |
+| CLI commands, slash commands & site copy | `.harness/*.mjs`, `.claude/commands/harness/`, `website/src/` | Yes (links, all `/harness:*` commands, UI parity, EN/KH deep parity) |
 
 ## The owner's rules
 

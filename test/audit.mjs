@@ -60,7 +60,17 @@ check('session hook tells AIs to use, not edit, the harness', /never edit \.harn
 // 3. Docs point only at things that exist
 console.log('\nDocs only mention commands, scripts and files that exist');
 const pkg = JSON.parse(read('package.json'));
-const docFiles = ['README.md', 'AGENTS.md', ...fs.readdirSync(path.join(REPO, 'docs')).filter((f) => f.endsWith('.md')).map((f) => `docs/${f}`), ...fs.readdirSync(path.join(REPO, '.claude', 'commands', 'harness')).map((f) => `.claude/commands/harness/${f}`)];
+const slashNames = fs.readdirSync(path.join(REPO, '.claude', 'commands', 'harness')).filter((f) => f.endsWith('.md')).map((f) => f.replace(/\.md$/, ''));
+const roleNames = fs.readdirSync(path.join(REPO, '.harness', 'roles')).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(read(`.harness/roles/${f}`)).name);
+const team = JSON.parse(read('.harness/team.json'));
+const leadIds = team.members.filter((m) => m.level === 'lead').map((m) => m.id);
+const skillNames = fs.existsSync(path.join(REPO, '.harness', 'skills'))
+  ? fs.readdirSync(path.join(REPO, '.harness', 'skills'), { withFileTypes: true }).filter((e) => e.isDirectory() && fs.existsSync(path.join(REPO, '.harness', 'skills', e.name, 'SKILL.md'))).map((e) => e.name)
+  : [];
+const charterAllowed = ((read('.harness/charter.md').match(/^\s*-\s*allowedPaths:\s*(.+)$/mi) || [])[1] || '').split(',').map((s) => s.trim()).filter(Boolean);
+const listTs = (d) => fs.existsSync(path.join(REPO, d)) ? fs.readdirSync(path.join(REPO, d)).filter((f) => /\.tsx?$/.test(f)).map((f) => `${d}/${f}`) : [];
+const siteFiles = ['website/src/data/i18n.ts', 'website/src/site.ts', ...listTs('website/src/components'), ...listTs('website/src/lib')].filter((f) => fs.existsSync(path.join(REPO, f)));
+const docFiles = ['README.md', 'AGENTS.md', ...fs.readdirSync(path.join(REPO, 'docs')).filter((f) => f.endsWith('.md')).map((f) => `docs/${f}`), ...slashNames.map((n) => `.claude/commands/harness/${n}.md`)];
 const broken = [];
 for (const f of docFiles) {
   const t = read(f);
@@ -93,10 +103,24 @@ check('no broken command, script or link in the docs or website', !broken.length
     i18nErrs.push(`failed to parse i18n.ts dictionaries: ${e.message}`);
   }
   if (dicts) {
+    const cmpShape = (a, b, p) => {
+      if (typeof a !== typeof b) { i18nErrs.push(`${p}: type ${typeof a} vs ${typeof b}`); return; }
+      if (Array.isArray(a) || Array.isArray(b)) {
+        if (!Array.isArray(a) || !Array.isArray(b)) { i18nErrs.push(`${p}: array vs non-array`); return; }
+        if (a.length !== b.length) i18nErrs.push(`${p}: length ${a.length} vs ${b.length}`);
+        for (let i = 0; i < Math.min(a.length, b.length); i++) cmpShape(a[i], b[i], `${p}[${i}]`);
+        return;
+      }
+      if (a && typeof a === 'object') {
+        const ka = Object.keys(a), kb = new Set(Object.keys(b));
+        for (const k of ka) if (!kb.has(k)) i18nErrs.push(`kh.${p ? p + '.' : ''}${k} missing`);
+        for (const k of kb) if (!(k in a)) i18nErrs.push(`en.${p ? p + '.' : ''}${k} missing`);
+        for (const k of ka) if (k in b) cmpShape(a[k], b[k], p ? `${p}.${k}` : k);
+      }
+    };
+    cmpShape(dicts.en, dicts.kh, '');
     const enCmdKeys = new Set(Object.keys(dicts.en.cmd?.items || {}));
     const khCmdKeys = new Set(Object.keys(dicts.kh.cmd?.items || {}));
-    for (const k of enCmdKeys) if (!khCmdKeys.has(k)) i18nErrs.push(`kh.cmd.items missing key "${k}"`);
-    for (const k of khCmdKeys) if (!enCmdKeys.has(k)) i18nErrs.push(`en.cmd.items missing key "${k}"`);
     for (const k of seenCmdKeys) {
       if (!enCmdKeys.has(k)) i18nErrs.push(`en.cmd.items missing CommandReference key "${k}"`);
       if (!khCmdKeys.has(k)) i18nErrs.push(`kh.cmd.items missing CommandReference key "${k}"`);
@@ -104,8 +128,62 @@ check('no broken command, script or link in the docs or website', !broken.length
     const enRows = (dicts.en.task?.rows || []).map((r) => r.cmd);
     const khRows = (dicts.kh.task?.rows || []).map((r) => r.cmd);
     if (enRows.join('|') !== khRows.join('|')) i18nErrs.push(`task.rows mismatch: en=[${enRows.join(',')}] vs kh=[${khRows.join(',')}]`);
+
+    // UI component counts & source-of-truth parity (catches adding/removing rows in only one file)
+    const sectionsSrc = read('website/src/components/Sections.tsx');
+    const dutyMatch = sectionsSrc.match(/const DUTY_TAGS\s*=\s*(\[[^\]]+\])/);
+    if (!dutyMatch) i18nErrs.push('Sections.tsx: DUTY_TAGS missing');
+    else {
+      const tags = new Function(`return ${dutyMatch[1]}`)();
+      if (tags.length !== dicts.en.controller.rows.length) i18nErrs.push(`Sections DUTY_TAGS (${tags.length}) != en.controller.rows (${dicts.en.controller.rows.length})`);
+    }
+    const rtSimSrc = read('website/src/components/RoutingSimulator.tsx');
+    const rtMatch = rtSimSrc.match(/const ROWS[^=]*=\s*(\[[\s\S]*?\n\]);/);
+    if (!rtMatch) i18nErrs.push('RoutingSimulator.tsx: ROWS missing');
+    else {
+      const rowCount = (rtMatch[1].match(/\{\s*who:\s*'/g) || []).length;
+      if (rowCount !== dicts.en.models.rows.length) i18nErrs.push(`RoutingSimulator ROWS (${rowCount}) != en.models.rows (${dicts.en.models.rows.length})`);
+      for (const l of leadIds) if (!new RegExp(`who:\\s*'${l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`).test(rtMatch[1])) i18nErrs.push(`RoutingSimulator ROWS missing lead ${l}`);
+    }
+    const ucSrc = read('website/src/components/UseCasePlaybooks.tsx');
+    const ucMatch = ucSrc.match(/const COMMANDS[^=]*=\s*(\{[\s\S]*?\n\});/);
+    if (!ucMatch) i18nErrs.push('UseCasePlaybooks.tsx: COMMANDS missing');
+    else {
+      const cmdsObj = new Function(`const REPO_URL = '', INSTALL_CMD = ''; return ${ucMatch[1]}`)();
+      for (const tab of Object.keys(dicts.en.setup.tabs)) {
+        if (!Array.isArray(cmdsObj[tab])) i18nErrs.push(`UseCasePlaybooks COMMANDS missing tab "${tab}"`);
+        else if (cmdsObj[tab].length !== dicts.en.setup[tab].length) i18nErrs.push(`UseCasePlaybooks COMMANDS.${tab} (${cmdsObj[tab].length}) != en.setup.${tab} (${dicts.en.setup[tab].length})`);
+      }
+    }
+    const figSrc = read('website/src/components/Figures.tsx');
+    const figMatch = figSrc.match(/export const FIGURES\s*=\s*\[([^\]]+)\]/);
+    const figLen = figMatch ? figMatch[1].split(',').map((s) => s.trim()).filter(Boolean).length : 0;
+    if (figLen !== dicts.en.hero.figures.length || figLen !== dicts.en.flow.steps.length) {
+      i18nErrs.push(`Figures.tsx FIGURES (${figLen}) must match hero.figures (${dicts.en.hero.figures.length}) and flow.steps (${dicts.en.flow.steps.length})`);
+    }
+    const routingSrc = read('website/src/lib/routing.ts');
+    const roleTypeMatch = routingSrc.match(/export type Role\s*=\s*([^;]+);/);
+    const roleJobMatch = routingSrc.match(/export const ROLE_JOB[^=]*=\s*\{([^}]+)\}/);
+    const uiRoles = new Set([...(roleTypeMatch?.[1] || '').matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]));
+    const jobRoles = new Set([...(roleJobMatch?.[1] || '').matchAll(/\b([A-Z_]+)\s*:/g)].map((m) => m[1]));
+    for (const r of roleNames) {
+      if (!uiRoles.has(r)) i18nErrs.push(`website/src/lib/routing.ts Role union missing ${r}`);
+      if (!jobRoles.has(r)) i18nErrs.push(`website/src/lib/routing.ts ROLE_JOB missing ${r}`);
+    }
+    const missingSlash = [];
+    const cmdRefSlash = new Set([...cmdRef.matchAll(/cmd:\s*'(\/harness:[a-z-]+)/g)].map((m) => m[1]));
+    const enTaskSlash = new Set(enRows);
+    const khTaskSlash = new Set(khRows);
+    for (const s of slashNames) {
+      const cmd = `/harness:${s}`;
+      for (const f of ['README.md', 'AGENTS.md', 'docs/WORKFLOW.md', 'docs/WORKFLOW.km.md']) if (!read(f).includes(cmd)) missingSlash.push(`${f} missing ${cmd}`);
+      if (!cmdRefSlash.has(cmd)) missingSlash.push(`CommandReference.tsx missing ${cmd}`);
+      if (!enTaskSlash.has(cmd)) missingSlash.push(`i18n.ts en.task.rows missing ${cmd}`);
+      if (!khTaskSlash.has(cmd)) missingSlash.push(`i18n.ts kh.task.rows missing ${cmd}`);
+    }
+    if (missingSlash.length) i18nErrs.push(...missingSlash);
   }
-  check('website CommandReference & i18n (en/kh) keys and task rows are in parity', !i18nErrs.length, i18nErrs.join('; '));
+  check('website i18n (en/kh), UI component counts, roles, and /harness:* slash command docs are in parity', !i18nErrs.length, i18nErrs.join('; '));
 }
 
 // 4. Owner rules for the repository
@@ -119,6 +197,8 @@ const scan = walk(REPO).map((f) => path.relative(REPO, f).split(path.sep).join('
 const hits = [];
 for (const f of scan) { const t = fs.readFileSync(path.join(REPO, f), 'utf8'); for (const n of names) if (new RegExp(`(^|[^\\w-])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w-]|$)`).test(t)) hits.push(`${f}: ${n}`); }
 check('model names appear only in .harness/config.json (and generated agent files)', !hits.length, hits.slice(0, 15).join('\n'));
+const foundryLeaks = [...docFiles, ...siteFiles].filter((f) => /Skill[\s.-]?Foundry/i.test(read(f)));
+check('user docs and website do not advertise Skill Foundry yet', !foundryLeaks.length, foundryLeaks.join(', '));
 const personal = scan.filter((f) => /[\w.+-]+@(gmail|yahoo|outlook|hotmail)\.com|try again at \w+ \d|test account hit/i.test(fs.readFileSync(path.join(REPO, f), 'utf8')));
 check('no personal account details (emails, quota dates)', !personal.length, personal.join('\n'));
 const unproven = Object.entries(cfg.profiles).filter(([, p]) => p.verified === true && !/verif|tested|passed/i.test(String(p.note || ''))).map(([k]) => k);
@@ -154,23 +234,21 @@ check('installer copy of .gitignore matches .gitignore', !!giCopy && JSON.parse(
 // 4b. Docs state the truth: facts in the docs and website copy are compared with the source of truth
 console.log('\nDocs match the source of truth');
 {
-  const team = JSON.parse(read('.harness/team.json'));
-  const roleNames = fs.readdirSync(path.join(REPO, '.harness', 'roles')).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(read(`.harness/roles/${f}`)).name);
   const facts = {
-    leads: team.members.filter((m) => m.level === 'lead').map((m) => m.id),
+    leads: leadIds,
     roles: roleNames,
+    skills: skillNames,
+    allowedPaths: charterAllowed,
     version: pkg.version,
     agentCount: fs.readdirSync(path.join(REPO, '.claude', 'agents')).filter((f) => f.endsWith('.md')).length,
   };
-  const listTs = (d) => fs.existsSync(path.join(REPO, d)) ? fs.readdirSync(path.join(REPO, d)).filter((f) => /\.tsx?$/.test(f)).map((f) => `${d}/${f}`) : [];
-  const siteFiles = ['website/src/data/i18n.ts', 'website/src/site.ts', ...listTs('website/src/components'), ...listTs('website/src/lib')].filter((f) => fs.existsSync(path.join(REPO, f)));
   const driftFiles = [...docFiles, ...siteFiles];
   const drift = [];
   for (const f of driftFiles) {
     const testCounts = f === 'README.md' || f.startsWith('website/');
     for (const d of checkDoc(read(f), facts, { testCounts })) drift.push(`${f}:${d.line}: [${d.rule}] ${d.msg}`);
   }
-  check(`docs, README and website copy agree with team.json (${facts.leads.length} leads), .harness/roles, package.json ${facts.version}`, !drift.length, drift.join('\n'));
+  check(`docs, README and website copy agree with team.json (${facts.leads.length} leads), roles (${facts.roles.length}), skills (${facts.skills.length}), charter, and package.json ${facts.version}`, !drift.length, drift.join('\n'));
 }
 // 5. Website (optional)
 if (process.argv.includes('--site')) {

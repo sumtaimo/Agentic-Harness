@@ -4456,15 +4456,24 @@ await test('v1.0.19 daemon.mjs + dispatch.mjs: injects [TWO-PHASE ROOT-CAUSE DIR
   assert(normJob.visibleRunId === normId && normJob.bugfix === undefined, `unexpected bugfix flag on non-bugfix job: ${JSON.stringify(normJob)}`);
 });
 
-await test('docs-drift guard catches stale lead rosters, wrong lead counts, unknown roles, stale current versions, and hard-coded test counts while honoring opt-out and valid pair phrases', async () => {
+await test('docs-drift guard catches stale lead rosters (incl. tree diagrams), wrong lead counts, unknown roles, stale current versions, partial skill rosters, stale charter allowedPaths, and hard-coded test counts while honoring opt-out and valid pair phrases', async () => {
   const drift = await import(pathToFileURL(path.join(REPO, 'test', 'lib', 'docs-drift.mjs')).href);
-  const facts = { leads: ['lead-ba', 'lead-dev', 'lead-qa', 'lead-ux'], roles: ['PO_ARCHITECT', 'BA_ANALYST', 'DEV_ENGINEER', 'QA_AUDITOR', 'UX_DESIGNER', 'REVIEWER', 'SECURITY', 'COORDINATOR'], version: '1.0.20', agentCount: 6 };
+  const facts = {
+    leads: ['lead-ba', 'lead-dev', 'lead-qa', 'lead-ux'],
+    roles: ['PO_ARCHITECT', 'BA_ANALYST', 'DEV_ENGINEER', 'QA_AUDITOR', 'UX_DESIGNER', 'REVIEWER', 'SECURITY', 'COORDINATOR'],
+    skills: ['api-craft', 'code-craft', 'security-guard', 'spec-writer', 'test-champion', 'ui-craft'],
+    allowedPaths: ['src/**', 'docs/**', 'tests/**', 'test/**', '__tests__/**'],
+    version: '1.0.20',
+    agentCount: 6,
+  };
 
   assert(drift.checkDoc('Orchestrator → Leads (BA, DEV, QA)', facts).some((d) => d.rule === 'abbrev-roster'), 'must flag BA/DEV/QA subset');
   assert(drift.checkDoc('Orchestrator → Leads (BA, DEV, QA, UX)', facts).length === 0, 'full BA/DEV/QA/UX must pass');
 
   assert(drift.checkDoc('Agents: lead-ba, lead-dev, lead-qa.', facts).some((d) => d.rule === 'lead-roster'), 'must flag partial lead roster');
   assert(drift.checkDoc('Agents: lead-ba, lead-dev, lead-qa, lead-ux.', facts).length === 0, 'full 4-lead roster must pass');
+  assert(drift.checkDoc('L1 orchestrator\n├─ L2 lead-ba\n├─ L2 lead-dev\n└─ L2 lead-qa', facts).some((d) => d.rule === 'lead-roster'), 'must flag tree diagram omitting a lead');
+  assert(drift.checkDoc('L1 orchestrator\n├─ L2 lead-ba\n├─ L2 lead-dev\n├─ L2 lead-ux\n└─ L2 lead-qa', facts).length === 0, 'full 4-lead tree diagram must pass');
   assert(drift.checkDoc('<!-- docs-drift:ignore -->\nAgents: lead-dev, lead-qa.', facts).length === 0, 'ignore marker must exempt subset line');
   assert(drift.checkDoc("const rows = [\n  { who: 'lead-dev', a: 1 },\n  { who: 'lead-qa', b: 2 },\n];", facts).length === 0, 'separate TS object literals must not merge across }, boundaries');
 
@@ -4478,6 +4487,15 @@ await test('docs-drift guard catches stale lead rosters, wrong lead counts, unkn
   assert(drift.checkDoc('The current version is v1.0.5.', facts).some((d) => d.rule === 'version'), 'must flag stale current version');
   assert(drift.checkDoc('The current version is v1.0.20.', facts).length === 0, 'matching version must pass');
   assert(drift.checkDoc('On 2026-11-18, v1.0.6 through v1.0.17 were verified.', facts).length === 0, 'dated historical notes must pass');
+
+  assert(drift.checkDoc('Skills:\n- code-craft\n- security-guard\n- test-champion\n- api-craft\n- spec-writer', facts).some((d) => d.rule === 'skill-roster'), 'must flag partial skill list missing ui-craft');
+  assert(drift.checkDoc('Skills:\n- code-craft\n- security-guard\n- test-champion\n- api-craft\n- spec-writer\n- ui-craft', facts).length === 0, 'full 6-skill list must pass');
+  assert(drift.checkDoc('Use code-craft with test-champion for JS changes.', facts).length === 0, 'mentioning 1-2 skills in prose must not false-positive');
+  assert(drift.checkDoc('<!-- docs-drift:ignore -->\n- code-craft\n- security-guard\n- test-champion', facts).length === 0, 'ignore marker above block must exempt partial skill list');
+
+  assert(drift.checkDoc('- allowedPaths: src/**, docs/**, tests/**, test/**', facts).some((d) => d.rule === 'charter-paths'), 'must flag stale charter allowedPaths missing __tests__/**');
+  assert(drift.checkDoc('- allowedPaths: src/**, docs/**, tests/**, test/**, __tests__/**', facts).length === 0, 'complete charter allowedPaths must pass');
+  assert(drift.checkDoc('Policy bullets include allowedPaths and forbiddenPaths.', facts).length === 0, 'prose mentioning allowedPaths must not false-positive');
 
   assert(drift.checkDoc('All 18 generated QA tests passed.', facts, { testCounts: true }).some((d) => d.rule === 'test-count'), 'must flag hard-coded test count when enabled');
   assert(drift.checkDoc('The entire generated QA test suite passed.', facts, { testCounts: true }).length === 0, 'number-free wording must pass');

@@ -311,7 +311,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/ui.mjs` | read-only local web dashboard on `127.0.0.1:4173` (`npm run ui`, `--port <n>`, `--no-open`; status, backlog, quota, visible runs, sessions, logs) |
 | `.harness/hook-session.mjs` | prints harness state at session start (`--brief`: 4–8 line read-only summary for any editor/shell) |
 | `.vscode/tasks.json` | buttons for the user (Run Task menu) |
-| `.claude/settings.json` · `commands/harness/*.md` | Claude Code permission rules + start-up hook · `/harness:run`, `:status`, `:tick`, `:doctor`, `:teach` (the user must trust the folder once for the rules to apply) |
+| `.claude/settings.json` · `commands/harness/*.md` | Claude Code permission rules + start-up hook · `/harness:run`, `/harness:auto`, `/harness:sessions`, `/harness:status`, `/harness:tick`, `/harness:team`, `/harness:doctor`, `/harness:teach` (the user must trust the folder once for the rules to apply) |
 | `test/run-tests.mjs` · `test/live-e2e.mjs` | free mock-engine tests · opt-in real-agent test (`npm run test:live`) |
 
 Engines marked `"verified": false` in `config.json` have command-line flags that were not tested

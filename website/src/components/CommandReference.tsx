@@ -19,6 +19,7 @@ const COMMANDS: Command[] = [
   { cmd: 'npm run ui', where: 'terminal', key: 'ui' },
   { cmd: 'node .harness/hook-session.mjs --brief', where: 'terminal', key: 'brief' },
   { cmd: 'node .harness/visible.mjs status', where: 'terminal', key: 'visibleStatus' },
+  { cmd: 'node .harness/visible.mjs brief --bugfix --goal "<bug>"', where: 'terminal', key: 'bugfixBrief' },
   { cmd: 'node .harness/visible.mjs handoff', where: 'terminal', key: 'visibleHandoff' },
   { cmd: 'node .harness/dispatch.mjs --resume-visible --wait', where: 'terminal', key: 'resumeVisible' },
   { cmd: 'node .harness/dispatch.mjs --goal "<goal>" --wait', where: 'terminal', key: 'direct' },
@@ -43,6 +44,7 @@ const COMMANDS: Command[] = [
   { cmd: 'node .harness/doctor.mjs', where: 'terminal', key: 'doctorCli' },
   { cmd: 'node .harness/status.mjs --log 15', where: 'terminal', key: 'statusCli' },
   { cmd: 'node .harness/memory.mjs remember "<rule>"', where: 'terminal', key: 'remember' },
+  { cmd: 'npm run audit', where: 'terminal', key: 'auditCli' },
   { cmd: 'npx github:sumtaimo/Agentic-Harness#release --reset', where: 'terminal', key: 'reset' },
 ];
 
