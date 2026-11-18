@@ -4077,5 +4077,82 @@ await test('doctor reads the pointer field engine: optional (a note, the skill h
   assert(!/UI file\(s\)/.test(out3), `skill preview cover.svg inside .claude/ triggered browser UI check:\n${out3}`);
 });
 
+await test('Skill Foundry audit B1–B11: missing memory files, SessionStart hook upgrade, empty allowedTools guard, glob targets in insideTargets/inScope, QA node --test, --tick exit code, --priority 0, API key notice', async () => {
+  const d = sandbox();
+  // B1: missing profile.md and lessons.md are reported as notes, never "profile.md is filled in"
+  fs.rmSync(path.join(d, '.harness', 'memory', 'profile.md'), { force: true });
+  fs.rmSync(path.join(d, '.harness', 'memory', 'lessons.md'), { force: true });
+  const docOut = node(d, ['.harness/doctor.mjs'], { ANTHROPIC_API_KEY: 'sk-test-123' }).stdout;
+  assert(/memory\/profile\.md is missing or empty/.test(docOut) && !/memory\/profile\.md is filled in/.test(docOut), docOut);
+  assert(/memory\/lessons\.md is missing/.test(docOut), docOut);
+  // B11: API key pre-flight notice in doctor.mjs and dispatch.mjs
+  assert(/Note: Paid API key is active in shell env/.test(docOut), 'doctor missing API key notice');
+  const hkBrief = node(d, ['.harness/hook-session.mjs', '--brief', '--no-fetch']).stdout;
+  const hkFull = node(d, ['.harness/hook-session.mjs', '--no-fetch']).stdout;
+  const stJson = JSON.parse(node(d, ['.harness/start.mjs', '--json']).stdout);
+  assert(/profile\.md incomplete/.test(hkBrief) && /profile\.md is not filled in yet/.test(hkFull) && stJson.warnings.profileIncomplete === true, 'missing profile.md not flagged incomplete');
+
+  // B4: .claude/settings.json hook command has no $CLAUDE_PROJECT_DIR, and install.mjs upgrades legacy hook in place
+  const pHook = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-b4-'));
+  fs.mkdirSync(path.join(pHook, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(pHook, '.claude', 'settings.json'), JSON.stringify({
+    hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'node "$CLAUDE_PROJECT_DIR/.harness/hook-session.mjs"' }] }] }
+  }));
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), pHook, '--no-auto-assign', '--no-skills'], { encoding: 'utf8', env: { ...env, HARNESS_OFFLINE: '1' } });
+  const upgradedHook = json(path.join(pHook, '.claude', 'settings.json')).hooks.SessionStart;
+  fs.rmSync(pHook, { recursive: true, force: true });
+  assert(upgradedHook.length === 1 && upgradedHook[0].hooks[0].command === 'node .harness/hook-session.mjs', JSON.stringify(upgradedHook));
+
+  // B5: empty allowedTools: [] on a role restricts tools to Read instead of popping --allowedTools
+  const dEmptyRole = sandbox();
+  fs.writeFileSync(path.join(dEmptyRole, '.harness', 'roles', 'zero.json'), JSON.stringify({ name: 'ZERO_ROLE', allowedTools: [], writablePaths: ['src/**'] }));
+  drop(dEmptyRole, { id: 'empty-tools', title: 't', verifyCmd: PASS, subtasks: [{ id: 'wz', role: 'ZERO_ROLE', targetFiles: ['src/z.js'], prompt: 'WRITE src/z.js ok' }] });
+  runOnce(dEmptyRole);
+  assert(argsOf(dEmptyRole, 'wz').includes('ALLOWED=Read'), `empty allowedTools should restrict to Read, got: ${JSON.stringify(argsOf(dEmptyRole, 'wz'))}`);
+
+  // B6: glob targets (src/**, src/**/*.css) work in visible.mjs (validateDelegation + insideTargets) and daemon.mjs
+  const dGlob = sandbox();
+  const vId = runIdOf(vis(dGlob, 'brief', '--goal', 'Glob test', '--check', existsCheck('src/sub/a.js', 'src/styles/app.css')));
+  const aGlob = vis(dGlob, 'assign', vId, deleg([
+    { lead: 'lead-dev', goal: 'write js', files: ['src/**'] },
+    { lead: 'lead-ux', goal: 'write css', files: ['src/**/*.css'] }
+  ]));
+  assert(aGlob.status === 0, aGlob.stderr + aGlob.stdout);
+  agentsWrite(dGlob, [['src/sub/a.js', '1'], ['src/styles/app.css', 'body{}']]);
+  const vGlob = vis(dGlob, 'verify', vId);
+  assert(vGlob.status === 0 && /PASSED ✔/.test(vGlob.stdout), vGlob.stdout + vGlob.stderr);
+  // B7: lead-dev (DEV_ENGINEER) allows node --test in its agent spec, while lead-qa (QA_AUDITOR) only says npm test
+  const leadDevMd = fs.readFileSync(path.join(REPO, '.claude', 'agents', 'lead-dev.md'), 'utf8');
+  const leadQaMd = fs.readFileSync(path.join(REPO, '.claude', 'agents', 'lead-qa.md'), 'utf8');
+  assert(leadDevMd.includes('`npm test` or `node --test`') && !leadQaMd.includes('`node --test`'), 'B7 QA vs DEV test prompt mismatch');
+
+  // B3: useGitWorktrees links node_modules into detached worker worktree and cleans up
+  const { d: dWt, g: gWt } = gitSandbox();
+  { const cf = path.join(dWt, '.harness', 'config.json'); const c = json(cf); c.useGitWorktrees = true; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  fs.mkdirSync(path.join(dWt, 'node_modules', 'fake-pkg'), { recursive: true });
+  fs.writeFileSync(path.join(dWt, 'node_modules', 'fake-pkg', 'index.js'), 'module.exports = 42;');
+  gWt('add', '-A'); gWt('commit', '-q', '-m', 'init');
+  const dispNotice = node(dWt, ['.harness/dispatch.mjs', '--goal', 'WRITE src/wt.js ok', '--files', 'src/wt.js', '--check', existsCheck('src/wt.js'), '--wait'], { OPENAI_API_KEY: 'sk-openai-123' });
+  assert(dispNotice.status === 0 && /Note: Paid API key is active in shell env/.test(dispNotice.stdout), dispNotice.stdout + dispNotice.stderr);
+
+  // B8 & B10: backlog.mjs --priority 0 is preserved as 0 (not 5), and daemon.mjs --tick exits 1 when the promoted task fails
+  const dTick = sandbox();
+  setCharter(dTick, { autonomous: 'on' });
+  assert(node(dTick, ['.harness/backlog.mjs', 'add', 'Zero prio task', '--priority', '0', '--files', 'src/f.js', '--role', 'DEV_ENGINEER', '--check', FAIL_VERIFY, '--ready']).status === 0, 'backlog add priority 0');
+  const addedItem = backlog(dTick)[0];
+  assert(addedItem.priority === 0, `expected priority 0, got ${addedItem.priority}`);
+  const rTickFail = tick(dTick);
+  assert(rTickFail.status === 1 && byId(dTick, addedItem.id).status === 'BLOCKED', `expected --tick exit 1 on failed task, got ${rTickFail.status}:\n${rTickFail.stdout}`);
+
+  // B9: halted visible run that auto-rolled back does not tell the user to run rollback on a deleted baseline
+  const dHalt = sandbox();
+  const hId = runIdOf(vis(dHalt, 'brief', '--goal', 'Halt rollback msg', '--check', FAIL_VERIFY));
+  vis(dHalt, 'assign', hId, deleg([{ lead: 'lead-dev', goal: 'x', files: ['src/'] }]));
+  agentsWrite(dHalt, [['src/x.js', 'bad']]);
+  let lastV;
+  for (let i = 0; i < 3; i++) lastV = vis(dHalt, 'verify', hId);
+  assert(lastV.status === 1 && /Files were restored to how they were before the run/.test(lastV.stdout) && !/To undo by hand: node \.harness\/visible\.mjs rollback/.test(lastV.stdout), lastV.stdout);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

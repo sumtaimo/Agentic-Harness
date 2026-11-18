@@ -158,7 +158,7 @@ try {
     if (stagingLeftovers.length) notes.push(`staging leftovers (${stagingLeftovers.slice(0, 3).join(', ')})`);
     if (staleInProgress.length) notes.push(`stale IN_PROGRESS (${staleInProgress.slice(0, 3).join(', ')})`);
     if (newestStopped && newestOpen) notes.push(`stopped run ${newestStopped.id} awaits decision`);
-    if (/^- .*\(fill me/im.test(profile)) notes.push('profile.md incomplete');
+    if (!fs.existsSync(FILES.profile) || !profile.trim() || /^- .*\(fill me/im.test(profile)) notes.push('profile.md incomplete');
     if (notes.length) briefLines.push(`! Notice: ${notes.join(' | ')}`);
 
     for (const l of foundryLines) briefLines.push(`! ${l}`);
@@ -175,7 +175,7 @@ try {
     `- Memory: ${taughtCount} taught rule(s) (already loaded via CLAUDE.md)`
   ];
   if (configError) lines.push(`- WARNING: .harness/config.json is invalid (${configError}); fix its JSON syntax before running tasks.`);
-  if (/^- .*\(fill me/im.test(profile)) lines.push('- profile.md is not filled in yet: ask the user a few simple questions and fill it (see AGENTS.md section 1).');
+  if (!fs.existsSync(FILES.profile) || !profile.trim() || /^- .*\(fill me/im.test(profile)) lines.push('- profile.md is not filled in yet: ask the user a few simple questions and fill it (see AGENTS.md section 1).');
 
   // Editor workflow state: unfinished runs need a decision; AUTO MODE starts the workflow by itself.
   if (newestOpen) {

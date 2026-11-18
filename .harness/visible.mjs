@@ -99,7 +99,7 @@ function leadPrompt(run, lead, a, roles, skills) {
     `\nTask overall: ${run.goal}`,
     sk.length ? `\nMandatory skill rules for you (use only the skills listed here; run a skill's engine/*.mjs script only if your role may run node${runsNode(role) ? ', which yours may' : ', which yours may not: report that step for DEV_ENGINEER instead'}):\n${sk.map((s) => `### ${s.name}\n${s.body}`).join('\n\n')}` : '',
     memory ? `\nRules the user taught (follow them):\n${memory}` : '',
-    (role.allowedTools || []).some((r) => /^Bash\((npm|node)/.test(r)) ? `\nYou may check your work with \`npm test\` or \`node --test\`${runsNode(role) ? `, and run ${ENGINE_SCRIPTS}` : ''}; do not run other commands.` : '\nYou have no shell; use the file tools only.',
+    (role.allowedTools || []).some((r) => /^Bash\((npm|node)/.test(r)) ? `\nYou may check your work with \`npm test\`${runsNode(role) ? ` or \`node --test\`, and run ${ENGINE_SCRIPTS}` : ''}; do not run other commands.` : '\nYou have no shell; use the file tools only.',
     '\nWhen done, reply with a short report (at most 5 lines): files changed, what you did, what you checked, anything unresolved. Do not claim you tested something you did not run.'
   ].filter(Boolean).join('\n');
 }
@@ -135,7 +135,8 @@ function reportText(run, v) {
   L.push('', `Cycle ${run.cycles}/${config.maxCycles ?? 3}.`);
   if (v.status === 'PASSED') L.push('', 'Next for you: review the changes (git diff) and commit them when you are happy. Cost: not measured in the editor workflow (see the agent panel for tokens).');
   else if (v.status === 'FAILED') L.push('', `Next: send the failure to the responsible lead(s), then run: node .harness/visible.mjs verify ${run.id}`);
-  else L.push('', `Files were ${v.autoRolledBack ? 'restored to how they were before the run' : 'left as they are (no baseline copy)'}. Decide: fix the task, then run it again. To undo by hand: node .harness/visible.mjs rollback ${run.id}`);
+  else if (v.autoRolledBack) L.push('', 'Files were restored to how they were before the run. Decide: fix the task, then run it again.');
+  else L.push('', `Files were left as they are (${run.baseline?.rollbackAvailable ? 'some files could not be restored automatically' : 'no baseline copy'}). Decide: fix the task, then run it again.${run.baseline?.rollbackAvailable ? ` To undo by hand: node .harness/visible.mjs rollback ${run.id}` : ''}`);
   return L.join('\n');
 }
 
@@ -405,7 +406,10 @@ function verify() {
       if (!passed && (config.memory || {}).autoLessons !== false && !String(run.id).startsWith('V-test')) remember(`"${run.title}": editor run ${run.status} — ${(violations[0] || check.text.split('\n')[0]).replace(/\s+/g, ' ').slice(0, 200)}. Needs a human decision before retrying.`, FILES.autoLessons);
     } catch { /* memory is best effort */ }
   }
-  if (run.baseline.dir && (passed || halted) && fs.existsSync(path.join(ROOT, run.baseline.dir))) fs.rmSync(path.join(ROOT, run.baseline.dir), { recursive: true, force: true });
+  if (run.baseline.dir && (passed || (halted && autoRolledBack)) && fs.existsSync(path.join(ROOT, run.baseline.dir))) {
+    fs.rmSync(path.join(ROOT, run.baseline.dir), { recursive: true, force: true });
+    if (halted && autoRolledBack) { run.baseline.rollbackAvailable = false; saveRun(run); }
+  }
   console.log(text);
   process.exit(passed ? 0 : 1);
 }
@@ -448,7 +452,8 @@ function propose() {
         if (matchesAny(f, charter.forbiddenPaths)) throw new Error(`"${f}" is forbidden by the charter`);
         if (charter.allowedPaths.length && !withinAll(f, charter.allowedPaths)) throw new Error(`"${f}" is outside the charter's allowed paths`);
       }
-      added.push({ id: `AUTO-${stamp}-${i + 1}`, title: String(t.title).slice(0, 200), goal: t.goal || t.title, priority: Number(t.priority) || i + 1, status: 'READY', source: 'orchestrator', createdAt: new Date().toISOString(),
+      const prio = t.priority !== undefined && t.priority !== null && t.priority !== '' && Number.isFinite(Number(t.priority)) ? Number(t.priority) : i + 1;
+      added.push({ id: `AUTO-${stamp}-${i + 1}`, title: String(t.title).slice(0, 200), goal: t.goal || t.title, priority: prio, status: 'READY', source: 'orchestrator', createdAt: new Date().toISOString(),
         targetFiles: files, acceptanceCriteria: Array.isArray(t.acceptanceCriteria) ? t.acceptanceCriteria.map(String) : [], interfaceContract: typeof t.interfaceContract === 'string' ? t.interfaceContract : '',
         // an AI-suggested check is recorded only, never run (same rule as the headless controller)
         verifySuggestion: typeof t.verifySuggestion === 'string' ? t.verifySuggestion.slice(0, 300) : '' });

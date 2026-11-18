@@ -52,13 +52,15 @@ export function editorUsageKey(editor = 'claude-code', config = null) {
 }
 
 export const visibleRunDir = (id) => path.join(VISIBLE_DIR, String(id || ''));
-export const stripSlash = (f) => String(f).replace(/\/$/, '');
+export const stripSlash = (f) => String(f).replace(/\/$/, '').replace(/\/\*\*$/, '');
 const normRel = (f) => String(f || '').replace(/\\/g, '/').replace(/^\.\//, '');
 export const insideTargets = (file, targets) => {
   const fn = normRel(file);
   return (targets || []).some((t) => {
-    const n = stripSlash(normRel(t));
-    return fn === n || fn.startsWith(`${n}/`);
+    const raw = normRel(t);
+    const n = stripSlash(raw);
+    if (fn === n || fn.startsWith(`${n}/`)) return true;
+    return /[*?]/.test(raw) && matchesAny(fn, [raw]);
   });
 };
 

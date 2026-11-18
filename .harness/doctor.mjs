@@ -78,6 +78,9 @@ try {
   if (waiting.length) note(`No AI tool is allowed yet. Installed and waiting for your OK: ${waiting.join(', ')}. Allow one (it spends your own quota):  node .harness/engines.mjs`);
   else { bad(`${e.message} Install one engine, e.g. Claude Code: npm install -g @anthropic-ai/claude-code  then run  claude  once to log in, then  node .harness/engines.mjs  to allow it.`); problems++; }
 }
+if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY) {
+  note('Note: Paid API key is active in shell env—unset it if you intend to use your personal subscription');
+}
 
 // Model-name drift: Antigravity uses exact model IDs (no aliases). If Google renames one, every run on that tier fails;
 // catch it here by comparing config.json with what 'agy models' lists now (only when agy is installed and allowed).
@@ -266,7 +269,10 @@ console.log('\nGit integration branch (where autonomous work lands)');
 
 console.log('\nMemory');
 const profile = fs.existsSync(FILES.profile) ? fs.readFileSync(FILES.profile, 'utf8') : '';
-/^- .*\(fill me/im.test(profile) ? note('memory/profile.md still has "(fill me)" placeholders. Optional: tell your AI "Read AGENTS.md and fill in my profile". The shared template keeps it generic on purpose.') : ok('memory/profile.md is filled in');
+if (!fs.existsSync(FILES.profile) || !profile.trim()) note('memory/profile.md is missing or empty. Run node install.mjs <project> or create .harness/memory/profile.md');
+else if (/^- .*\(fill me/im.test(profile)) note('memory/profile.md still has "(fill me)" placeholders. Optional: tell your AI "Read AGENTS.md and fill in my profile". The shared template keeps it generic on purpose.');
+else ok('memory/profile.md is filled in');
+if (!fs.existsSync(FILES.lessons)) note('memory/lessons.md is missing');
 ok(`${listLessons(FILES.lessons).length} taught rule(s), ${listLessons(FILES.autoLessons).length} auto lesson(s)`);
 
 console.log('\nDaemon');

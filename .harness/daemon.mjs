@@ -47,7 +47,7 @@ import {
 } from './lib/governance.mjs';
 import {
   isRepoWithCommits, branchSha, ensureBranch, protectedShas, ensureWorkerWorktree, commitScoped,
-  buildCandidate, advanceBranch, removeWorktree, deleteBranch, safeRef
+  buildCandidate, advanceBranch, removeWorktree, deleteBranch, safeRef, linkShared, unlinkShared
 } from './lib/integration.mjs';
 import { syncVisibleRunAfterDaemon } from './lib/handoff.mjs';
 
@@ -191,7 +191,11 @@ const fatal = (msg) => Object.assign(new Error(msg), { fatal: true });
 const liveOn = () => (process.env.HARNESS_LIVE === '1' ? true : process.env.HARNESS_LIVE === '0' ? false : config.liveAgentOutput !== false);
 
 function buildArgs(profile, prompt, allowedTools, disallowedTools = [], stream = false, model = null) {
-  const allowed = (allowedTools || profile.allowedTools || []).join(',');
+  // An explicitly passed empty array [] (e.g. a role with allowedTools: []) restricts tools to Read instead of popping --allowedTools (unrestricted).
+  const effAllowed = Array.isArray(allowedTools)
+    ? (allowedTools.length ? allowedTools : ((profile.args || []).some((a) => a.includes('{allowedTools}')) ? ['Read'] : []))
+    : (profile.allowedTools || []);
+  const allowed = effAllowed.join(',');
   const disallowed = (disallowedTools || []).join(',');
   const via = profile.promptVia || ((profile.args || []).includes('{prompt}') ? 'arg' : 'stdin');
   const args = [];
@@ -363,6 +367,9 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
     const done = (fn, v) => { if (!settled) { settled = true; clearTimeout(timer); fn(v); } };
     const ms = timeoutMs || config.workerTimeoutMs || 300000;
     const timer = setTimeout(() => {
+      if (process.platform === 'win32' && child.pid) {
+        try { spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => {}); } catch { /* ignore */ }
+      }
       child.kill('SIGTERM');
       setTimeout(() => child.kill('SIGKILL'), 5000).unref();
       done(reject, new Error(`${id} (${profile.name}) timed out after ${ms}ms`));
@@ -386,7 +393,7 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
     child.on('error', (err) => done(reject, Object.assign(new Error(`Failed to start '${profile.binary}': ${err.message}`), { fatal: err.code === 'ENOENT' })));
     child.on('close', (code) => {
       let usage = null; try { usage = summarizeOutput(stdout); } catch { /* error output: no usage */ }
-      logTelemetry('AGENT_USAGE', `${id}: ${profile.name} ${pick.model || 'default'} [${pick.tier}] ${code === 0 ? 'ok' : `exit ${code}`}`, { worker: id, engine: profile.name, model: pick.model, tier: pick.tier, ok: code === 0, tokens: usage?.tokens ?? null, usd: usage?.cost || 0, ms: Date.now() - startedAt });
+      logTelemetry('AGENT_USAGE', `${id}: ${profile.name} ${pick.model || 'default'} [${pick.tier}] ${code === 0 ? 'ok' : `exit ${code}`}`, { worker: id, engine: profile.name, model: pick.model, tier: pick.tier, ok: code === 0, tokens: usage?.tokens ?? null, usd: usage?.cost ?? null, ms: Date.now() - startedAt });
       if (live && pending.trim() && !stream) livePrint(id, oneLine(pending, 200));
       if (code !== 0) {
         // The engine's own error (e.g. Claude's JSON {"is_error":true,"result":"You've hit your limit"}) is on stdout;
@@ -439,9 +446,9 @@ function summarizeOutput(stdout) {
     const denials = (j.permission_denials || []).map((d) => ({ tool: d.tool_name, target: d.tool_input?.file_path || d.tool_input?.command || '' }));
     const u = j.usage || {};
     const tokens = ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'].reduce((n, k) => n + (Number(u[k]) || 0), 0) || null;
-    return { text: String(j.result), denials, cost: Number(j.total_cost_usd) || 0, tokens };
+    return { text: String(j.result), denials, cost: typeof j.total_cost_usd === 'number' ? j.total_cost_usd : 0, tokens };
   }
-  return { text, denials: [], cost: 0, tokens: null };
+  return { text, denials: [], cost: null, tokens: null };
 }
 
 // ── cost accounting + budget guardrails (deterministic: the controller counts, the agent cannot) ──
@@ -561,10 +568,14 @@ async function isGitRepo(root = ROOT) {
   try { await execFileAsync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: root }); return true; } catch { return false; }
 }
 
-const inScope = (file, targets) => targets.length === 0 || targets.some((t) => {
-  const n = t.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
-  return file === n || file.startsWith(n + '/');
-});
+const inScope = (file, targets) => {
+  const fn = String(file || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  return targets.length === 0 || targets.some((t) => {
+    const raw = String(t).replace(/\\/g, '/').replace(/^\.\//, '');
+    const n = raw.replace(/\/$/, '').replace(/\/\*\*$/, '');
+    return fn === n || fn.startsWith(n + '/') || (/[*?]/.test(raw) && matchesAny(fn, [raw]));
+  });
+};
 
 /** Copy the worker's changes from its worktree back to the target folder — only files in scope. */
 async function syncWorktree(wtPath, sub, destRoot = ROOT) {
@@ -708,7 +719,7 @@ function validateSubtasks(subtasks, { source = 'task', allowed = [], requireScop
       throw fatal(`Swarm Lock Collision: ${source} worker '${sub.id}' has no targetFiles, so it could touch any file. In a swarm every worker must own explicit files.`);
     }
     if (allowed.length) {
-      const outside = sub.targetFiles.filter((f) => !inScope(f.replace(/\/$/, ''), allowed));
+      const outside = sub.targetFiles.filter((f) => !inScope(f.replace(/\/$/, '').replace(/\/\*\*$/, ''), allowed));
       if (outside.length) throw fatal(`${source}: worker '${sub.id}' targets ${outside.join(', ')}, outside the allowed files (${allowed.join(', ')}).`);
     }
     if (gov) { // v2 governance: charter + role write-scopes
@@ -728,7 +739,7 @@ function validateSubtasks(subtasks, { source = 'task', allowed = [], requireScop
       }
     }
     for (const f of sub.targetFiles) {
-      const key = f.replace(/\/$/, '');
+      const key = f.replace(/\/$/, '').replace(/\/\*\*$/, '');
       for (const [other, by] of owner) {
         if (by !== sub.id && (key === other || key.startsWith(other + '/') || other.startsWith(key + '/'))) {
           throw fatal(`Swarm Lock Collision: ${source === 'task' ? '' : `${source} produced overlapping targetFiles — `}'${sub.id}' and '${by}' both claim '${key === other ? key : `${other}' / '${key}`}'. Plan rejected before any worker started.`);
@@ -837,7 +848,7 @@ async function aiDecompose(task, gov, workRoot = ROOT) {
 // deterministically (team.json guardrails, scopes, no overlaps, worker limits) before the next one starts, and
 // counts the cost of every agent against the budget. An invalid lead plan is escalated to the human.
 
-const stripSlash = (f) => String(f).replace(/\/$/, '');
+const stripSlash = (f) => String(f).replace(/\/$/, '').replace(/\/\*\*$/, '');
 const minutesToMs = (m, dflt) => (typeof m === 'number' && m > 0 ? Math.round(m * 60000) : dflt);
 
 async function hierDecompose(task, gov, workRoot = ROOT) {
@@ -1063,6 +1074,7 @@ async function runExecutorSwarm(plan, gitCtx = null) {
         workerCwd = w.path;
       } else if (useWorktrees) {
         await execFileAsync('git', ['worktree', 'add', '--detach', wtPath, 'HEAD'], { cwd: workRoot });
+        linkShared(wtPath, config.git?.linkIntoWorktrees || ['node_modules'], workRoot);
         workerCwd = wtPath;
       }
       const result = await runWorker(sub, workerCwd, plan.errorContext, { cycle: plan.cycle || 1, model: plan.model || null });
@@ -1088,7 +1100,10 @@ async function runExecutorSwarm(plan, gitCtx = null) {
       return result;
     } finally {
       for (const f of sub.targetFiles) activeFileLocks.delete(f);
-      if (useWorktrees && fs.existsSync(wtPath)) await execFileAsync('git', ['worktree', 'remove', '--force', wtPath], { cwd: workRoot }).catch(() => {});
+      if (useWorktrees && fs.existsSync(wtPath)) {
+        unlinkShared(wtPath, config.git?.linkIntoWorktrees || ['node_modules']);
+        await execFileAsync('git', ['worktree', 'remove', '--force', wtPath], { cwd: workRoot }).catch(() => {});
+      }
       writeState({ phase: '2_EXECUTOR_SWARM' });
     }
   });
@@ -1354,7 +1369,7 @@ async function drain() {
     draining = false;
     if (!lastFinished?.ok && lastFinished?.autonomous && !auto.enabled) refreshAutoStatus();
     if (auto.enabled) { refreshAutoStatus(); setTimeout(() => autonomousTick('queue-empty').catch((e) => logTelemetry('AUTO_ERROR', e.message)), 1000); }
-    if (!onceMode && !selfTestMode) setTimeout(() => !draining && !auto.ticking && writeState({ phase: 'IDLE_WATCHING', mode: 'SQUARE + SWARM', cycle: 0, taskId: null, taskTitle: '', planSummary: '-', currentTaskFile: null, workerSummary: 'Idle — waiting for the next task', activeLocks: [] }), 1500);
+    if (!onceMode && !selfTestMode) setTimeout(() => !draining && !auto.ticking && lastFinished?.ok !== false && writeState({ phase: 'IDLE_WATCHING', mode: 'SQUARE + SWARM', cycle: 0, taskId: null, taskTitle: '', planSummary: '-', currentTaskFile: null, workerSummary: 'Idle — waiting for the next task', activeLocks: [] }), 1500);
   }
 }
 
@@ -1404,11 +1419,9 @@ async function projectView() {
   await removeWorktree(dir, ROOT);
   fs.rmSync(dir, { recursive: true, force: true });
   await execFileAsync('git', ['worktree', 'add', '-q', '--detach', dir, tip], { cwd: ROOT });
-  for (const n of g.linkIntoWorktrees || ['node_modules']) {
-    const src = path.join(ROOT, n); const dest = path.join(dir, n);
-    if (fs.existsSync(src) && !fs.existsSync(dest)) { try { fs.symlinkSync(src, dest, 'dir'); } catch { /* best effort */ } }
-  }
-  return { dir, tip, cleanup: async () => { await removeWorktree(dir, ROOT); fs.rmSync(dir, { recursive: true, force: true }); } };
+  const sharedLinks = g.linkIntoWorktrees || ['node_modules'];
+  linkShared(dir, sharedLinks, ROOT);
+  return { dir, tip, cleanup: async () => { unlinkShared(dir, sharedLinks); await removeWorktree(dir, ROOT); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 
 /** PO_ARCHITECT: read charter + repo + backlog, propose ≤ max tasks, validate, add them as READY. */
@@ -1462,8 +1475,9 @@ async function poGenerate(gov, max) {
   for (const [i, t] of parsed.tasks.slice(0, max).entries()) {
     const subs = Array.isArray(t.subtasks) && t.subtasks.length ? t.subtasks
       : [{ id: 'worker-main', role: t.role, skills: t.skills, targetFiles: t.targetFiles || [], prompt: t.goal || t.title }];
+    const prio = t.priority !== undefined && t.priority !== null && t.priority !== '' && Number.isFinite(Number(t.priority)) ? Number(t.priority) : i + 1;
     const item = {
-      id: `AUTO-${stamp}-${i + 1}`, title: String(t.title || t.goal || '').slice(0, 200), priority: Number(t.priority) || i + 1,
+      id: `AUTO-${stamp}-${i + 1}`, title: String(t.title || t.goal || '').slice(0, 200), priority: prio,
       status: 'READY', source: 'PO_ARCHITECT', createdAt: new Date().toISOString(), goal: t.goal || t.title,
       acceptanceCriteria: Array.isArray(t.acceptanceCriteria) ? t.acceptanceCriteria.map(String) : [],
       interfaceContract: typeof t.interfaceContract === 'string' ? t.interfaceContract : '',
@@ -1675,6 +1689,7 @@ if (selfTestMode) {
       while (draining || queue.length) await new Promise((res) => setTimeout(res, 100));
       const c = backlogCounts(readBacklog());
       console.log(`Autonomous tick: ${r} — ${auto.lastResult}. Backlog now: READY ${c.READY}, IN_PROGRESS ${c.IN_PROGRESS}, DONE ${c.DONE}, BLOCKED ${c.BLOCKED}.${auto.lastJobId ? `\nJOB_ID=${auto.lastJobId}` : ''}`);
+      if (r === 'dispatched' && lastFinished && !lastFinished.ok) process.exit(1);
     }
     process.exit(0);
   }

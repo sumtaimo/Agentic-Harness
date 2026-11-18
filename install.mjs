@@ -243,6 +243,11 @@ else {
         mine.hooks = mine.hooks || {};
         mine.hooks.SessionStart = mine.hooks.SessionStart || [];
         const cmd = (srcSet.hooks.SessionStart[0].hooks[0] || {}).command;
+        for (const entry of mine.hooks.SessionStart) {
+          for (const h of entry?.hooks || []) {
+            if (typeof h?.command === 'string' && h.command.includes('$CLAUDE_PROJECT_DIR/.harness/hook-session.mjs')) h.command = cmd;
+          }
+        }
         const present = JSON.stringify(mine.hooks.SessionStart).includes('hook-session.mjs');
         if (!present) mine.hooks.SessionStart.push(srcSet.hooks.SessionStart[0]);
         fs.writeFileSync(setPath, JSON.stringify(mine, null, 2) + '\n');

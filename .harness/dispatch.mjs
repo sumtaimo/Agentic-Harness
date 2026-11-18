@@ -273,6 +273,9 @@ else {
 for (const s of subtasks) if (engine) s.engine = engine;
 const usePlanner = autoPlan && subtasks.length === 0 && !hierarchy;
 
+if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY) {
+  console.log('Note: Paid API key is active in shell env—unset it if you intend to use your personal subscription');
+}
 // ── AI tools: a tool that is installed and logged in is never used silently; the person allows it once ──
 {
   const team = hierarchy ? (readJsonSafe(path.join(ROOT, '.harness', 'team.json'), {}).members || []).map((m) => m.engine).filter((e) => e && e !== 'auto') : [];
@@ -370,13 +373,17 @@ if (branch) console.log(`Git: result is merged into '${branch}' only if the chec
 if (!wait) process.exit(0);
 
 // ── --wait: follow the job to the end ──
-const daemonPid = (() => {
+const daemonAlive = () => {
   try { const pid = Number(fs.readFileSync(path.join(ROOT, '.harness', 'daemon.pid'), 'utf8')); process.kill(pid, 0); return pid; } catch { return 0; }
-})();
-if (!daemonPid) {
-  console.log('No background daemon running — processing the job in this terminal…');
+};
+const runOnceInline = async () => {
   const child = spawn(process.execPath, [path.join(ROOT, '.harness', 'daemon.mjs'), '--once'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, HARNESS_SILENT: process.env.HARNESS_SILENT ?? '1' } });
   await new Promise((r) => child.on('close', r));
+};
+const daemonPid = daemonAlive();
+if (!daemonPid) {
+  console.log('No background daemon running — processing the job in this terminal…');
+  await runOnceInline();
 } else {
   console.log(`Background daemon (PID ${daemonPid}) is working on it — watch the Harness panel. Waiting…`);
 }
@@ -394,6 +401,11 @@ for (;;) {
     const body = readJsonSafe(path.join(DIRS.failed, failed));
     console.log(`RESULT: NOT DONE ✖  ${body.haltReason || ''}\nSession note: ${note}\n${aiLine}`);
     process.exit(1);
+  }
+  if (!daemonAlive() && fs.existsSync(inboxPath)) {
+    console.log('Background daemon stopped before processing this job — processing it in this terminal…');
+    await runOnceInline();
+    continue;
   }
   await new Promise((r) => setTimeout(r, 1000));
 }

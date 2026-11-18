@@ -129,7 +129,10 @@ const READ_ONLY_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
 const baseTool = (rule) => String(rule).split('(')[0].trim();
 
 /** Turn "dir/" into "dir/**" for permission rules. */
-const toRulePath = (t) => (t.endsWith('/') ? `${t}**` : t);
+const toRulePath = (t) => {
+  const n = String(t).replace(/\\/g, '/');
+  return n.endsWith('/') ? `${n}**` : n;
+};
 
 /** The skill's tool list that applies to this role (its own override, else the default list). */
 export const skillToolsFor = (skill, roleName) => skill.toolsByRole?.[String(roleName).toUpperCase()] ?? skill.allowedTools ?? [];
@@ -428,8 +431,12 @@ export function applyEngineRouting(team, routing) {
  */
 export function validateDelegation(plan, { leads, delegable, userAllowed = [] }) {
   if (!plan || !Array.isArray(plan.assignments) || !plan.assignments.length) throw new Error('JSON has no "assignments" list.');
-  const strip = (f) => String(f).replace(/\/$/, '');
-  const inside = (file, targets) => targets.some((t) => { const n = strip(String(t).replace(/\\/g, '/').replace(/^\.\//, '')); return file === n || file.startsWith(`${n}/`); });
+  const strip = (f) => String(f).replace(/\/$/, '').replace(/\/\*\*$/, '');
+  const inside = (file, targets) => targets.some((t) => {
+    const raw = String(t).replace(/\\/g, '/').replace(/^\.\//, '');
+    const n = strip(raw);
+    return file === n || file.startsWith(`${n}/`) || (/[*?]/.test(raw) && matchesAny(file, [raw]));
+  });
   const seenLeads = new Set(); const claimed = [];
   for (const a of plan.assignments) {
     const lead = leads.find((l) => l.id === a.lead);
@@ -443,10 +450,13 @@ export function validateDelegation(plan, { leads, delegable, userAllowed = [] })
       if (!leadOwns(lead, f, leads)) throw new Error(`file "${f}" is outside lead "${lead.id}"'s scope (${lead.scope.join(', ')})${withinAll(f, lead.scope) ? '; a more specific scope of another lead owns it (e.g. test files belong to the QA lead)' : ''}.`);
       if (userAllowed.length && !inside(strip(f), userAllowed)) throw new Error(`file "${f}" is outside the files the user allowed (${userAllowed.join(', ')}).`);
       for (const [other, by] of claimed) {
-        if (by !== lead.id && (strip(f) === strip(other) || strip(f).startsWith(`${strip(other)}/`) || strip(other).startsWith(`${strip(f)}/`))) {
-          if (f.endsWith('/') !== other.endsWith('/')) {
-            const file = f.endsWith('/') ? other : f;
-            const dirLead = leads.find((l) => l.id === (f.endsWith('/') ? lead.id : by));
+        const fDir = f.endsWith('/') || f.endsWith('/**');
+        const otherDir = other.endsWith('/') || other.endsWith('/**');
+        const overlaps = strip(f) === strip(other) || strip(f).startsWith(`${strip(other)}/`) || strip(other).startsWith(`${strip(f)}/`) || ((/[*?]/.test(f) || /[*?]/.test(other)) && globsOverlap(f, other));
+        if (by !== lead.id && overlaps) {
+          if (fDir !== otherDir) {
+            const file = fDir ? other : f;
+            const dirLead = leads.find((l) => l.id === (fDir ? lead.id : by));
             if (dirLead && !leadOwns(dirLead, file, leads)) continue;
           }
           throw new Error(`Swarm Lock Collision: "${f}" (${lead.id}) overlaps "${other}" (${by}).`);
@@ -511,7 +521,7 @@ export function renderAgentFile(lead, role, team, config = (() => { try { return
     '- Change ONLY the files you were assigned. The controller compares every changed file against the assignments after you finish: anything outside your files is reverted and the run fails.',
     '- Follow the shared interface contract and acceptance criteria in your assignment exactly; other leads are building against them in parallel.',
     '- Never touch `.harness/`, `.claude/`, `.git/`, secrets or `.env*`. Never run git commands that change history or remotes, and never push.',
-    ...(tools.includes('Bash') ? [`- You may check your work with \`npm test\` or \`node --test\`${runsNode(role) ? ", and run " + ENGINE_SCRIPTS : ''}. Do not run other commands.`] : ['- You have no shell. Work with the file tools only.']),
+    ...(tools.includes('Bash') ? [`- You may check your work with \`npm test\`${runsNode(role) ? " or `node --test`, and run " + ENGINE_SCRIPTS : ''}. Do not run other commands.`] : ['- You have no shell. Work with the file tools only.']),
     '- Finish with a short report (at most 5 lines): files changed, what you did, what you checked, anything unresolved. Do not claim you tested something you did not run.',
     ''
   ].join('\n');

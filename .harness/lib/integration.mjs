@@ -69,6 +69,12 @@ export function linkShared(wtPath, names, root) {
   }
 }
 
+export function unlinkShared(wtPath, names) {
+  for (const n of names || []) {
+    try { fs.unlinkSync(path.join(wtPath, n)); } catch { /* not linked */ }
+  }
+}
+
 /** Snapshot of protected branch tips, to prove afterwards that nothing wrote to them. */
 export async function protectedShas(names, root) {
   const out = {};

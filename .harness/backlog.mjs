@@ -89,9 +89,11 @@ switch (cmd) {
     const title = positional[0] || flag('--goal');
     if (!title) { console.error('Usage: backlog.mjs add "Title" [--goal "…"] [--ready] …'); process.exit(1); }
     const b = readBacklog();
+    const pRaw = flag('--priority');
+    const priority = pRaw !== undefined && pRaw !== '' && Number.isFinite(Number(pRaw)) ? Number(pRaw) : 5;
     const item = {
       id: `B-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 5)}`,
-      title, goal: flag('--goal') || title, priority: Number(flag('--priority')) || 5,
+      title, goal: flag('--goal') || title, priority,
       status: has('--ready') || /^ready$/i.test(flag('--status') || '') ? 'READY' : 'BACKLOG', source: 'human', createdAt: new Date().toISOString()
     };
     const files = (flag('--files') || '').split(',').map((s) => s.trim()).filter(Boolean);

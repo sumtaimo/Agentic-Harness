@@ -163,7 +163,8 @@ export function collectStatus({ skipSessions = false } = {}) {
   const staleInProgress = (pid === 0 && inboxCount === 0)
     ? (bl.tasks || []).filter((t) => t.status === 'IN_PROGRESS').map((t) => t.id)
     : [];
-  const profileIncomplete = /^- .*\(fill me/im.test((() => { try { return fs.readFileSync(FILES.profile, 'utf8'); } catch { return ''; } })());
+  const profileText = (() => { try { return fs.readFileSync(FILES.profile, 'utf8'); } catch { return ''; } })();
+  const profileIncomplete = !fs.existsSync(FILES.profile) || !profileText.trim() || /^- .*\(fill me/im.test(profileText);
 
   return {
     root: ROOT,
