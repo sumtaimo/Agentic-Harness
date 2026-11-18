@@ -162,8 +162,8 @@ if (RESET) {
 copyDir(path.join(SRC, '.harness'), path.join(target, '.harness'));
 
 // Fingerprint of the harness core code, so doctor can tell when a project (or an AI in it) edited the template's files.
+const { hashCore, winCommandLine } = await import(pathToFileURL(path.join(target, '.harness', 'lib', 'common.mjs')).href);
 {
-  const { hashCore } = await import(pathToFileURL(path.join(target, '.harness', 'lib', 'common.mjs')).href);
   const version = (() => { try { return JSON.parse(fs.readFileSync(path.join(SRC, 'package.json'), 'utf8')).version; } catch { return null; } })();
   // installing the same version again must change nothing: keep the first installedAt while version and fingerprints are identical
   const files = hashCore(target);
@@ -342,8 +342,11 @@ const FALLBACK_SKILLS = ['spec-writer', 'copy-tight', 'test-planner', 'changelog
   const network = !ARGS.includes('--no-skills') && (local || process.env.HARNESS_OFFLINE !== '1');
   const win = process.platform === 'win32';
   const go = (what) => {
-    const [cmd, args] = local ? [process.execPath, [path.resolve(local), ...what]] : [win ? 'npx.cmd' : 'npx', ['--yes', 'github:sumtaimo/Skill-Foundry', ...what]];
-    return spawnSync(cmd, args, { cwd: target, encoding: 'utf8', timeout: 180000, shell: win && !local });
+    if (local) return spawnSync(process.execPath, [path.resolve(local), ...what], { cwd: target, encoding: 'utf8', timeout: 180000 });
+    const npxArgs = ['--yes', 'github:sumtaimo/Skill-Foundry', ...what];
+    return win
+      ? spawnSync(winCommandLine('npx.cmd', npxArgs), { cwd: target, encoding: 'utf8', timeout: 180000, shell: true })
+      : spawnSync('npx', npxArgs, { cwd: target, encoding: 'utf8', timeout: 180000 });
   };
   const why = (r) => (r.error?.message || r.stderr || `exit ${r.status}`).trim().split('\n').pop();
   const hadSkills = stamped().length > 0;

@@ -4070,6 +4070,11 @@ await test('doctor reads the pointer field engine: optional (a note, the skill h
   fs.writeFileSync(path.join(p.d, '.harness', 'skills', 'ux-review', 'SKILL.md'), fs.readFileSync(path.join(p.d, '.harness', 'skills', 'ux-review', 'SKILL.md'), 'utf8').replace('engine: required\n', ''));
   const out2 = node(p.d, ['.harness/doctor.mjs'], p.fenv('current')).stdout;
   assert(/! Skill Foundry: ux-review runs engine\/\*\.mjs scripts, but role BA_ANALYST may not run node/.test(out2), 'old pointers lost their warning');
+  // .claude/skills/*/preview/cover.svg is not counted as a project UI file by doctor's browser check
+  fs.mkdirSync(path.join(p.d, '.claude', 'skills', 'spec-writer', 'preview'), { recursive: true });
+  fs.writeFileSync(path.join(p.d, '.claude', 'skills', 'spec-writer', 'preview', 'cover.svg'), '<svg></svg>');
+  const out3 = node(p.d, ['.harness/doctor.mjs'], p.fenv('current')).stdout;
+  assert(!/UI file\(s\)/.test(out3), `skill preview cover.svg inside .claude/ triggered browser UI check:\n${out3}`);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

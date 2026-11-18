@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ROOT } from './common.mjs';
+import { ROOT, winCommandLine } from './common.mjs';
 
 export const FOUNDRY_CLI = 'npx github:sumtaimo/Skill-Foundry';
 export const CACHE_OK_MS = 24 * 60 * 60 * 1000;
@@ -72,11 +72,14 @@ export function refreshFoundryCache({ root = ROOT, env = process.env, now = Date
   if (!sig) return null;
   const local = env.HARNESS_FOUNDRY_CMD;
   const win = process.platform === 'win32';
-  const [cmd, args] = local
-    ? [process.execPath, [path.resolve(local), 'check', '--json']]
-    : [win ? 'npx.cmd' : 'npx', ['--yes', 'github:sumtaimo/Skill-Foundry', 'check', '--json']];
   const limit = Number(env.HARNESS_FOUNDRY_TIMEOUT_MS) > 0 ? Number(env.HARNESS_FOUNDRY_TIMEOUT_MS) : timeoutMs;
-  const r = spawnSync(cmd, args, { cwd: root, encoding: 'utf8', timeout: limit, env, shell: win && !local, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 20 });
+  const npxArgs = ['--yes', 'github:sumtaimo/Skill-Foundry', 'check', '--json'];
+  const opts = { cwd: root, encoding: 'utf8', timeout: limit, env, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 20 };
+  const r = local
+    ? spawnSync(process.execPath, [path.resolve(local), 'check', '--json'], opts)
+    : win
+      ? spawnSync(winCommandLine('npx.cmd', npxArgs), { ...opts, shell: true })
+      : spawnSync('npx', npxArgs, opts);
   let entries = null;
   // `check --json` exits 0 when all is current and 2 when a skill is outdated or was edited; both print the JSON. Any other code is a failure.
   if (!r.error && (r.status === 0 || r.status === 2)) {

@@ -124,7 +124,7 @@ v.real ? ok(`${v.cmd}  (${v.source})`) : warn(`${v.source}. Add a "test" (or "ch
 // A project with UI files needs a real browser in its check, or a broken page script or layout still passes.
 // The doctor only looks and suggests; it never installs anything (that adds a dependency to YOUR project).
 const UI_FILE = /\.(html?|css|scss|sass|less|svg|jsx|tsx|vue|svelte|astro)$/i;
-const uiFiles = listProjectFiles(ROOT, 2000).files.filter((f) => UI_FILE.test(f));
+const uiFiles = listProjectFiles(ROOT, 2000).files.filter((f) => UI_FILE.test(f) && !f.replace(/\\/g, '/').startsWith('.claude/'));
 if (uiFiles.length) {
   console.log('\nBrowser testing (this project has UI files)');
   const req = createRequire(path.join(ROOT, 'package.json'));
