@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { checkDoc } from './lib/docs-drift.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const results = [];
@@ -150,6 +151,27 @@ check('installer copy of .gitignore matches .gitignore', !!giCopy && JSON.parse(
   check('VS Code tasks (.vscode/tasks.json) are valid JSON with unique labels, real scripts, and inputs', !badTasks.length, badTasks.join('; '));
 }
 
+// 4b. Docs state the truth: facts in the docs and website copy are compared with the source of truth
+console.log('\nDocs match the source of truth');
+{
+  const team = JSON.parse(read('.harness/team.json'));
+  const roleNames = fs.readdirSync(path.join(REPO, '.harness', 'roles')).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(read(`.harness/roles/${f}`)).name);
+  const facts = {
+    leads: team.members.filter((m) => m.level === 'lead').map((m) => m.id),
+    roles: roleNames,
+    version: pkg.version,
+    agentCount: fs.readdirSync(path.join(REPO, '.claude', 'agents')).filter((f) => f.endsWith('.md')).length,
+  };
+  const listTs = (d) => fs.existsSync(path.join(REPO, d)) ? fs.readdirSync(path.join(REPO, d)).filter((f) => /\.tsx?$/.test(f)).map((f) => `${d}/${f}`) : [];
+  const siteFiles = ['website/src/data/i18n.ts', 'website/src/site.ts', ...listTs('website/src/components'), ...listTs('website/src/lib')].filter((f) => fs.existsSync(path.join(REPO, f)));
+  const driftFiles = [...docFiles, ...siteFiles];
+  const drift = [];
+  for (const f of driftFiles) {
+    const testCounts = f === 'README.md' || f.startsWith('website/');
+    for (const d of checkDoc(read(f), facts, { testCounts })) drift.push(`${f}:${d.line}: [${d.rule}] ${d.msg}`);
+  }
+  check(`docs, README and website copy agree with team.json (${facts.leads.length} leads), .harness/roles, package.json ${facts.version}`, !drift.length, drift.join('\n'));
+}
 // 5. Website (optional)
 if (process.argv.includes('--site')) {
   console.log('\nWebsite');

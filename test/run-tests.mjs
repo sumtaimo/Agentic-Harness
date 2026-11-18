@@ -4456,5 +4456,32 @@ await test('v1.0.19 daemon.mjs + dispatch.mjs: injects [TWO-PHASE ROOT-CAUSE DIR
   assert(normJob.visibleRunId === normId && normJob.bugfix === undefined, `unexpected bugfix flag on non-bugfix job: ${JSON.stringify(normJob)}`);
 });
 
+await test('docs-drift guard catches stale lead rosters, wrong lead counts, unknown roles, stale current versions, and hard-coded test counts while honoring opt-out and valid pair phrases', async () => {
+  const drift = await import(pathToFileURL(path.join(REPO, 'test', 'lib', 'docs-drift.mjs')).href);
+  const facts = { leads: ['lead-ba', 'lead-dev', 'lead-qa', 'lead-ux'], roles: ['PO_ARCHITECT', 'BA_ANALYST', 'DEV_ENGINEER', 'QA_AUDITOR', 'UX_DESIGNER', 'REVIEWER', 'SECURITY', 'COORDINATOR'], version: '1.0.20', agentCount: 6 };
+
+  assert(drift.checkDoc('Orchestrator → Leads (BA, DEV, QA)', facts).some((d) => d.rule === 'abbrev-roster'), 'must flag BA/DEV/QA subset');
+  assert(drift.checkDoc('Orchestrator → Leads (BA, DEV, QA, UX)', facts).length === 0, 'full BA/DEV/QA/UX must pass');
+
+  assert(drift.checkDoc('Agents: lead-ba, lead-dev, lead-qa.', facts).some((d) => d.rule === 'lead-roster'), 'must flag partial lead roster');
+  assert(drift.checkDoc('Agents: lead-ba, lead-dev, lead-qa, lead-ux.', facts).length === 0, 'full 4-lead roster must pass');
+  assert(drift.checkDoc('<!-- docs-drift:ignore -->\nAgents: lead-dev, lead-qa.', facts).length === 0, 'ignore marker must exempt subset line');
+  assert(drift.checkDoc("const rows = [\n  { who: 'lead-dev', a: 1 },\n  { who: 'lead-qa', b: 2 },\n];", facts).length === 0, 'separate TS object literals must not merge across }, boundaries');
+
+  assert(drift.checkDoc('The team has three leads.', facts).some((d) => d.rule === 'count'), 'must flag wrong lead count');
+  assert(drift.checkDoc('The team has 4 leads and 6 named agents.', facts).length === 0, 'matching counts must pass');
+  assert(drift.checkDoc("No two leads share a file, and two leads' scopes never overlap.", facts).length === 0, 'English pair phrases must not false-positive');
+
+  assert(drift.checkDoc('Role GHOST_ENGINEER runs checks.', facts).some((d) => d.rule === 'role-name'), 'must flag unknown role token');
+  assert(drift.checkDoc('Role DEV_ENGINEER and `REVIEWER` run checks.', facts).length === 0, 'known role tokens must pass');
+
+  assert(drift.checkDoc('The current version is v1.0.5.', facts).some((d) => d.rule === 'version'), 'must flag stale current version');
+  assert(drift.checkDoc('The current version is v1.0.20.', facts).length === 0, 'matching version must pass');
+  assert(drift.checkDoc('On 2026-11-18, v1.0.6 through v1.0.17 were verified.', facts).length === 0, 'dated historical notes must pass');
+
+  assert(drift.checkDoc('All 18 generated QA tests passed.', facts, { testCounts: true }).some((d) => d.rule === 'test-count'), 'must flag hard-coded test count when enabled');
+  assert(drift.checkDoc('The entire generated QA test suite passed.', facts, { testCounts: true }).length === 0, 'number-free wording must pass');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

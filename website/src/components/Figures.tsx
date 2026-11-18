@@ -265,7 +265,7 @@ export function HarnessMachine({ labels, bare = false, className = '' }: { label
     { at: [-25, 46, 30], text: labels.orchestrator, side: 'l', dy: -14 },
     { at: [49, 12, 24.2], text: 'lead-ba', side: 'r', dy: -22 },
     { at: [24, 46, 18], text: 'lead-dev', side: 'l', dy: 6 },
-    { at: [56, 80, 14], text: 'lead-qa · lead-ux', side: 'l', dy: 14 },
+    { at: [56, 80, 14], text: 'lead-qa · lead-ux', side: 'l', dy: 14 }, // docs-drift:ignore (leads split across lines 266-268)
     { at: [89, 20, 49.2], text: labels.gate, side: 'r', dy: -12 },
     { at: [150, 48, 2], text: labels.report, side: 'r', dy: 2 },
     { at: [110, 92, 4], text: labels.rules, side: 'r', dy: 16 },

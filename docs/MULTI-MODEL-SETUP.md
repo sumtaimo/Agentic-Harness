@@ -117,7 +117,7 @@ With two engines and no research engine (e.g. claude + codex), planning goes to 
 Each member in `.harness/team.json` can carry an `"engine"`, which is any profile name from `config.json`:
 
 ```json
-{ "id": "lead-qa", "level": "lead", "role": "QA_AUDITOR", "engine": "codex", "scope": ["tests/**", "test/**"], ... }
+{ "id": "lead-qa", "level": "lead", "role": "QA_AUDITOR", "engine": "codex", "scope": ["tests/**", "test/**", "__tests__/**", "src/**/*.test.*", "src/**/*.spec.*"], ... }
 ```
 
 - Remove the `"engine"` field (or don't set it) to use `auto` for that member (`autoOrder` in `config.json`).
@@ -132,7 +132,8 @@ worker, the controller judges how complex that job is and picks the cheapest **t
 | Tier | Used for |
 |---|---|
 | `fast` | QA / test runs, single-file small edits (1 file, short prompt), simple docs (≤ 2 doc files), the QA lead's planning |
-| `medium` | standard feature work and multi-file coding, the planning of `lead-dev` and `lead-ba` |
+<!-- docs-drift:ignore -->
+| `medium` | standard feature work and multi-file coding, the planning of `lead-dev`, `lead-ba`, and `lead-ux` |
 | `high` | multi-module architecture planning: the orchestrator, `PO_ARCHITECT`, the AI planner |
 
 - **Inputs:** the number of `targetFiles`, the size of the job's own prompt (not the harness instructions around it), the role, and whether this is a retry.

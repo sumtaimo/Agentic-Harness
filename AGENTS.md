@@ -40,7 +40,8 @@ only point here.
 - **Charter & Memory Compliance:** Strictly obey `.harness/charter.md` (auto-agents may only modify `src/**`, `docs/**`, `tests/**`, `test/**`, `__tests__/**`; `.harness/**` is locked unless explicitly approved by the Product Owner) and always read `.harness/memory/profile.md` and `.harness/memory/lessons.md`.
 - **Mode-Responsive Execution (`Normal` | `Parallel` | `Team` | `Autopilot`):**
   - **Solo Mode (`npm run run` / `--mode parallel`):** Single user acts as PO/Architect/QA Lead; orchestrator delegates disjoint file ownership to workers so parallel edits never collide.
-  - **Team Mode (`--mode team`):** Orchestrator assigns scoped charters to leads (`lead-ba`, `lead-dev`, `lead-qa`):
+  <!-- docs-drift:ignore -->
+  - **Team Mode (`--mode team`):** Orchestrator assigns scoped charters to leads (`lead-ba`, `lead-dev`, `lead-qa`, `lead-ux`):
     - `lead-ba`: specs and acceptance criteria; writes only `docs/**`.
     - `lead-qa`: tests and verification; writes only `tests/**`, `test/**`, `__tests__/**` and test files next to the code (`src/**/*.test.*`, `*.spec.*`).
     - `lead-ux`: UX/UI; writes only style files (`src/**/*.css`, `*.scss`, `*.less`), with the `ui-craft` rules.
@@ -67,6 +68,7 @@ only point here.
 - **Core Controller Lifecycle:**
   `1_PLANNER` -> `2_EXECUTOR_SWARM` -> `3_VERIFIER` -> `4_COMMITTED` (max 3 retry cycles on check failure, otherwise automatic rollback + `HALTED_HITL_REQUIRED`).
 - **Orchestrator & Lead Workflow (`brief` -> `assign` -> `work` -> `verify` -> `report`):**
+  <!-- docs-drift:ignore -->
   1. **Brief & Assign:** Define exact task scope, allowed file paths, and deterministic verification command (`npm test`, typecheck, lint) before any worker edits code. On bug fixes, keep test files isolated to `lead-qa` and either run Red-Green sequencing — assign `lead-qa` and `lead-dev` in one `assign` call (run `lead-qa` first [Red] to confirm the bug test fails before running `lead-dev` [Green], then run `visible.mjs verify`), or run two separate `brief` runs (a Red reproduction run first, then a Green fix run), because `visible.mjs verify` transitions the run to `FAILED` which blocks calling `assign` again on the same `RUN_ID` — or require `lead-dev` to report `Symptom / Root Cause / Blast Radius`.
   2. **Audit / Investigation Output (`.agent-state/01-audit-and-plan.md`):** Document *Where (`file:line`) -> Current vs. Expected -> Rule & Permissions -> Gap/Root Cause -> System & Beyond-UI Impact -> Smallest Safe Fix Plan -> Validation Checklist*.
   3. **Deterministic Verification:** Never claim `"PASSED"` based on LLM self-assessment—only report `"PASSED"` after the real controller check (`npm test` / linter / typecheck) succeeds and out-of-scope edits are reverted.
@@ -81,7 +83,7 @@ Every AI agent working in or extending this repository MUST follow the **Lightwe
 2. **Dynamic 4-Mode Execution (Right-Sizing):**
    - **Normal / Direct Mode** (`npm run run`): Default for 1–2 files or bug fixes. 1 worker, no planner overhead, ~80% token savings.
    - **Parallel Swarm Mode** (`--mode parallel`): Concurrent isolated builders with disjoint target files.
-   - **Team Hierarchy Mode** (`--mode team`): Orchestrator → Leads (BA, DEV, QA) → Workers for multi-layer features.
+   - **Team Hierarchy Mode** (`--mode team`): Orchestrator → Leads (BA, DEV, QA, UX) → Workers for multi-layer features.
    - **Autopilot Mode** (`npm run auto`): Background backlog execution strictly isolated on the `uat` branch.
 3. **Deterministic Verification over Hallucination:** Work is never finished because an AI "says so". It is accepted only when the real test suite (`npm test`, `node --test`) passes. On failure, staging/git automatically restores files.
 4. **Future-Proof & Flexible:** Keep all interfaces, skills (`.harness/skills/`), MCP presets (`.harness/mcp.json`), and SDK (`.harness/sdk.mjs`) modular so developers adopting this template can plug in any LLM (Claude, Codex, Antigravity, Ollama).
@@ -141,10 +143,12 @@ Workflow: **human → controller → you (orchestrator) → named agents → con
 The user types `/harness:run <goal>` (or `/harness:auto` for the READY backlog); those commands contain the exact steps.
 The rules, in short (the controller enforces them; do not try to get around them):
 1. `node .harness/visible.mjs brief …` first: it gives you the task, the check, the team and each lead's scope.
+<!-- docs-drift:ignore -->
 2. You only **plan and delegate**: give every file to exactly one lead, inside that lead's scope (test files `tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*` belong strictly to `lead-qa`, never `lead-dev`), and put the exact shared names/formats in
    the interface contract. `visible.mjs assign <run> '<json>'` validates it before anything starts (3 bad tries escalate to the user).
 3. Start **all** assigned named agents (`lead-ba`, `lead-dev`, `lead-qa`, `lead-ux`; subagent_type = the lead's id) **in one message** so they run in
    parallel and the user sees them work. Use the prompts `assign` prints. **Never do their work or edit project files yourself.**
+   <!-- docs-drift:ignore -->
    On bug fixes, you may run Red-Green sequencing — either assign `lead-qa` and `lead-dev` in one `assign` call (run `lead-qa` first [Red] to confirm the bug test fails before running `lead-dev` [Green], then run `visible.mjs verify`) or run two separate `brief` runs (a Red reproduction run first, then a Green fix run), because `visible.mjs verify` transitions the run to `FAILED` which blocks calling `assign` again on the same `RUN_ID` — or require `lead-dev` to include `Symptom / Root Cause / Blast Radius` in its report (audited by `reviewer` after PASSED in `/harness:run`).
 4. When they report, run `visible.mjs verify <run> --reports '{…}'`. The controller reverts every change outside the assignments, runs the
    real check and writes the report. Send failures back to the responsible lead (3 cycles at most).
@@ -299,6 +303,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.claude/agents/lead-*.md` | the named agents (generated from team.json; the user sees them working in the session) |
 | `docs/WORKFLOW.md` | the workflow, the rules, the two modes, what is not guaranteed |
 | `.harness/releases/` | snapshots made before every upload (git-ignored, never edit) |
+<!-- docs-drift:ignore -->
 | `.harness/examples/backlog.sample.json` | a BA + DEV + QA parallel sample to import |
 | `.harness/state.json` · `telemetry.log` | live state · JSONL event log |
 | `.harness/live.log` · `watch.mjs` | plain-text live feed of every agent action · follow it (`--job <id>` ends with the result) |

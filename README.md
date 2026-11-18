@@ -3,7 +3,7 @@
 A reusable, **zero-dependency** harness that runs AI coding agents in the background of your
 editor (VS Code, Antigravity, Cursor, Windsurf), checks their work automatically, **undoes their
 changes if they fail**, keeps a **memory** of how you like to work, and can **work through a
-backlog on its own** as a governed "act as me" controller with PO / BA / DEV / QA roles.
+backlog on its own** as a governed "act as me" controller with PO / BA / DEV / QA / UX roles (plus read-only `reviewer` and `security` audits).
 You can use it without being able to code.
 
 ## Quick Install (1-Minute Setup)
@@ -97,7 +97,8 @@ Then log in to the AI CLIs you use (`claude`, `agy`, `codex`) and run doctor aga
  ORCHESTRATOR your editor session. It only PLANS and DELEGATES; it never edits project files
   │
   ▼  delegates, all at once
- NAMED AGENTS lead-ba · lead-dev · lead-qa   ← you SEE them working in your session; each owns only its assigned files
+ NAMED AGENTS lead-ba · lead-dev · lead-qa · lead-ux   ← you SEE them working in your session; each owns only its assigned files
+  │                                                      (after PASSED, read-only reviewer & security audit the diff)
   │
   ▼  report back
  CONTROLLER   verify: every changed file must belong to an agent (anything outside is reverted) → the real check (e.g. npm test)
@@ -120,7 +121,7 @@ Then log in to the AI CLIs you use (`claude`, `agy`, `codex`) and run doctor aga
 npm run demo          # creates ./demo-project (own git repo, harness installed, one READY task)
 ```
 
-Open `demo-project/` in Claude Code, accept the trust dialog, restart the session, then type `/harness:doctor`, `/harness:team` and `/harness:auto`. The named agents `lead-ba`, `lead-dev`, `lead-qa` build a small `slugify` helper in front of you and the controller reports PASSED only if the real tests pass. Steps are also in the demo's own README. `npm run demo -- <folder> --force` recreates a demo (it never deletes a folder that is not a demo).
+Open `demo-project/` in Claude Code, accept the trust dialog, restart the session, then type `/harness:doctor`, `/harness:team` and `/harness:auto`. The named agents `lead-ba`, `lead-dev`, `lead-qa`, `lead-ux` build a small `slugify` helper in front of you and the controller reports PASSED only if the real tests pass. Steps are also in the demo's own README. `npm run demo -- <folder> --force` recreates a demo (it never deletes a folder that is not a demo).
 
 ## 1. Get it
 
@@ -141,8 +142,8 @@ cd /path/to/their/project && node .harness/doctor.mjs         # checks Node, the
 ```
 Then they simply **prompt it**, from either place:
 - **Editor (Claude Code):** open the project, **accept the trust dialog once, then restart the session** (so it loads the named agents),
-  and type `/harness:run <what you want>`. Your session becomes the orchestrator, the named agents `lead-ba`, `lead-dev`, `lead-qa`
-  appear working in the session, and you get a report. Type `/harness:auto` to let it work through the READY backlog by itself.
+  and type `/harness:run <what you want>`. Your session becomes the orchestrator, the named agents `lead-ba`, `lead-dev`, `lead-qa`, `lead-ux`
+  appear working in the session, and you get a report (followed by read-only `reviewer` and `security` checks on code changes). Type `/harness:auto` to let it work through the READY backlog by itself.
 - **Terminal / unattended:** `node .harness/daemon.mjs` in one terminal, then in another
   `node .harness/dispatch.mjs --goal "<what you want>" --hierarchy --max-cost 2 --wait` and watch the agents work (the headless
   controller can also enforce a money cap).
@@ -155,8 +156,7 @@ Each team then makes it theirs by editing plain files: `.harness/team.json` (who
 
 ## Team Collaboration
 
-One developer and a team of people get the same harness: the full AI agent team (`orchestrator`, `lead-ba`,
-`lead-dev`, `lead-qa`), in manual tasks and in autonomous mode (`auto`). The only difference is how people share the repo.
+One developer and a team of people get the same harness: the full AI agent team (`orchestrator`, `lead-ba`, `lead-dev`, `lead-qa`, `lead-ux`, plus read-only `reviewer` and `security`), in manual tasks and in autonomous mode (`auto`). The only difference is how people share the repo.
 
 **Shared in Git** (everyone's agents follow the same rules):
 - `.harness/charter.md`: objectives, allowed and forbidden paths, autonomous on/off
@@ -364,6 +364,7 @@ The controller works **on your behalf**, but only inside the rules you write in
 
 **Backlog states:** `BACKLOG` (an idea) → `READY` → `IN_PROGRESS` → `DONE` or `BLOCKED`.
 Add items with task 10 or `node .harness/backlog.mjs add "…"`; see them with task 8.
+<!-- docs-drift:ignore -->
 Try it with the BA + DEV + QA sample: task 9 with `.harness/examples/backlog.sample.json`.
 
 ### Where autonomous work lands: the `uat` branch (your `main` and your folder are never touched)
@@ -598,9 +599,10 @@ Or let the AI plan it: `{ "id": "job-2", "title": "…", "autoPlan": true, "goal
     the charter and roles.
   - The run budget is enforced, a failure pauses autonomy and restores the files, and
     `requireRealCheck` blocks autonomous work that nothing can check.
+<!-- docs-drift:ignore -->
 - Role and skill handling (v2): each role gets its own tool list, skills only reach the roles they
   name and can only narrow tools, and a role's write paths, the forbidden paths, unknown roles and
-  unknown skills are all rejected before any worker starts. BA, DEV and QA truly run in parallel.
+  unknown skills are all rejected before any worker starts. BA, DEV and QA truly run in parallel. <!-- docs-drift:ignore -->
 - Uploads (v2): the old state and unstarted inbox jobs are snapshotted, memory is kept (or reset
   on request), invalid uploads are rejected, and an upload during a running task is refused.
 - uat mode (v2.1):
@@ -634,7 +636,7 @@ problems were then found and fixed:
 7. v2.0 added the autonomous controller, backlog, roles, skills and release snapshots. The v2
    master prompt's `setup-harness-v2.mjs` was first run unchanged in a throwaway copy. It passed
    its own gate, but:
-   - All **18 of its 18 generated QA tests failed** against the DEV code. The two agents ran in
+   - All **generated QA tests** failed against the DEV code (historical v2 prototype). The two agents ran in
      parallel without a shared interface contract, and the check only tested that the files
      existed.
    - The backlog item stayed `IN_PROGRESS` forever.
@@ -682,7 +684,7 @@ Instead of paying the overhead and latency of a multi-agent hierarchy for simple
 |---|---|---|---|---|
 | **Normal / Direct** | `npm run run -- --goal "…"` | Single direct worker (no planner) | 1–2 file bug fixes, small edits | **Minimal (~80% token savings)** |
 | **Parallel Swarm** | `dispatch.mjs --mode parallel` | N isolated builders (AI planner) | Independent files / modules | Medium (~3k tokens/worker) |
-| **Team Hierarchy** | `dispatch.mjs --mode team` | Orchestrator → Leads (BA, DEV, QA) | Cross-layer full features | Standard (~8k–15k tokens) |
+| **Team Hierarchy** | `dispatch.mjs --mode team` | Orchestrator → Leads (BA, DEV, QA, UX) | Cross-layer full features | Standard (~8k–15k tokens) |
 | **Autopilot Loop** | `npm run auto` | Autonomous daemon (`charter.md`) | Hands-off backlog grooming & coding on `uat` | Scheduled heartbeat cycles |
 
 ### 2. Programmatic JavaScript SDK (`.harness/sdk.mjs`)
@@ -720,10 +722,14 @@ The harness connects to any CLI-driven AI engine (Claude, Codex, Antigravity, lo
 
 ## Roles on the team
 
-Orchestrator (plans) → leads: `lead-ba` (specs, `docs/`), `lead-dev` (code, `src/`), `lead-qa` (tests, also
-`src/**/*.test.*`), `lead-ux` (UX/UI style files `*.css`, `*.scss`). Every file has exactly one owner. After the
-check passes, the read-only `reviewer` (and `security` for input, auth, files, network or dependencies) review the
-change and report findings; they never edit.
+<!-- docs-drift:ignore -->
+Orchestrator (plans) → leads: `lead-ba` (specs, `docs/**`), `lead-dev` (code, `src/**`), `lead-qa` (tests: `tests/**`, `test/**`, `__tests__/**`, `src/**/*.test.*`, `src/**/*.spec.*`), `lead-ux` (UX/UI style files `src/**/*.css`, `*.scss`, `*.less`). Every file has exactly one owner (see `.harness/team.json`). After the check passes, the read-only `reviewer` (checking root-cause fixes & anti-cheating) and `security` (for input, auth, files, network, or dependencies) audit the change and report findings; they never edit.
+
+### Built-in Tools & Governance Highlights
+- **Interactive Launcher & Dashboard:** `npm start` (`node .harness/start.mjs`, `--summary`), `node .harness/hook-session.mjs --brief` (4–8 line status), `npm run ui` (`node .harness/ui.mjs`, read-only local web dashboard on `127.0.0.1`), and `npm run usage` (`node .harness/usage.mjs`, with ≥80% daily quota warnings).
+- **Cross-Editor Handoff & Resume:** `node .harness/visible.mjs handoff` and `node .harness/dispatch.mjs --resume-visible [RUN_ID]` preserve partial edits and remap cross-engine models when switching editors or hitting usage caps.
+- **Root-Cause & Anti-Cheating Enforcement:** `visible.mjs brief --bugfix`, strict test-file isolation (`isTestFilePath()` prevents non-QA leads from owning test files), Two-Phase Root-Cause retry directives (`daemon.mjs`), and `auditPatchSignals()` flagging `.skip`/`.only`/`.todo`, empty `catch {}` blocks, and missing root-cause notes.
+- **Skill Foundry Integration:** Automatic pointer wiring, `additive-union` explicit tool narrowing, `keywords-with-explicit` skill matching, and non-blocking background update checks (`.harness/lib/foundry-check.mjs`).
 
 ## Many sessions at once (Session A + child sessions)
 

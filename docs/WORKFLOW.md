@@ -9,7 +9,7 @@ the harness installed, and for any team that copies the template into its own pr
 
 ```
  YOU ──goal / READY backlog task──► CONTROLLER ──brief──► ORCHESTRATOR ──delegates──► NAMED AGENTS
-                                    (.harness/)           (your editor session)       lead-ba · lead-dev · lead-qa
+                                    (.harness/)           (your editor session)       lead-ba · lead-dev · lead-qa · lead-ux
                                          ▲                                                    │
                                          └──────────── verify (files + real check) ◄──────────┘
                                          │
@@ -21,18 +21,21 @@ the harness installed, and for any team that copies the template into its own pr
 | **You** | the human | give a goal, add READY tasks, decide on anything the report flags | |
 | **Controller** | `.harness/` scripts + `charter.md`, `backlog.json`, `team.json`, memory | holds the task and the rules; briefs the orchestrator; validates the delegation; checks every changed file; runs the real check; writes the report | it never writes your project code |
 | **Orchestrator** | your Claude Code session | reads the brief, decides who gets which files, starts the agents, passes their reports to the controller, reports to you | edit project files, widen a scope, raise a limit, commit, push |
-| **Named agents** | `lead-ba`, `lead-dev`, `lead-qa` (see `.claude/agents/`) | do the work on the files they were assigned | touch other files, `.harness/`, `.claude/`, secrets; run commands other than the test commands |
+| **Named agents** | `lead-ba` (specs, `docs/**`), `lead-dev` (code, `src/**`), `lead-qa` (tests: `tests/**`, `test/**`, `__tests__/**`, `src/**/*.test.*`, `src/**/*.spec.*`), `lead-ux` (style files `src/**/*.css`, `*.scss`, `*.less`); see `.claude/agents/` and `.harness/team.json` | do the work on the files they were assigned | touch other files, `.harness/`, `.claude/`, secrets; run commands other than the test commands |
+| **Check agents** | `reviewer` and `security` (read-only, see `.claude/agents/`) | started by the orchestrator after the controller says PASSED (code changes only); audit the diff and report findings | edit anything |
 
-The agents are *named* on purpose: in Claude Code you see **`lead-dev`**, **`lead-qa`** … appear and work in your session, in parallel.
+The agents are *named* on purpose: in Claude Code you see **`lead-ba`**, **`lead-dev`**, **`lead-qa`**, **`lead-ux`** appear and work in your session, in parallel. Other commands: `/harness:sessions` (several child sessions, see `node .harness/sessions.mjs`), `/harness:team`, `/harness:status`, `/harness:doctor`, `/harness:tick`, `/harness:teach`. Facts such as leads and scopes live in `.harness/team.json`; do not copy them by hand elsewhere (see `docs/MAINTAINING.md`).
 
 ## 2. The rules ("agent law")
 
 1. **Brief first.** `node .harness/visible.mjs brief` (pass `--bugfix` on bug-fix runs to set `run.bugfix = true`) creates a run, snapshots the project and tells the orchestrator the task, the check, the team and the limits. Only one run can be open at a time.
+<!-- docs-drift:ignore -->
 2. **Delegation is validated before anything starts.** `assign` (`validateDelegation`) accepts a delegation only if every lead exists and may be delegated to, each lead appears once, every file is a safe relative path inside that lead's scope (and inside what you allowed with `--files`, and, in autonomous mode, inside the charter's allowed paths), and no two leads share a file. When a `QA_AUDITOR` lead (`lead-qa`) exists, **test-file isolation** is enforced (`isTestFilePath(p)` in `.harness/lib/governance.mjs`): test files (`tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*`) may only be assigned to `lead-qa` and are rejected if assigned to `lead-dev` or any non-QA lead. A rejected delegation starts nothing. Three rejections **escalate to you** and block the backlog item.
 3. **Each agent owns only its files.** After the agents finish, `verify` compares the whole project with the snapshot. Any changed file that is not inside some agent's assigned files is a **violation** and is **reverted automatically**. The rules themselves (`charter.md`, `team.json`, `config.json`, roles, skills), `.claude/`, and root `.env*` files are watched too.
 4. **Done means the real check passed.** `verify` runs the task's check (your `--check`, the backlog item's `verifyCmd`, or the best script in `package.json`). A failure goes back to the responsible agent (in headless runs, `daemon.mjs` injects `[TWO-PHASE ROOT-CAUSE DIRECTIVE — cycle <n>]` on `cycle > 1` retries); after **3 cycles** the run stops as `HALTED_HITL_REQUIRED`, every file is restored to how it was before the run, the backlog item becomes BLOCKED, and a lesson is saved.
 5. **You decide about the result.** Nothing is committed, pushed or merged for you. A passed run leaves the changes in your working folder for you to review (`git diff`).
 6. **The report says what tests cannot prove, and audits for root-cause & anti-cheating.** When UI files changed it reads **PASSED — NEEDS A VISUAL REVIEW** (open it at desktop and phone width, light and dark); skipped tests are counted and called out (a skipped visual test proves nothing); files the check itself created that git does not ignore (such as `dist/`) are flagged. The brief also warns when a project with UI files has a check that never opens a browser.
+   <!-- docs-drift:ignore -->
    - **Root-Cause & Anti-Cheating Governance:** On bug fixes, `lead-dev` follows the **Two-Phase Root-Cause Debugging Protocol** (investigate read-only first, fix the underlying root cause without hardcoded return values, special-case `if` hacks, or empty `catch` blocks, and report `Symptom / Root Cause / Blast Radius`), while `lead-qa` runs **Red-Green / Anti-Hardcode QA** (write a failing reproduction test [Red] before `lead-dev` fixes the code [Green], test varied inputs so hardcoded patches fail, and never weaken or skip assertions). After `PASSED`, the read-only `reviewer` agent audits the diff against those rules.
    - **Automated patch signal audit (`auditPatchSignals`):** `visible.mjs verify` and `daemon.mjs` inspect `{ baseFiles, curFiles, root, testsChangedAfterFail, reports, cycle, isBugFix, baselineDir, baseRef }` to return `{ signals, skippedTests, emptyCatches, missingRootCause }`. They flag test files modified after a failed check, deleted test files, newly added `.skip` / `.todo` tests, empty `catch` blocks that swallow errors, and bug-fix or retry reports missing `Symptom / Root Cause / Blast Radius` (`visible.mjs verify` prints **Anti-cheat & root-cause signals** when non-empty, and `daemon.mjs` logs `ANTI_CHEAT_SIGNAL` in `.harness/telemetry.log`).
    `node .harness/doctor.mjs` also checks, for a project with UI files, whether a browser testing tool is installed (with `--deep` it launches a real browser once). If not, it prints a note with the install command; it never installs anything for you.
@@ -78,7 +81,7 @@ their own worktrees, local or cloud. The board is `node .harness/sessions.mjs bo
 - **Each AI tool is allowed once per person** (`node .harness/engines.mjs`); headless runs never use a tool you did not allow.
 - **Big runs ask first** (team or parallel mode, 3+ workers, the high model). In autopilot, headless or in Claude Code,
   they are held as "Needs your OK" and the rest goes on; approve one with `node .harness/backlog.mjs approve <id>`.
-- **Daily caps and a usage report** for headless runs: `config.json` → `dailyLimits`, `node .harness/usage.mjs`.
+- **Daily caps and a usage report** for headless runs: `config.json` → `dailyLimits`, `node .harness/usage.mjs`. A run warns when a cap is at 80% or more.
   Editor-mode agents run inside your editor session (`claude-code` by default, or pass `--editor antigravity` / `cursor`
   to `visible.mjs brief` and `visible.mjs assign`), so they are tracked under separate editor keys (`claude-code`,
   `antigravity-editor`, …) and never collide with your headless CLI engine limits.
@@ -117,7 +120,7 @@ is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
 |---|---|---|
 | who is on the team, what each may own, limits, default skills | `.harness/team.json` | `node .harness/team.mjs validate`, then `node .harness/team.mjs sync-agents`, restart the Claude Code session |
 | a role's persona or tools | `.harness/roles/*.json` | `node .harness/team.mjs sync-agents` |
-| rules injected into agents | `.harness/skills/<name>/SKILL.md` | |
+| rules injected into agents | `.harness/skills/<name>/SKILL.md` (skills installed with Skill Foundry are checked by `node .harness/doctor.mjs`) | |
 | what autonomous mode may touch / how much it may do | `.harness/charter.md` (section 0) | `node .harness/doctor.mjs` |
 | what the AIs should remember | `node .harness/memory.mjs remember "<rule>"` (or `/harness:teach`) | |
 

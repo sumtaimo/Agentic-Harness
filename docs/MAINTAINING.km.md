@@ -49,17 +49,30 @@ backlog និង memory របស់អ្នកត្រូវបានរក�
 
 រត់ទាំងនេះក្នុង repository template តាមលំដាប់។ គ្មានអ្វីទៅ `lab` ទេ លុះត្រាតែជាប់ទាំងអស់ **ហើយម្ចាស់យល់ព្រម**។
 
-1. `npm test`៖ ឈុតតេស្តឥតគិតថ្លៃ (ប្រើតែ engine ក្លែង ហើយលាក់ឧបករណ៍ AI ពិតលើម៉ាស៊ីនរបស់អ្នក)។
-2. `npm run audit -- --site`៖ ដំឡើងក្នុង project ទទេដូចអ្នកប្រើថ្មី ហើយពិនិត្យរាល់ពាក្យបញ្ជា ការយោងក្នុងឯកសារ
-   ច្បាប់របស់ម្ចាស់ និងការ build website។ ឥតគិតថ្លៃ ព្រោះវាមិនដែលហៅឧបករណ៍ AI ទេ។
-3. ការរត់ពិត៖ តែពេល command line ឬ models របស់ engine ផ្លាស់ប្តូរ ហើយតែពេលម្ចាស់យល់ព្រម (វាប្រើ quota)។
+1. **Docs sync (ធ្វើឲ្យឯកសារត្រូវនឹងកូដពិត)៖** រាល់ពេលកែ `.harness/team.json`, `.harness/roles/*.json`, `.harness/config.json` profiles, `.harness/*.mjs` commands ឬ `package.json` scripts/version ត្រូវធ្វើបច្ចុប្បន្នភាព `README.md`, `AGENTS.md`, `docs/*.md`, `.claude/commands/harness/*.md` និង `website/` ក្នុង commit ដូចគ្នា (`npm run audit` ពិនិត្យភាពផ្ទុយគ្នារវាងឯកសារនិងប្រភពពិត ហើយនឹងបរាជ័យបើឯកសារចាស់)។
+2. `npm test`៖ ឈុតតេស្តឥតគិតថ្លៃ (ប្រើតែ engine ក្លែង ហើយលាក់ឧបករណ៍ AI ពិតលើម៉ាស៊ីនរបស់អ្នក)។
+3. `npm run audit -- --site`៖ ដំឡើងក្នុង project ទទេដូចអ្នកប្រើថ្មី ហើយពិនិត្យរាល់ពាក្យបញ្ជា ការយោងក្នុងឯកសារ
+   ភាពត្រូវគ្នារវាងឯកសារនិងកូដ (`test/lib/docs-drift.mjs`) ច្បាប់របស់ម្ចាស់ និងការ build website។ ឥតគិតថ្លៃ ព្រោះវាមិនដែលហៅឧបករណ៍ AI ទេ។
+4. ការរត់ពិត៖ តែពេល command line ឬ models របស់ engine ផ្លាស់ប្តូរ ហើយតែពេលម្ចាស់យល់ព្រម (វាប្រើ quota)។
    ការងារតូចមួយក្នុង project សាកល្បង (`npm run demo` រួចការងារ `hello.txt` ក្នុង `docs/ENGINES.md`)។
-4. បង្កើន `"version"` ក្នុង `package.json` ពេលកូដស្នូលផ្លាស់ប្តូរ (ការដំឡើងនីមួយៗកត់ត្រាវា)។
-5. Commit លើ `lab` រួចសួរម្ចាស់មុន push។ Push ធម្មតាប៉ុណ្ណោះ។ បើ push ពី worktree របស់ session សូមធ្វើបច្ចុប្បន្នភាព folder មេផងដែរ
+5. បង្កើន `"version"` ក្នុង `package.json` ពេលកូដស្នូលផ្លាស់ប្តូរ (ការដំឡើងនីមួយៗកត់ត្រាវា)។
+6. Commit លើ `lab` រួចសួរម្ចាស់មុន push។ Push ធម្មតាប៉ុណ្ណោះ។ បើ push ពី worktree របស់ session សូមធ្វើបច្ចុប្បន្នភាព folder មេផងដែរ
    (`git pull --ff-only` នៅទីនោះ)៖ session ថ្មីចាប់ផ្តើមពីវា។ Hook ពេលចាប់ផ្តើម session ព្រមាន បើវានៅក្រោយ។
-6. **ចេញផ្សាយ**៖ ពេលកំណែក្នុង lab ត្រូវបានប្រើពិតរួច ហើយម្ចាស់និយាយថា «release» ចម្លងវាទៅ template៖
+7. **ចេញផ្សាយ**៖ ពេលកំណែក្នុង lab ត្រូវបានប្រើពិតរួច ហើយម្ចាស់និយាយថា «release» ចម្លងវាទៅ template៖
    `git push origin lab:release` (push ធម្មតា កុំ force)។ ចាប់ពីពេលនោះ អ្នកប្រើដែលដំឡើងពី `#release` និង landing page
    (ដែល deploy ពី `release`) ទទួលបានវា។ គ្មានអ្វីទៅដល់អ្នកប្រើមុនជំហាននេះទេ។
+
+## ប្រភពពិតសម្រាប់ឯកសារ (Docs source of truth)
+
+កុំចម្លងបញ្ជី leads តួនាទី ចំនួន ឬ version ដោយចងចាំឡើយ។ ត្រូវពិនិត្យប្រភពដើមជាមុនជានិច្ច៖
+
+| ព័ត៌មាន | ប្រភពដើមពិត | ពិនិត្យដោយ `npm run audit`? |
+|---|---|---|
+| Leads, scopes, budgets | `.harness/team.json` | បាទ/ចាស (បញ្ជី leads និងចំនួន) |
+| តួនាទី (roles), ភារកិច្ច និងសិទ្ធិ tools | `.harness/roles/*.json` | បាទ/ចាស (ផ្ទៀងផ្ទាត់ឈ្មោះ role) |
+| Engines និង model IDs | `.harness/config.json` | បាទ/ចាស (ហាមឈ្មោះ model ក្នុងឯកសារ) |
+| កំណែ Template និង npm scripts | `package.json` | បាទ/ចាស (`current`/`latest` version & scripts) |
+| ពាក្យបញ្ជា CLI និងឯកសារ agents/commands | `.harness/*.mjs`, `.claude/agents/`, `.claude/commands/harness/` | បាទ/ចាស (គ្រប់ command/link ត្រូវតែមានពិត) |
 
 ## ច្បាប់របស់ម្ចាស់
 

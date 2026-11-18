@@ -35,7 +35,8 @@ The controller never leaves the model to chance. Per agent it picks a tier from 
 | Agent | Tier |
 |---|---|
 | orchestrator, PO architect (plan across modules) | high |
-| lead-ba, lead-dev (split their own slice) | medium |
+<!-- docs-drift:ignore -->
+| lead-ba, lead-dev, lead-ux (split their own slice) | medium |
 | lead-qa, docs/QA workers, 1-file small edits | fast |
 | coding workers (several files) | medium |
 | any retry after a failed check | one tier up |
@@ -45,7 +46,7 @@ Each tier maps to one model per engine in `.harness/config.json`; `node .harness
 - An empty tier uses the nearest configured one, so a CLI default is never used by accident. Only an engine with no
   model names at all runs on its own default, and `doctor` warns about it.
 - In Claude Code, the named agents get their model too (`model:` in `.claude/agents/lead-*.md`, written by
-  `node .harness/team.mjs sync-agents`): lead-ba and lead-qa get the fast tier, lead-dev the medium tier. Without it they
+  `node .harness/team.mjs sync-agents`): lead-ba and lead-qa get the fast tier, lead-dev and lead-ux the medium tier (`reviewer` and `security` are read-only checkers and follow their own agent files). Without it they
   would inherit your session model (often the most expensive one) for simple docs and tests.
 - See every agent's model: `node .harness/team.mjs show`. The live feed prints the model each agent starts on.
 - Override for one member: `"model"` in `team.json` (an alias or a tier name); for one task: `dispatch --model`.

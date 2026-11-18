@@ -23,7 +23,7 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 
 - **Normal** (`npm run run`)៖ worker តែមួយ សម្រាប់ការងារតូច ១ ឬ ២ ឯកសារ ហើយសន្សំ token ច្រើនជាងគេ។
 - **Parallel** (`--mode parallel`)៖ worker ច្រើនធ្វើការក្នុងពេលតែមួយ ហើយម្នាក់ៗកាន់ឯកសារផ្សេងគ្នា។
-- **Team** (`--mode team`)៖ orchestrator ចែកការងារទៅ lead (BA, DEV, QA) ហើយ lead ចែកបន្តទៅ worker។
+- **Team** (`--mode team`)៖ orchestrator ចែកការងារទៅ lead (BA, DEV, QA, UX) ហើយ lead ចែកបន្តទៅ worker (`reviewer` និង `security` ជា agent អានតែប៉ុណ្ណោះ)។
 - **Autopilot** (`npm run auto`)៖ ធ្វើការងារក្នុង backlog ដោយខ្លួនឯង ហើយរក្សាលទ្ធផលនៅលើ branch `uat` មិនមែន `main` ទេ។
 
 ## ៤. ក្នុង Claude Code (`/harness:run` និង `/harness:auto`)
@@ -31,7 +31,7 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 - AI ក្នុង editor ធ្វើតួជា **orchestrator**៖ វាគ្រាន់តែរៀបចំផែនការ និងចែកការងារ ដោយមិនកែឯកសារ project ខ្លួនឯងទេ។
 - **ជំហានទី១ `brief`៖** controller (`node .harness/visible.mjs`) ផ្តល់ task, check, និងសិទ្ធិរបស់ lead នីមួយៗ។
 - **ជំហានទី២ `assign`៖** controller ពិនិត្យថាការចែកការងារត្រឹមត្រូវ និងមិននៅក្រៅសិទ្ធិ។
-- **ជំហានទី៣៖** agent ដូចជា `lead-ba`, `lead-dev`, `lead-qa` ធ្វើការ ហើយអ្នកអាចមើលឃើញពួកវាធ្វើការ។
+- **ជំហានទី៣៖** agent ដូចជា `lead-ba`, `lead-dev`, `lead-qa`, `lead-ux` ធ្វើការ ហើយអ្នកអាចមើលឃើញពួកវាធ្វើការ។ ក្រោយ PASSED `reviewer` និង `security` (អានតែប៉ុណ្ណោះ) ពិនិត្យការកែ។
 - **ជំហានទី៤ `verify`៖** controller ស្តារការកែប្រែណាដែលនៅក្រៅការចាត់តាំង ហើយរត់ check ពិតប្រាកដ។
 - **ជំហានទី៥៖** orchestrator រាយការណ៍ជូនអ្នក។ វានិយាយថា "PASSED" លុះត្រាតែ controller និយាយដូច្នោះ។
 - **បន្តការងារពេល session ឈប់ឬអស់ quota៖** បើ session editor ឈប់កណ្តាលទី ប្រើ `node .harness/visible.mjs handoff` ដើម្បីមើលការងារដែលបានកែរួច និងយក prompt បន្តទៅ editor ផ្សេង ឬប្រើ `node .harness/dispatch.mjs --resume-visible --wait` ដើម្បីឱ្យ terminal/engine ផ្សេងបន្តបញ្ចប់ការងារនោះដោយរក្សាការកែប្រែដើមទុក (ប្រើ `--editor <name>` លើ `visible.mjs brief` / `assign` ពេលចាប់ផ្តើមពី editor ផ្សេងក្រៅពី Claude Code)។
@@ -46,7 +46,8 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 
 ## ៦. ច្បាប់សុវត្ថិភាព
 
-- **Charter** (`.harness/charter.md`)៖ កំណត់ថា agent ស្វ័យប្រវត្តិអាចកែបានតែ `src/**`, `docs/**`, `tests/**`, `test/**` ប៉ុណ្ណោះ ហើយហាមកែ `.harness/**`។
+- **Charter** (`.harness/charter.md`)៖ កំណត់ថា agent ស្វ័យប្រវត្តិអាចកែបានតែ `src/**`, `docs/**`, `tests/**`, `test/**`, `__tests__/**` ប៉ុណ្ណោះ ហើយហាមកែ `.harness/**`។
+- **ការបែងចែកឯកសារតេស្ត និង Root-Cause / Anti-Cheating**៖ `lead-qa` តែមួយគត់ជាម្ចាស់ឯកសារតេស្ត (`tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*`) — controller (`validateDelegation` និង `verify`) រារាំង ឬស្តារភ្លាមបើ `lead-dev` ប៉ះឯកសារតេស្ត។ លើការជួសជុល bug (`visible.mjs brief --bugfix`) ប្រព័ន្ធស្កេន `auditPatchSignals` រក `.skip`/`.todo` ក្នុងតេស្ត, `catch {}` ទទេលាក់ error និងទាមទារការពន្យល់ `Symptom / Root Cause / Blast Radius` (ហើយ `daemon.mjs` បញ្ចូល `[TWO-PHASE ROOT-CAUSE DIRECTIVE]` ពេល retry) មុននឹង `reviewer` អានពិនិត្យ diff។<!-- docs-drift:ignore -->
 - **Memory** (`.harness/memory/`)៖ `profile.md` និង `lessons.md` ត្រូវបានអានដោយ AI គ្រប់ៗ។ ឧទាហរណ៍ ច្បាប់ L1 តម្រូវឱ្យសួរម្ចាស់ project មុនរាល់ពេល push។
 - **Rollback៖** បើការងារបរាជ័យ ឯកសារទាំងអស់ត្រូវបានស្តារមកដូចដើមវិញដោយស្វ័យប្រវត្តិ។
 - AI មិនដែល push ឬ merge ទៅ `main` ដោយគ្មានការអនុញ្ញាតពីម្ចាស់ project ទេ។

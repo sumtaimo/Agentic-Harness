@@ -49,17 +49,30 @@ backlog and memory are kept; the core and its fingerprints are replaced.
 
 Run these in the template repository, in order. Nothing goes to `lab` until all pass **and the owner says yes**.
 
-1. `npm test`: the free test suite (fake engines only; it hides the real AI CLIs on your machine).
-2. `npm run audit -- --site`: installs into an empty project as a new user would and checks every command, the docs'
-   references, the owner's rules and the website build. Free; it never calls an AI tool.
-3. A real run, only when an engine's command line or models changed, and only with the owner's OK (it spends quota):
+1. **Docs sync (keep docs true to the code):** whenever `.harness/team.json`, `.harness/roles/*.json`, `.harness/config.json` profiles, `.harness/*.mjs` commands, or `package.json` scripts/version change, update `README.md`, `AGENTS.md`, `docs/*.md`, `.claude/commands/harness/*.md`, and `website/` in the same commit (`npm run audit` checks docs against source-of-truth facts and fails on drift).
+2. `npm test`: the free test suite (fake engines only; it hides the real AI CLIs on your machine).
+3. `npm run audit -- --site`: installs into an empty project as a new user would and checks every command, the docs'
+   references, docs-vs-source-of-truth drift (`test/lib/docs-drift.mjs`), the owner's rules and the website build. Free; it never calls an AI tool.
+4. A real run, only when an engine's command line or models changed, and only with the owner's OK (it spends quota):
    one tiny task in a scratch project (`npm run demo`, then the `hello.txt` task in `docs/ENGINES.md`).
-4. Bump `"version"` in `package.json` when the core changed (every install records it).
-5. Commit on `lab`, then ask the owner before pushing. A normal push only. Pushed from a session worktree? Also update
+5. Bump `"version"` in `package.json` when the core changed (every install records it).
+6. Commit on `lab`, then ask the owner before pushing. A normal push only. Pushed from a session worktree? Also update
    the main folder (`git pull --ff-only` there): new sessions start from it. The session hook warns when it is behind.
-6. **Release**: when the lab version has been used for real and the owner says "release", copy it to the template:
+7. **Release**: when the lab version has been used for real and the owner says "release", copy it to the template:
    `git push origin lab:release` (a normal push; never force). Users installing from `#release` and the landing page
    (deployed from `release`) get it from then on. Nothing reaches users before this step.
+
+## Docs source of truth
+
+Never copy lists, roles, counts, or versions into documentation by memory. Always check the canonical source file first:
+
+| Fact | Canonical source of truth | Checked by `npm run audit`? |
+|---|---|---|
+| Leads, scopes, budgets | `.harness/team.json` | Yes (lead rosters & counts) |
+| Roles, missions, tool rules | `.harness/roles/*.json` | Yes (role token existence) |
+| Engines & model IDs | `.harness/config.json` | Yes (model IDs forbidden in docs) |
+| Template version & npm scripts | `package.json` | Yes (`current`/`latest` version & scripts) |
+| CLI commands & agent/command files | `.harness/*.mjs`, `.claude/agents/`, `.claude/commands/harness/` | Yes (every referenced file/command must exist) |
 
 ## The owner's rules
 
