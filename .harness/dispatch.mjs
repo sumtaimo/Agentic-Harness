@@ -213,10 +213,19 @@ if (resumeVisible) {
   if (resumedRun.acceptanceCriteria?.length) acceptanceCriteria = [...resumedRun.acceptanceCriteria];
   if (resumedRun.interfaceContract) interfaceContract = resumedRun.interfaceContract;
   if (resumedRun.lastVerify && !resumedRun.lastVerify.passed) {
-    const errBits = [];
-    if (resumedRun.lastVerify.violations?.length) errBits.push(...resumedRun.lastVerify.violations);
-    if (resumedRun.lastVerify.check) errBits.push(resumedRun.lastVerify.check);
-    if (errBits.length) initialError = clipErrorTrace(errBits.join('\n'), 6000);
+    const trace = String(resumedRun.lastVerify.trace || '').trim();
+    if (trace) {
+      initialError = clipErrorTrace(trace, 6000);
+    } else {
+      const errBits = [];
+      if (resumedRun.lastVerify.violations?.length) errBits.push(...resumedRun.lastVerify.violations);
+      if (resumedRun.lastVerify.patchSafety?.blocking?.length) {
+        errBits.push(...resumedRun.lastVerify.patchSafety.blocking.map((b) => (/^PATCH_SAFETY:/i.test(String(b)) ? String(b) : `PATCH_SAFETY: ${b}`)));
+      }
+      const checkText = String(resumedRun.lastVerify.check || '').trim();
+      if (checkText && !(errBits.length && /^PASS\b/i.test(checkText))) errBits.push(checkText);
+      if (errBits.length) initialError = clipErrorTrace(errBits.join('\n'), 6000);
+    }
   }
   const teamDef = loadTeam();
   if (resumedRun.assignments?.length > 0 && subtasks.length === 0 && !hierarchy && !explicitMode) {

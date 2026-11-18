@@ -57,6 +57,7 @@ try {
   const coreEdited = [...(core.changed || []), ...(core.missing || [])];
   const coreAdded = core.added || [];
   const taughtCount = (() => { try { return listLessons(FILES.lessons).length; } catch { return 0; } })();
+  const autoLessonsCount = (() => { try { return listLessons(FILES.autoLessons).length; } catch { return 0; } })();
   // Installed Skill Foundry skills that are outdated or were edited: report only (never updates anything). Silent when all is fine.
   const foundryLines = await (async () => { try { return (await import('./lib/foundry-check.mjs')).foundryCheck({ root: ROOT }).lines; } catch { return []; } })();
 
@@ -68,15 +69,25 @@ try {
     if (newestOpen) {
       const r = newestOpen;
       const ed = r.editor && r.editor !== 'claude-code' ? `, ${r.editor}` : '';
-      briefLines.push(`! Open run ${r.id} ("${r.title}", ${r.status}${ed}): node .harness/visible.mjs handoff ${r.id} | node .harness/dispatch.mjs --resume-visible ${r.id} --wait`);
+      const diag = r.lastVerify && !r.lastVerify.passed
+        ? (r.lastVerify.diagnosis?.category
+          ? `, ${r.lastVerify.diagnosis.category}${r.lastVerify.diagnosis.repeat ? ' REPEAT' : ''}`
+          : r.lastVerify.patchSafety?.blocking?.length ? ', PATCH_SAFETY' : '')
+        : '';
+      briefLines.push(`! Open run ${r.id} ("${r.title}", ${r.status}${ed}${diag}): node .harness/visible.mjs handoff ${r.id} | node .harness/dispatch.mjs --resume-visible ${r.id} --wait`);
     } else if (newestStopped) {
       const s = newestStopped;
-      briefLines.push(`! Stopped run ${s.id} ("${s.title}", ${s.status}): node .harness/visible.mjs handoff ${s.id} | rollback: node .harness/visible.mjs rollback ${s.id}`);
+      const diag = s.lastVerify && !s.lastVerify.passed
+        ? (s.lastVerify.diagnosis?.category
+          ? `, ${s.lastVerify.diagnosis.category}${s.lastVerify.diagnosis.repeat ? ' REPEAT' : ''}`
+          : s.lastVerify.patchSafety?.blocking?.length ? ', PATCH_SAFETY' : '')
+        : '';
+      briefLines.push(`! Stopped run ${s.id} ("${s.title}", ${s.status}${diag}): node .harness/visible.mjs handoff ${s.id} | rollback: node .harness/visible.mjs rollback ${s.id}`);
     } else if (charter.autonomous && c.READY > 0) {
       const next = nextReady(bl);
       briefLines.push(`> Autopilot next: "${next?.title || next?.goal || ''}" (${c.READY} READY) — run /harness:auto or node .harness/daemon.mjs --tick`);
     } else {
-      briefLines.push(`- Status: idle, no unfinished editor runs (${taughtCount} taught rule(s) in memory)`);
+      briefLines.push(`- Status: idle, no unfinished editor runs (${taughtCount} taught rule(s), ${autoLessonsCount} auto-lesson(s) in memory)`);
     }
 
     if (held.length) {
@@ -172,7 +183,7 @@ try {
     `- Controller: ${pid ? `running (PID ${pid}), phase ${st.phase || '?'}${st.taskTitle ? `, task "${st.taskTitle}"` : ''}` : 'NOT running (start it in the background to work through the harness; see /harness:run)'}`,
     `- Backlog: READY ${c.READY}, IN_PROGRESS ${c.IN_PROGRESS}, DONE ${c.DONE}, BLOCKED ${c.BLOCKED} | inbox ${inboxWaiting} | failed jobs ${count(DIRS.failed)}`,
     `- Autonomous mode: charter says ${charter.autonomous ? 'ON' : 'off'}${git.integrationBranch && git.integrationMode !== 'off' ? `; autonomous work lands on the '${git.integrationBranch}' branch, never main` : ''}`,
-    `- Memory: ${taughtCount} taught rule(s) (already loaded via CLAUDE.md)`
+    `- Memory: ${taughtCount} taught rule(s) (already loaded via CLAUDE.md), ${autoLessonsCount} auto-lesson(s) (task-ranked via memory.mjs context)`
   ];
   if (configError) lines.push(`- WARNING: .harness/config.json is invalid (${configError}); fix its JSON syntax before running tasks.`);
   if (!fs.existsSync(FILES.profile) || !profile.trim() || /^- .*\(fill me/im.test(profile)) lines.push('- profile.md is not filled in yet: ask the user a few simple questions and fill it (see AGENTS.md section 1).');
@@ -181,7 +192,12 @@ try {
   if (newestOpen) {
     const r = newestOpen;
     const ed = r.editor && r.editor !== 'claude-code' ? `, from ${r.editor}` : '';
-    lines.push(`- UNFINISHED editor run ${r.id} ("${r.title}", ${r.status}${ed}). Ask the user whether to finish it (node .harness/visible.mjs verify ${r.id}), hand off or continue in another AI/terminal (node .harness/visible.mjs handoff ${r.id} or node .harness/dispatch.mjs --resume-visible ${r.id} --wait), or undo it (node .harness/visible.mjs rollback ${r.id}). Do not start another task first.`);
+    const diag = r.lastVerify && !r.lastVerify.passed
+      ? (r.lastVerify.diagnosis?.category
+        ? `, last failure: ${r.lastVerify.diagnosis.category}${r.lastVerify.diagnosis.repeat ? ' REPEAT' : ''}`
+        : r.lastVerify.patchSafety?.blocking?.length ? ', last failure: PATCH_SAFETY' : '')
+      : '';
+    lines.push(`- UNFINISHED editor run ${r.id} ("${r.title}", ${r.status}${ed}${diag}). Ask the user whether to finish it (node .harness/visible.mjs verify ${r.id}), hand off or continue in another AI/terminal (node .harness/visible.mjs handoff ${r.id} or node .harness/dispatch.mjs --resume-visible ${r.id} --wait), or undo it (node .harness/visible.mjs rollback ${r.id}). Do not start another task first.`);
   } else if (charter.autonomous && c.READY > 0) {
     const next = nextReady();
     lines.push(`- AUTO MODE IS ON (the owner enabled it in .harness/charter.md) and ${c.READY} task(s) are READY${next ? `; next: "${next.title || next.goal}"` : ''}. Start the autonomous workflow now with /harness:auto: you act as the orchestrator, the named agents work visibly, the controller verifies, and you report to the user at the end. If the user's message is about something else, answer it first and then offer to run the READY task(s).`);
@@ -242,7 +258,15 @@ try {
     if (coreEdited.length) lines.push(`- WARNING: the harness core was edited in this project (${coreEdited.join(', ')}). Tell the user; re-installing from the template restores it.`);
     if (coreAdded.length) lines.push(`- WARNING: unmanifested core file(s) found in .harness/ (${coreAdded.join(', ')}). Tell the user; core files belong to the template.`);
   }
-  if (newestStopped && !newestOpen) lines.push(`- A previous editor run stopped and needs a human decision: ${newestStopped.id} ("${newestStopped.title}", ${newestStopped.status}). Report it to the user if they have not seen it.`);
+  if (newestStopped && !newestOpen) {
+    const s = newestStopped;
+    const diag = s.lastVerify && !s.lastVerify.passed
+      ? (s.lastVerify.diagnosis?.category
+        ? `, ${s.lastVerify.diagnosis.category}${s.lastVerify.diagnosis.repeat ? ' REPEAT' : ''}`
+        : s.lastVerify.patchSafety?.blocking?.length ? ', PATCH_SAFETY' : '')
+      : '';
+    lines.push(`- A previous editor run stopped and needs a human decision: ${s.id} ("${s.title}", ${s.status}${diag}). Report it to the user if they have not seen it.`);
+  }
   for (const l of foundryLines) lines.push(`- ${l}`);
   lines.push('- To run work with visible named agents: use /harness:run <goal>. Autonomous: /harness:auto. Team: /harness:team. Status: /harness:status. Health check: /harness:doctor. Teach a rule: /harness:teach <rule>. Several sessions at once (Session A + up to 4 child sessions): /harness:sessions.');
   console.log(lines.join('\n'));

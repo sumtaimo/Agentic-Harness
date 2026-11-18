@@ -197,8 +197,28 @@ export function collectStatus({ skipSessions = false } = {}) {
       failed: safeCountJson(DIRS.failed)
     },
     visible: {
-      open: openRuns.map((r) => ({ id: r.id, title: r.title, status: r.status, editor: r.editor || 'claude-code', resumable: RESUMABLE_STATUSES.has(r.status), hasBaseline: hasVisibleBaseline(r), hasReport: fs.existsSync(path.join(visibleRunDir(r.id), 'report.md')) })),
-      stopped: stoppedRuns.map((r) => ({ id: r.id, title: r.title, status: r.status, editor: r.editor || 'claude-code', resumable: RESUMABLE_STATUSES.has(r.status), hasBaseline: hasVisibleBaseline(r), hasReport: fs.existsSync(path.join(visibleRunDir(r.id), 'report.md')) }))
+      open: openRuns.map((r) => {
+        const lv = r.lastVerify;
+        const failed = lv && !lv.passed;
+        const failureCategory = failed ? (lv.diagnosis?.category || (lv.patchSafety?.blocking?.length ? 'PATCH_SAFETY' : '')) : '';
+        return {
+          id: r.id, title: r.title, status: r.status, editor: r.editor || 'claude-code',
+          resumable: RESUMABLE_STATUSES.has(r.status), hasBaseline: hasVisibleBaseline(r), hasReport: fs.existsSync(path.join(visibleRunDir(r.id), 'report.md')),
+          ...(failureCategory ? { failureCategory, repeatFailure: Boolean(lv.diagnosis?.repeat), ...(lv.diagnosis?.headline ? { failureHeadline: lv.diagnosis.headline } : {}) } : {}),
+          ...(failed && lv.patchSafety?.blocking?.length ? { safetyBlocked: lv.patchSafety.blocking.length } : {})
+        };
+      }),
+      stopped: stoppedRuns.map((r) => {
+        const lv = r.lastVerify;
+        const failed = lv && !lv.passed;
+        const failureCategory = failed ? (lv.diagnosis?.category || (lv.patchSafety?.blocking?.length ? 'PATCH_SAFETY' : '')) : '';
+        return {
+          id: r.id, title: r.title, status: r.status, editor: r.editor || 'claude-code',
+          resumable: RESUMABLE_STATUSES.has(r.status), hasBaseline: hasVisibleBaseline(r), hasReport: fs.existsSync(path.join(visibleRunDir(r.id), 'report.md')),
+          ...(failureCategory ? { failureCategory, repeatFailure: Boolean(lv.diagnosis?.repeat), ...(lv.diagnosis?.headline ? { failureHeadline: lv.diagnosis.headline } : {}) } : {}),
+          ...(failed && lv.patchSafety?.blocking?.length ? { safetyBlocked: lv.patchSafety.blocking.length } : {})
+        };
+      })
     },
     engines,
     sessions,
@@ -228,11 +248,13 @@ export function formatSummary(info) {
   if (info.visible.open.length) {
     const r = info.visible.open[0];
     const ed = r.editor ? `, ${editorDisplayName(r.editor)}` : '';
+    const diag = r.failureCategory ? ` [${r.failureCategory}${r.repeatFailure ? ' REPEAT' : ''}]` : r.safetyBlocked ? ' [PATCH_SAFETY]' : '';
     const extra = info.visible.open.length > 1 ? ` (+${info.visible.open.length - 1} more)` : '';
-    editorStr = `Open run ${r.id} ("${r.title}", ${r.status}${ed})${extra}`;
+    editorStr = `Open run ${r.id} ("${r.title}", ${r.status}${ed})${diag}${extra}`;
   } else if (info.visible.stopped.length) {
     const s = info.visible.stopped[0];
-    editorStr = `Stopped run ${s.id} ("${s.title}", ${s.status})`;
+    const diag = s.failureCategory ? ` [${s.failureCategory}${s.repeatFailure ? ' REPEAT' : ''}]` : s.safetyBlocked ? ' [PATCH_SAFETY]' : '';
+    editorStr = `Stopped run ${s.id} ("${s.title}", ${s.status})${diag}`;
   }
 
   const heldStr = info.backlog.held.length
@@ -330,7 +352,8 @@ export async function menuContinue(_rl, ask, info, run = runScript, say = consol
   }
   say('\nUnfinished / stopped editor runs:');
   candidates.forEach((r, i) => {
-    say(`  ${i === 0 ? '*' : ' '} ${r.id}  [${r.status}]  ${r.title}  (${editorDisplayName(r.editor)})`);
+    const diag = r.failureCategory ? `  [${r.failureCategory}${r.repeatFailure ? ' REPEAT' : ''}]` : r.safetyBlocked ? '  [PATCH_SAFETY]' : '';
+    say(`  ${i === 0 ? '*' : ' '} ${r.id}  [${r.status}]  ${r.title}  (${editorDisplayName(r.editor)})${diag}`);
   });
 
   let target = candidates[0];
@@ -350,6 +373,10 @@ export async function menuContinue(_rl, ask, info, run = runScript, say = consol
   const canReport = target.hasReport !== false;
 
   say(`\nRun ${target.id} (${target.status}):`);
+  if (target.failureCategory || target.safetyBlocked) {
+    const label = target.failureCategory ? `${target.failureCategory}${target.repeatFailure ? ' REPEAT' : ''}` : 'PATCH_SAFETY';
+    say(`  Last failure: ${label}${target.failureHeadline ? ` — ${target.failureHeadline}` : ''}`);
+  }
   say('  [1] View handoff report & continuation prompt (visible.mjs handoff)');
   say('  [2] Print continuation prompt only (copy-paste to another editor)');
   say(`  [3] Resume in terminal until done (dispatch.mjs --resume-visible --wait)${canResume ? '' : `  [unavailable: ${target.status}]`}`);
@@ -518,9 +545,10 @@ export async function menuSetup(_rl, ask, _info, run = runScript, say = console.
   say('  [5] Sync editor named agents (team.mjs sync-agents)');
   say('  [6] Show agent team & budgets (team.mjs show)');
   say('  [7] Validate team guardrails (team.mjs validate)');
+  say('  [8] Preview / adapt team & charter scopes to project folders (team.mjs adapt-scopes)');
   say('  [0] Back');
 
-  const sub = await ask('Choose [0-7]: ');
+  const sub = await ask('Choose [0-8]: ');
   if (isBack(sub)) return;
   const choice = sub.trim();
 
@@ -549,6 +577,13 @@ export async function menuSetup(_rl, ask, _info, run = runScript, say = console.
   if (choice === '5') { run('team.mjs', ['sync-agents']); return; }
   if (choice === '6') { run('team.mjs', ['show']); return; }
   if (choice === '7') { run('team.mjs', ['validate']); return; }
+  if (choice === '8') {
+    const code = run('team.mjs', ['adapt-scopes']);
+    if (code !== 0) return;
+    if (!await confirm(ask, 'Apply any suggested scope additions to .harness/team.json, charter.md & roles? [y/N] ', false)) { say('Not changed.'); return; }
+    run('team.mjs', ['adapt-scopes', '--apply']);
+    return;
+  }
   say(`Unknown option "${choice}".`);
 }
 
@@ -797,11 +832,11 @@ export async function menuUsageAndStatus(_rl, ask, _info, run = runScript, say =
   if (choice === '4') { run('visible.mjs', ['status']); return; }
   if (choice === '5') {
     run('memory.mjs', ['list']);
-    const ans = await ask('Action — type permanent rule, "learn <text>" (local), "promote <id>", "forget <id>", "forget-auto <id>", "context", "sessions [n]", or Enter to go back: ');
+    const ans = await ask('Action — type permanent rule, "learn <text>" (local), "promote <id>", "forget <id>", "forget-auto <id>", "context [goal]", "sessions [n]", or Enter to go back: ');
     if (ans === null || !ans.trim() || isBackCmd(ans)) return;
     const t = ans.trim();
     let m;
-    if (/^context$/i.test(t)) run('memory.mjs', ['context']);
+    if ((m = t.match(/^context(?:\s+(.+))?$/i))) run('memory.mjs', m[1]?.trim() ? ['context', '--goal', m[1].trim()] : ['context']);
     else if ((m = t.match(/^sessions(?:\s+(\d+))?$/i))) run('memory.mjs', ['sessions', ...(m[1] ? [m[1]] : [])]);
     else if ((m = t.match(/^learn\s+(.+)$/i))) run('memory.mjs', ['learn', m[1]]);
     else if ((m = t.match(/^promote\s+(\S+)$/i))) run('memory.mjs', ['promote', m[1]]);

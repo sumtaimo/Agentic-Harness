@@ -15,10 +15,11 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.dirname(HERE);
 
-function exec(script, args, { cwd = ROOT, quiet = true } = {}) {
+function exec(script, args, { cwd = ROOT, projectRoot = null, quiet = true } = {}) {
+  const rootEnv = projectRoot && path.resolve(projectRoot) !== path.resolve(ROOT) ? { HARNESS_ROOT: path.resolve(projectRoot) } : {};
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [path.join(HERE, script), ...args], {
-      cwd, env: { ...process.env, ...(quiet ? { HARNESS_SILENT: '1' } : {}) }
+      cwd, env: { ...process.env, ...rootEnv, ...(quiet ? { HARNESS_SILENT: '1' } : {}) }
     });
     let stdout = ''; let stderr = '';
     child.stdout.on('data', (d) => { stdout += d; });
@@ -128,7 +129,17 @@ export const sessionsBoard = async ({ json = true } = {}) => {
   const r = await exec('sessions.mjs', json !== false ? ['board', '--json'] : ['board']);
   return json !== false ? parseJsonResult(r) : r;
 };
+/** Retrieve task-ranked harness memory context (permanent rules + relevant auto-lessons). */
+export const memoryContext = ({ goal, query, files, projectRoot } = {}) => {
+  const args = ['context'];
+  if (goal) args.push('--goal', String(goal));
+  if (query) args.push('--query', String(query));
+  if (files) args.push('--files', csv(files));
+  return exec('memory.mjs', args, { cwd: projectRoot || ROOT, projectRoot });
+};
 /** Inspect configured agent team, scopes, models, and budgets. */
 export const teamShow = () => exec('team.mjs', ['show']);
+/** Preview or apply adaptive scope updates from project layout (team.mjs adapt-scopes). */
+export const teamAdaptScopes = ({ apply = false, projectRoot } = {}) => exec('team.mjs', apply ? ['adapt-scopes', '--apply'] : ['adapt-scopes'], { cwd: projectRoot || ROOT, projectRoot });
 /** Setup check (ok=false when something must be fixed). */
 export const doctor = ({ deep = false } = {}) => exec('doctor.mjs', deep ? ['--deep'] : []);

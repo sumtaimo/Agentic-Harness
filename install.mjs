@@ -178,13 +178,34 @@ const { hashCore, winCommandLine } = await import(pathToFileURL(path.join(target
 
 const MARK = '<!-- agentic-harness -->';
 const POINTER = `${MARK}\n## Agentic harness\n\nThis project has an agentic harness in \`.harness/\`. Read and follow \`AGENTS.md\` (section "Agentic harness" or the whole file) and the user's memory in \`.harness/memory/profile.md\`, \`.harness/memory/lessons.md\`, and \`.harness/memory/auto-lessons.md\` (or \`node .harness/memory.mjs context --goal "..." --files "..."\`) before working. Save permanent user rules with \`node .harness/memory.mjs remember "<rule>"\` and local technical pitfalls with \`node .harness/memory.mjs learn "<lesson>"\`. Never edit the harness core (\`.harness/*.mjs\`, \`.harness/lib/**\`): it comes from the template; report harness bugs instead of patching them here.\n`;
+const OLD_POINTER_RE = /<!-- agentic-harness -->\r?\n## Agentic harness\r?\n+This project has an agentic harness in `\.harness\/`\.[^\n]*report harness bugs instead of patching them here\.\r?\n?/;
+const LEGACY_STOCK_POINTERS = {
+  'CLAUDE.md': '# CLAUDE.md\n\nAll instructions for this project live in AGENTS.md. The imports below load it and the\nuser\'s memory into every Claude Code session automatically.\n\n@AGENTS.md\n@.harness/memory/profile.md\n@.harness/memory/lessons.md',
+  'GEMINI.md': '# GEMINI.md (Antigravity)\n\nRead and follow `AGENTS.md` in this folder before doing anything — it explains the\n`.harness/` agentic harness and the user\'s memory in `.harness/memory/`.\n\n@AGENTS.md\n@.harness/memory/profile.md\n@.harness/memory/lessons.md',
+  '.github/copilot-instructions.md': '# Copilot instructions\n\nBefore answering, read and follow `AGENTS.md` at the repository root. It explains the\n`.harness/` agentic harness and requires you to read the user\'s memory first:\n`.harness/memory/profile.md` and `.harness/memory/lessons.md`. When the user corrects you or\nstates a preference, save it with `node .harness/memory.mjs remember "<rule>"`.',
+  '.cursor/rules/harness.mdc': '---\ndescription: Agentic harness + user memory — read AGENTS.md first\nalwaysApply: true\n---\n\nBefore answering, read and follow `AGENTS.md` at the project root. It explains the\n`.harness/` agentic harness and requires you to read the user\'s memory first:\n`.harness/memory/profile.md` and `.harness/memory/lessons.md`. When the user corrects you or\nstates a preference, save it with `node .harness/memory.mjs remember "<rule>"`.',
+  '.windsurfrules': 'Before answering, read and follow `AGENTS.md` at the project root. It explains the\n`.harness/` agentic harness and requires you to read the user\'s memory first:\n`.harness/memory/profile.md` and `.harness/memory/lessons.md`. When the user corrects you or\nstates a preference, save it with `node .harness/memory.mjs remember "<rule>"`.'
+};
 
 for (const rel of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.github/copilot-instructions.md', '.cursor/rules/harness.mdc', '.windsurfrules']) {
   const d = path.join(target, rel); const s = path.join(SRC, rel);
   fs.mkdirSync(path.dirname(d), { recursive: true });
   if (!fs.existsSync(d)) { fs.copyFileSync(s, d); report.push(`wrote  ${rel}`); continue; }
   const body = fs.readFileSync(d, 'utf8');
-  if (body.includes(MARK)) { report.push(`kept   ${rel} (harness section already present)`); continue; }
+  if (body.includes(MARK)) {
+    if (rel !== 'AGENTS.md' && !body.includes('auto-lessons.md') && OLD_POINTER_RE.test(body)) {
+      fs.writeFileSync(d, body.replace(OLD_POINTER_RE, POINTER));
+      report.push(`updated harness pointer in ${rel}`);
+    } else {
+      report.push(`kept   ${rel} (harness section already present)`);
+    }
+    continue;
+  }
+  if (rel !== 'AGENTS.md' && LEGACY_STOCK_POINTERS[rel] && body.replace(/\r\n/g, '\n').trim() === LEGACY_STOCK_POINTERS[rel]) {
+    fs.copyFileSync(s, d);
+    report.push(`updated ${rel} (cross-tool rule parity)`);
+    continue;
+  }
   // Copies written by an earlier install (the template's own files carry no marker) or by a release before the marker
   // existed: they already hold the harness instructions, so appending again would duplicate them.
   const legacy = rel === 'AGENTS.md'

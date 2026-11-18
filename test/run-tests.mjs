@@ -5498,6 +5498,183 @@ await test('cross-tool rule parity & doctor check (Point 6): all 6 instruction f
   assert(docEx.status === 0 && /✔ cross-tool rules in sync \(6 files point to AGENTS\.md \+ memory\)/.test(docEx.stdout) && /Failures: 0 · Warnings: 0/.test(docEx.stdout), docEx.stdout);
 });
 
+await test('v1.0.21 maintenance (failure diagnosis parity): --resume-visible inherits PATCH_SAFETY trace instead of PASS, daemon syncs diagnosis into report.md, and start/status/visible/hook-session/ui expose diagnosis consistently', async () => {
+  // 1. Visible verify PATCH_SAFETY failure -> surfaced everywhere & inherited cleanly on --resume-visible
+  const d = sandbox();
+  const sTok = ['ghp_', 'z9Y8x7W6v5', 'U4t3S2r1Q0', 'mn12'].join('');
+  const vid = runIdOf(vis(d, 'brief', '--goal', 'Add auth token helper', '--check', PASS));
+  assert(vis(d, 'assign', vid, deleg([{ lead: 'lead-dev', goal: 'FIX src/auth.js export const ok = 1;', files: ['src/auth.js'] }])).status === 0);
+  agentsWrite(d, [['src/auth.js', `export const k = "${sTok}";\n`]]);
+  const vFail = vis(d, 'verify', vid);
+  assert(vFail.status === 1 && /Safety gate BLOCKED/.test(vFail.stdout), vFail.stdout);
+
+  const stStartJson = JSON.parse(node(d, ['.harness/start.mjs', '--json'], { HARNESS_ENGINES: 'none' }).stdout);
+  assert(stStartJson.visible.open[0].failureCategory === 'PATCH_SAFETY' && stStartJson.warnings.autoLessonsCount >= 1, JSON.stringify(stStartJson.visible));
+  const stSummary = node(d, ['.harness/start.mjs', '--summary'], { HARNESS_ENGINES: 'none' });
+  assert(/\[PATCH_SAFETY\]/.test(stSummary.stdout), stSummary.stdout);
+  const mCont = spawnSync(process.execPath, ['.harness/start.mjs'], { cwd: d, env: { ...env, HARNESS_ROOT: d }, input: '1\n0\n0\n', encoding: 'utf8', timeout: 20000 });
+  assert(mCont.status === 0 && /\[PATCH_SAFETY\]/.test(mCont.stdout) && /Last failure: PATCH_SAFETY/.test(mCont.stdout), mCont.stdout);
+
+  const stJson = JSON.parse(node(d, ['.harness/status.mjs', '--json']).stdout);
+  assert(stJson.visible.open[0].failureCategory === 'PATCH_SAFETY', JSON.stringify(stJson.visible));
+  const stTxt = node(d, ['.harness/status.mjs']);
+  assert(/, PATCH_SAFETY\)/.test(stTxt.stdout), stTxt.stdout);
+  const vsTxt = vis(d, 'status');
+  assert(/\[PATCH_SAFETY\]/.test(vsTxt.stdout), vsTxt.stdout);
+  const hkBrief = node(d, ['.harness/hook-session.mjs', '--brief'], { HARNESS_ROOT: d, HARNESS_NO_FETCH: '1' });
+  assert(/, PATCH_SAFETY\):/.test(hkBrief.stdout), hkBrief.stdout);
+  const hkFull = node(d, ['.harness/hook-session.mjs'], { HARNESS_ROOT: d, HARNESS_NO_FETCH: '1' });
+  assert(/auto-lesson\(s\)/.test(hkFull.stdout) && /last failure: PATCH_SAFETY/.test(hkFull.stdout), hkFull.stdout);
+
+  const srv = await startUiProcess(d);
+  try {
+    const uiHtml = await (await fetch(srv.url)).text();
+    const vm = await import('node:vm');
+    new vm.Script(uiHtml.match(/<script>([\s\S]*?)<\/script>/)[1]);
+    assert(uiHtml.includes('lv.diagnosis.category') && uiHtml.includes('[PATCH_SAFETY]'), 'ui.mjs renderVisible missing diagnosis display');
+    const uiStatus = await (await fetch(`${srv.url.replace(/\/$/, '')}/api/status?skipSessions=1`)).json();
+    assert(uiStatus.visible.open[0].failureCategory === 'PATCH_SAFETY', JSON.stringify(uiStatus.visible));
+    const uiVisible = await (await fetch(`${srv.url.replace(/\/$/, '')}/api/visible`)).json();
+    assert(uiVisible.runs.find((x) => x.id === vid)?.lastVerify?.diagnosis?.category === 'PATCH_SAFETY', JSON.stringify(uiVisible));
+  } finally {
+    await srv.stop();
+  }
+
+  const rRec = node(d, ['.harness/dispatch.mjs', '--resume-visible', vid, '--wait']);
+  assert(rRec.status === 0 && /RESULT: COMMITTED ✔/.test(rRec.stdout) && runJson(d, vid).status === 'PASSED', rRec.stdout + rRec.stderr);
+  const pRec = promptOf(d, 'lead-dev');
+  assert(pRec.includes('[PREVIOUS VERIFIER ERROR TO FIX]:') && pRec.includes('PATCH_SAFETY:') && pRec.includes('Category: PATCH_SAFETY') && !pRec.includes('PASS (exit 0)'), pRec);
+
+  // 2. Legacy lastVerify without .trace or .diagnosis (only patchSafety.blocking + check: "PASS (exit 0)")
+  const dLeg = sandbox();
+  const vidLeg = runIdOf(vis(dLeg, 'brief', '--goal', 'Legacy safety resume', '--check', PASS));
+  assert(vis(dLeg, 'assign', vidLeg, deleg([{ lead: 'lead-dev', goal: 'FIX src/leg.js export const clean = 1;', files: ['src/leg.js'] }])).status === 0);
+  agentsWrite(dLeg, [['src/leg.js', `export const k = "${sTok}";\n`]]);
+  assert(vis(dLeg, 'verify', vidLeg).status === 1);
+  const legFile = path.join(dLeg, '.harness', 'visible', vidLeg, 'run.json');
+  const legJson = json(legFile);
+  delete legJson.lastVerify.trace;
+  delete legJson.lastVerify.diagnosis;
+  fs.writeFileSync(legFile, JSON.stringify(legJson, null, 2));
+
+  assert(JSON.parse(node(dLeg, ['.harness/start.mjs', '--json'], { HARNESS_ENGINES: 'none' }).stdout).visible.open[0].failureCategory === 'PATCH_SAFETY');
+  assert(/PATCH_SAFETY/.test(node(dLeg, ['.harness/status.mjs']).stdout));
+  assert(/last failure: PATCH_SAFETY/.test(node(dLeg, ['.harness/hook-session.mjs'], { HARNESS_ROOT: dLeg, HARNESS_NO_FETCH: '1' }).stdout));
+
+  const rLeg = node(dLeg, ['.harness/dispatch.mjs', '--resume-visible', vidLeg, '--wait']);
+  assert(rLeg.status === 0 && read(dLeg, 'src/leg.js') === 'export const clean = 1;', rLeg.stdout + rLeg.stderr);
+  const pLeg = promptOf(dLeg, 'lead-dev');
+  assert(pLeg.includes('PATCH_SAFETY:') && !pLeg.includes('PASS (exit 0)') && !pLeg.includes(sTok), pLeg);
+
+  // 3. Headless --resume-visible failure syncs diagnosis + trace into run.json and report.md
+  const dFail = sandbox();
+  const failRt = 'node -e "console.error(\\"TypeError: Cannot read properties of undefined (reading \'z\')\\\\n    at run (src/x.js:4:1)\\"); process.exit(1)"';
+  const vidFail = runIdOf(vis(dFail, 'brief', '--goal', 'Headless diag sync', '--check', failRt));
+  assert(vis(dFail, 'assign', vidFail, deleg([{ lead: 'lead-dev', goal: 'WRITE src/x.js export const x = 1;', files: ['src/x.js'] }])).status === 0);
+  const rFail = node(dFail, ['.harness/dispatch.mjs', '--resume-visible', vidFail, '--wait']);
+  assert(rFail.status === 1 && /RESULT: NOT DONE/.test(rFail.stdout), rFail.stdout + rFail.stderr);
+  const rfJson = runJson(dFail, vidFail);
+  assert(rfJson.lastVerify.diagnosis?.category === 'RUNTIME_ERROR' && /TypeError:/.test(rfJson.lastVerify.trace || ''), JSON.stringify(rfJson.lastVerify));
+  const rfReport = read(dFail, `.harness/visible/${vidFail}/report.md`);
+  assert(/Diagnosis:/.test(rfReport) && /RUNTIME_ERROR/.test(rfReport), rfReport);
+});
+
+await test('v1.0.21 maintenance (menus, sdk, slash commands & pre-v1.0.21 upgrades): menuSetup [8] adapt-scopes, menuUsageAndStatus [5] context <goal>, sdk wrappers, pre-v1.0.21 POINTER & stock pointer upgrades stay idempotent', async () => {
+  // 1. start.mjs menuSetup [8] adapt-scopes + menuUsageAndStatus [5] "context <goal>"
+  const { d } = gitSandbox({ autonomous: false });
+  realTest(d);
+  agentsWrite(d, [['app/page.tsx', 'export default function Page() { return null; }\n'], ['styles/main.css', 'body { margin: 0; }\n']]);
+  const runMenu = (input) => spawnSync(process.execPath, ['.harness/start.mjs'], {
+    cwd: d, env: { ...env, HARNESS_ROOT: d }, input, encoding: 'utf8', timeout: 30000
+  });
+  const prevRes = runMenu('3\n8\nn\n0\n');
+  assert(prevRes.status === 0 && /app\/\*\*/.test(prevRes.stdout) && /styles\/\*\*/.test(prevRes.stdout) && /Not changed\./.test(prevRes.stdout), prevRes.stdout);
+  assert(!JSON.stringify(teamOf(d)).includes('app/**'), 'preview adapt-scopes modified team.json');
+
+  const appRes = runMenu('3\n8\ny\n0\n');
+  assert(appRes.status === 0 && /Applied scope updates/.test(appRes.stdout) && JSON.stringify(teamOf(d)).includes('app/**') && JSON.stringify(teamOf(d)).includes('styles/**'), appRes.stdout);
+
+  fs.mkdirSync(path.join(d, '.harness', 'memory'), { recursive: true });
+  const unrelated = Array.from({ length: 16 }, (_, i) => `- [L${i + 2}] (2026-01-${String(i + 2).padStart(2, '0')}) "Footer ${i + 2}": adjust bottom margin ${i + 2}`);
+  fs.writeFileSync(path.join(d, '.harness', 'memory', 'auto-lessons.md'), [
+    '# Auto',
+    '- [L1] (2026-01-01) "SQLite helper": enable pragma foreign_keys',
+    ...unrelated
+  ].join('\n') + '\n');
+  const ctxRes = runMenu('6\n5\ncontext SQLite\n0\n');
+  const ctxOut = ctxRes.stdout.split('> node .harness/memory.mjs context --goal SQLite')[1] || '';
+  assert(ctxRes.status === 0 && /pragma foreign_keys/.test(ctxOut) && !/bottom margin 2\b/.test(ctxOut), ctxRes.stdout);
+
+  // 2. sdk.mjs memoryContext & teamAdaptScopes
+  const dSdk = sandbox();
+  agentsWrite(dSdk, [['components/Card.tsx', 'export const Card = () => null;\n']]);
+  const sdkDriver = `
+    import { memoryContext, teamAdaptScopes } from ${JSON.stringify(pathToFileURL(path.join(d, '.harness', 'sdk.mjs')).href)};
+    const mc = await memoryContext({ goal: 'Fix SQLite helper', files: ['src/db.js'], projectRoot: ${JSON.stringify(d)} });
+    const ta = await teamAdaptScopes({ apply: false, projectRoot: ${JSON.stringify(dSdk)} });
+    console.log(JSON.stringify({ mcOk: mc.ok, mcOut: mc.stdout, taOk: ta.ok, taOut: ta.stdout }));
+  `;
+  const sdkOut = JSON.parse(spawnSync(process.execPath, ['--input-type=module', '-e', sdkDriver], { cwd: d, env, encoding: 'utf8', timeout: 20000 }).stdout.trim().split(/\r?\n/).pop());
+  assert(sdkOut.mcOk && sdkOut.mcOut.includes('pragma foreign_keys') && sdkOut.taOk && sdkOut.taOut.includes('components/**'), JSON.stringify(sdkOut));
+
+  // 3. install.mjs pre-v1.0.21 upgrade (LEGACY_STOCK_POINTERS + custom pre-v1.0.21 MARK POINTER) + idempotency + doctor
+  const up = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-upgrade-'));
+  fs.writeFileSync(path.join(up, 'package.json'), JSON.stringify({ name: 'upgrade-proj', scripts: { test: PASS } }, null, 2));
+  execFileSync('git', ['init', '-q'], { cwd: up });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: up });
+  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: up });
+
+  fs.writeFileSync(path.join(up, 'CLAUDE.md'), "# CLAUDE.md\n\nAll instructions for this project live in AGENTS.md. The imports below load it and the\nuser's memory into every Claude Code session automatically.\n\n@AGENTS.md\n@.harness/memory/profile.md\n@.harness/memory/lessons.md\n");
+  fs.writeFileSync(path.join(up, 'GEMINI.md'), "# GEMINI.md (Antigravity)\n\nRead and follow `AGENTS.md` in this folder before doing anything — it explains the\n`.harness/` agentic harness and the user's memory in `.harness/memory/`.\n\n@AGENTS.md\n@.harness/memory/profile.md\n@.harness/memory/lessons.md\n");
+  fs.writeFileSync(path.join(up, '.windsurfrules'), "\nBefore answering, read and follow `AGENTS.md` at the project root. It explains the\n`.harness/` agentic harness and requires you to read the user's memory first:\n`.harness/memory/profile.md` and `.harness/memory/lessons.md`. When the user corrects you or\nstates a preference, save it with `node .harness/memory.mjs remember \"<rule>\"`.\n");
+  const oldPtr = '<!-- agentic-harness -->\n## Agentic harness\n\nThis project has an agentic harness in `.harness/`. Read and follow `AGENTS.md` (section "Agentic harness" or the whole file) and the user\'s memory in `.harness/memory/profile.md` and `.harness/memory/lessons.md` before working. Save user corrections/preferences with `node .harness/memory.mjs remember "<rule>"`. Never edit the harness core (`.harness/*.mjs`, `.harness/lib/**`): it comes from the template; report harness bugs instead of patching them here.\n';
+  fs.mkdirSync(path.join(up, '.github'), { recursive: true });
+  fs.writeFileSync(path.join(up, '.github', 'copilot-instructions.md'), `# Team Copilot Rule\nKeep custom rule.\n\n${oldPtr}`);
+  fs.mkdirSync(path.join(up, '.cursor', 'rules'), { recursive: true });
+  fs.writeFileSync(path.join(up, '.cursor', 'rules', 'harness.mdc'), `# Custom Cursor Header\n\n${oldPtr}`);
+  execFileSync('git', ['add', '-A'], { cwd: up });
+  execFileSync('git', ['commit', '-q', '-m', 'pre-v1.0.21'], { cwd: up });
+
+  const inst1 = node(REPO, ['install.mjs', up, '--no-auto-assign', '--no-skills']);
+  assert(inst1.status === 0, inst1.stderr + inst1.stdout);
+  const RULE_FILES = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.github/copilot-instructions.md', '.cursor/rules/harness.mdc', '.windsurfrules'];
+  for (const rel of RULE_FILES) {
+    const body = read(up, rel);
+    for (const tok of ['auto-lessons.md', 'memory.mjs learn', 'memory.mjs context']) {
+      assert(body.includes(tok), `upgraded ${rel} missing "${tok}"`);
+    }
+  }
+  assert(read(up, '.github/copilot-instructions.md').includes('# Team Copilot Rule') && (read(up, '.github/copilot-instructions.md').match(/<!-- agentic-harness -->/g) || []).length === 1);
+  assert(read(up, '.cursor/rules/harness.mdc').includes('# Custom Cursor Header') && (read(up, '.cursor/rules/harness.mdc').match(/<!-- agentic-harness -->/g) || []).length === 1);
+  for (const rel of ['CLAUDE.md', 'GEMINI.md']) {
+    const body = read(up, rel);
+    assert(/^@AGENTS\.md$/m.test(body) && /^@\.harness\/memory\/profile\.md$/m.test(body) && /^@\.harness\/memory\/lessons\.md$/m.test(body), `lost @import in ${rel}`);
+  }
+
+  // Second install is 100% idempotent
+  const snap1 = Object.fromEntries(RULE_FILES.map((rel) => [rel, read(up, rel)]));
+  const inst2 = node(REPO, ['install.mjs', up, '--no-auto-assign', '--no-skills']);
+  assert(inst2.status === 0, inst2.stderr + inst2.stdout);
+  for (const rel of RULE_FILES) assert(read(up, rel) === snap1[rel], `re-install altered ${rel}`);
+
+  execFileSync('git', ['add', '-A'], { cwd: up });
+  execFileSync('git', ['commit', '-q', '-m', 'upgrade to v1.0.21'], { cwd: up });
+  const uCfg = path.join(up, '.harness', 'config.json');
+  const uc = json(uCfg);
+  uc.profiles.mock = { verified: true, binary: process.execPath, args: [MOCK], promptVia: 'stdin', allowedTools: [] };
+  uc.activeProfile = 'mock'; uc.autoOrder = ['mock'];
+  fs.writeFileSync(uCfg, JSON.stringify(uc, null, 2));
+  fs.writeFileSync(path.join(up, '.harness', 'approvals.json'), JSON.stringify({ engines: { mock: true } }));
+  const docUp = node(up, ['.harness/doctor.mjs']);
+  assert(docUp.status === 0 && /✔ cross-tool rules in sync \(6 files point to AGENTS\.md \+ memory\)/.test(docUp.stdout) && /Failures: 0 · Warnings: 0/.test(docUp.stdout), docUp.stdout);
+
+  // 4. Slash commands document v1.0.21 memory, adapt-scopes, safety gate, and diagnosis workflows
+  const teachMd = fs.readFileSync(path.join(REPO, '.claude', 'commands', 'harness', 'teach.md'), 'utf8');
+  for (const t of ['memory.mjs remember', 'memory.mjs learn', 'memory.mjs promote', 'memory.mjs context']) assert(teachMd.includes(t), `teach.md missing ${t}`);
+  const runMd = fs.readFileSync(path.join(REPO, '.claude', 'commands', 'harness', 'run.md'), 'utf8');
+  for (const t of ['team.mjs adapt-scopes', 'memory.mjs context', 'memory.mjs learn', 'Safety gate BLOCKED', 'Failure diagnosis']) assert(runMd.includes(t), `run.md missing ${t}`);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
 

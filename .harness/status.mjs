@@ -114,6 +114,15 @@ if (logCount > 0 && fs.existsSync(FILES.log)) {
 }
 
 if (wantJson) {
+  const visSummary = (r) => {
+    const lv = r.lastVerify;
+    const failed = lv && !lv.passed;
+    const failureCategory = failed ? (lv.diagnosis?.category || (lv.patchSafety?.blocking?.length ? 'PATCH_SAFETY' : '')) : '';
+    return {
+      id: r.id, status: r.status, title: r.title, editor: r.editor || 'claude-code',
+      ...(failureCategory ? { failureCategory, repeatFailure: Boolean(lv.diagnosis?.repeat) } : {})
+    };
+  };
   console.log(JSON.stringify({
     root: ROOT,
     daemon: { running: alive, pid: pid || null, hasStateFile: Boolean(s) },
@@ -127,7 +136,10 @@ if (wantJson) {
     verify,
     queues: { inbox: inboxCount, completed: completedCount, failed: failedCount },
     backlog: { counts: c, held: (bl.tasks || []).filter((t) => t.status === 'BLOCKED' && t.needsApproval).map((t) => t.id), staleInProgress },
-    visible: { open: openRuns.map((r) => ({ id: r.id, status: r.status, title: r.title, editor: r.editor || 'claude-code' })), stopped: stoppedRuns.map((r) => ({ id: r.id, status: r.status, title: r.title, editor: r.editor || 'claude-code' })) },
+    visible: {
+      open: openRuns.map(visSummary),
+      stopped: stoppedRuns.map(visSummary)
+    },
     sessions: sessions ? { open: sessions.open.length, maxActive: sessions.maxActive, done: sessions.done.map((t) => t.id), highRisk: sessions.highRisk.map((t) => t.id) } : null,
     team: teamInfo,
     quotaToday: todayQuota || null,
@@ -159,12 +171,18 @@ if (s) {
 console.log(`Inbox: ${inboxCount} waiting | Completed: ${completedCount} | Failed/halted: ${failedCount}`);
 console.log(`Backlog:    READY ${c.READY} | IN_PROGRESS ${c.IN_PROGRESS} | DONE ${c.DONE} | BLOCKED ${c.BLOCKED} | BACKLOG ${c.BACKLOG}`);
 
+const visDiagText = (lv) => {
+  if (!lv || lv.passed) return '';
+  if (lv.diagnosis?.category) return `, ${lv.diagnosis.category}${lv.diagnosis.repeat ? ' REPEAT' : ''}`;
+  if (lv.patchSafety?.blocking?.length) return ', PATCH_SAFETY';
+  return '';
+};
 if (openRuns.length) {
   const r = openRuns[0];
-  console.log(`Editor:     Open run ${r.id} ("${r.title}", ${r.status}, ${editorDisplayName(r.editor || 'claude-code')})${openRuns.length > 1 ? ` (+${openRuns.length - 1} more)` : ''}`);
+  console.log(`Editor:     Open run ${r.id} ("${r.title}", ${r.status}, ${editorDisplayName(r.editor || 'claude-code')}${visDiagText(r.lastVerify)})${openRuns.length > 1 ? ` (+${openRuns.length - 1} more)` : ''}`);
 } else if (stoppedRuns.length) {
   const sr = stoppedRuns[0];
-  console.log(`Editor:     Stopped run ${sr.id} ("${sr.title}", ${sr.status})`);
+  console.log(`Editor:     Stopped run ${sr.id} ("${sr.title}", ${sr.status}${visDiagText(sr.lastVerify)})`);
 } else {
   console.log('Editor:     none open');
 }

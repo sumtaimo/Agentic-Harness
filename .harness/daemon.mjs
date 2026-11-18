@@ -1509,7 +1509,24 @@ async function executeSquareCycle(taskFile) {
   try { rollback = restoreScope(backup); } catch (e) { rollback = `FAILED: ${e.message} — backup kept in .harness/staging/`; logTelemetry('ROLLBACK_FAILED', e.message); }
   try { gitResult = await finishIntegration(gitCtx, false); } catch (e) { logTelemetry('GIT_CLEANUP_FAILED', e.message); }
   if (gitResult) rollback = `${gitCtx.branch} unchanged (candidate discarded)${gitResult.keptBranches ? `; worker branches kept for review: ${gitResult.workerBranches.join(', ')}` : ''}`;
-  try { if (task.visibleRunId) syncVisibleRunAfterDaemon(task, plan, { passed: false, phase, cycle: usedCycles, errors, outputs, reason, rollback, gitResult, startedAt: taskStartedIso }); } catch (e) { logTelemetry('VISIBLE_SYNC_FAILED', e.message); }
+  try {
+    if (task.visibleRunId) {
+      syncVisibleRunAfterDaemon(task, plan, {
+        passed: false,
+        phase,
+        cycle: usedCycles,
+        errors,
+        outputs,
+        reason,
+        rollback,
+        gitResult,
+        startedAt: taskStartedIso,
+        lastErrorTrace: haltReason || lastErrorTrace || '',
+        previousErrorTrace: errors.length > 1 ? errors[errors.length - 2] : '',
+        diagnosis: haltReason ? null : errorDiagnosis
+      });
+    }
+  } catch (e) { logTelemetry('VISIBLE_SYNC_FAILED', e.message); }
   const dest = archiveTask(taskFile, task, DIRS.failed, {
     result: phase, haltReason: reason, haltedAt: new Date().toISOString(), cyclesUsed: usedCycles, rollback, errors, git: gitResult,
     ...(!isSameDir(workRoot, ROOT) ? { cwd: workRoot } : {}),

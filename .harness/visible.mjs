@@ -598,8 +598,13 @@ function status() {
   if (!runs.length) { console.log('No editor-workflow runs yet. Start one with /harness:run in Claude Code (or: node .harness/visible.mjs brief --goal "…").'); return; }
   for (const r of runs.slice(-15)) {
     const ed = r.editor && r.editor !== 'claude-code' ? `  [${editorDisplayName(r.editor)}]` : '';
+    const diag = r.lastVerify && !r.lastVerify.passed
+      ? (r.lastVerify.diagnosis?.category
+        ? `  [${r.lastVerify.diagnosis.category}${r.lastVerify.diagnosis.repeat ? ' REPEAT' : ''}]`
+        : r.lastVerify.patchSafety?.blocking?.length ? '  [PATCH_SAFETY]' : '')
+      : '';
     const job = r.pendingJobId ? `  [headless: ${r.pendingJobId}]` : '';
-    console.log(`${r.id}  ${r.status.padEnd(22)} ${r.title}${r.backlogId ? `  [${r.backlogId}]` : ''}${ed}${job}`);
+    console.log(`${r.id}  ${r.status.padEnd(22)} ${r.title}${r.backlogId ? `  [${r.backlogId}]` : ''}${ed}${diag}${job}`);
   }
 }
 

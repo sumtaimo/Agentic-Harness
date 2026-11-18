@@ -730,13 +730,21 @@ const DASHBOARD_HTML = `<!doctype html>
     const recent = runs.slice(-12).reverse();
     body.replaceChildren(makeTable(
       ['Run ID', 'Status', 'Editor', 'Cycle', 'Goal / Title'],
-      recent.map((r) => [
-        { mono: true, node: el('span', null, r.id) },
-        { node: el('span', { className: pillClassForStatus(r.status) }, r.status || '-') },
-        el('span', null, r.editorLabel || r.editor || 'claude-code'),
-        { mono: true, node: el('span', null, String(r.cycles ?? r.cycle ?? 0)) },
-        el('span', null, r.title || r.goal || '-')
-      ])
+      recent.map((r) => {
+        const lv = r.lastVerify;
+        const failed = lv && !lv.passed;
+        const diag = failed && lv.diagnosis && lv.diagnosis.category
+          ? (' [' + lv.diagnosis.category + (lv.diagnosis.repeat ? ' REPEAT' : '') + ']')
+          : (failed && lv.patchSafety && lv.patchSafety.blocking && lv.patchSafety.blocking.length ? ' [PATCH_SAFETY]' : '');
+        const head = failed && lv.diagnosis && lv.diagnosis.headline ? (' — ' + lv.diagnosis.headline) : '';
+        return [
+          { mono: true, node: el('span', null, r.id) },
+          { node: el('span', { className: pillClassForStatus(r.status) }, (r.status || '-') + diag) },
+          el('span', null, r.editorLabel || r.editor || 'claude-code'),
+          { mono: true, node: el('span', null, String(r.cycles ?? r.cycle ?? 0)) },
+          el('span', null, (r.title || r.goal || '-') + head)
+        ];
+      })
     ));
   }
 
