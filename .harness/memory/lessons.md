@@ -1,5 +1,7 @@
 # Lessons the user taught
 
-Rules here are injected into every harness worker prompt and should be read by any
-editor AI before it starts work. Add with:  node .harness/memory.mjs remember "..."
-Remove with:  node .harness/memory.mjs forget L3
+Rules here are read by every AI (editor chats, terminal CLIs, cloud sessions) and
+injected into every harness worker prompt.
+Add permanent rule (git-tracked):         node .harness/memory.mjs remember "..."
+Save local/technical lesson (git-ignored): node .harness/memory.mjs learn "..."
+Remove rule:                               node .harness/memory.mjs forget L3

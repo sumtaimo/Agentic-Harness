@@ -100,26 +100,31 @@ contract, stay inside your scoped files, and **never** run `.harness/dispatch.mj
 
 ---
 
-## 1. At the start of every conversation
+## 1. At the start of every conversation (editor, terminal CLI, or cloud)
 
 1. Read `.harness/memory/profile.md` (who the user is, how they want answers).
-2. Read `.harness/memory/lessons.md` — rules the user taught. **These override your defaults.**
-3. Skim the last entries of `.harness/memory/auto-lessons.md` (mistakes made before in this project).
+2. Read `.harness/memory/lessons.md` — permanent rules the user taught (git-tracked). **These override your defaults.**
+3. Skim the last entries of `.harness/memory/auto-lessons.md` (git-ignored mistakes, retry recoveries, scope violations, and local technical lessons recorded by the harness or via `learn`).
 4. If `profile.md` still contains `(fill me)`, ask the user those questions — a few at a time,
    in simple words — and write the answers into `profile.md`.
 
-## 2. Learning from the user (the "memory" rules)
+## 2. Learning from mistakes and from the user (the "memory" rules)
 
-- When the user **corrects you, states a preference, or approves a way of working**, save it:
+- When the user **corrects you, states a preference, or approves a way of working** that should apply across machines and teammates, save a permanent rule (`lessons.md`):
   ```bash
   node .harness/memory.mjs remember "<one clear sentence, written as a rule>"
   ```
   Then tell them in one line: *"I'll remember: …"*. Write rules, not stories
   (good: "Explain every change in plain English before showing code").
-- If a saved rule is wrong or outdated, remove it: `node .harness/memory.mjs forget L3`.
+- When **you or the user** in any session (editor chat, terminal CLI, or cloud) discover and fix a **local or technical mistake/gotcha** that shouldn't happen again without cluttering shared `lessons.md`, save a local auto-lesson (`auto-lessons.md`, git-ignored):
+  ```bash
+  node .harness/memory.mjs learn "<one clear technical rule or pitfall>"
+  ```
+  If a local lesson proves valuable for everyone on the repo, promote it with `node .harness/memory.mjs promote <id>` (e.g. `L2`).
+- If a saved rule is wrong or outdated, remove it: `node .harness/memory.mjs forget L3` (or `forget-auto L2`).
 - **Never** store passwords, API keys, tokens or private personal data in memory.
 - Memory is plain Markdown. It does not train or change any AI model; it works because every
-  AI re-reads it (you via this file, harness workers via their prompt).
+  AI re-reads it (orchestrators/chats via this file, harness workers via prompt injection).
 
 ## 3. How to talk to this user
 
@@ -288,7 +293,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 |---|---|
 | `.harness/daemon.mjs` | the controller + live screen (HUD) |
 | `.harness/dispatch.mjs` | put a job in the inbox (`--help` for options) |
-| `.harness/memory.mjs` | remember / list / forget / context / sessions |
+| `.harness/memory.mjs` | remember / learn / promote / list / forget / forget-auto / context / sessions |
 | `.harness/doctor.mjs` · `status.mjs` | setup check (incl. duplicate `agy` PATH guard) · current state |
 | `.harness/config.json` | engines, max cycles, timeouts, worktrees, auto git commit |
 | `.harness/memory/` | `profile.md`, `lessons.md` (committed); `auto-lessons.md`, `sessions/` (git-ignored) |

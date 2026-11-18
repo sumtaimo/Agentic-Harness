@@ -63,9 +63,11 @@ like to work. Replace each "(fill me)". You can also just tell your editor AI:
 // A new project starts with no taught rules, never the rules of whoever owns this template copy.
 const LESSONS_TEMPLATE = `# Lessons the user taught
 
-Rules here are injected into every harness worker prompt and should be read by any
-editor AI before it starts work. Add with:  node .harness/memory.mjs remember "..."
-Remove with:  node .harness/memory.mjs forget L3
+Rules here are read by every AI (editor chats, terminal CLIs, cloud sessions) and
+injected into every harness worker prompt.
+Add permanent rule (git-tracked):         node .harness/memory.mjs remember "..."
+Save local/technical lesson (git-ignored): node .harness/memory.mjs learn "..."
+Remove rule:                               node .harness/memory.mjs forget L3
 `;
 const OBJECTIVES_PLACEHOLDER = '- Project objectives: (describe your product goals here to customize for your own app)';
 const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|roles[\\/]|skills[\\/]|config\.json$|charter\.md$|backlog\.json$|team\.json$)/;

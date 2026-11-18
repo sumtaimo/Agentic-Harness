@@ -471,15 +471,15 @@ All memory is plain text in `.harness/memory/`, which you can open and edit your
 | File | Written by | Used for | In git? |
 |---|---|---|---|
 | `profile.md` | you / your AI | who you are, your level, your language, how you like answers | yes (generic starter) |
-| `lessons.md` | **you** (Teach task, or the AI when you correct it) | rules every AI must follow, with the highest priority | yes (generic starter) |
-| `auto-lessons.md` | the harness | what went wrong before | **no**: personal history |
+| `lessons.md` | **you** (`remember`, `/harness:teach`, `promote`) | permanent rules every AI must follow across machines/sessions, highest priority | yes (generic starter) |
+| `auto-lessons.md` | the harness (`daemon`, `visible`) & `memory.mjs learn` | failures, retry recoveries, scope violations & local technical lessons | **no**: personal history |
 | `sessions/*.md` | the harness | one record per task: plan, check, errors, result, rollback | **no**: personal history |
 
 How it reaches each AI:
-- **Harness workers** get the memory in their prompt. Lessons are de-duplicated and capped at
+- **Harness workers** get the memory in their prompt. Lessons are de-duplicated (repeating failures merge cleanly instead of spamming lines) and capped at
   50 lines (taught rules first). If the engine already loads `profile.md` and `lessons.md` itself
   (Claude Code via `CLAUDE.md` `@imports`), they are **not** injected a second time.
-- **Editor AIs** are told by their own instruction file to read it first:
+- **Editor, terminal CLI, and cloud AIs** are told by their own instruction file to read it first:
 
 | Editor / AI | File it reads | Status |
 |---|---|---|
@@ -557,7 +557,7 @@ node .harness/daemon.mjs --tick          # one autonomous step, then exit (--for
 node .harness/daemon.mjs --status        # same as status.mjs
 node .harness/backlog.mjs overview|add|ready|block|pop|import|releases
 node .harness/dispatch.mjs --help        # all options: --goal --files --check --engine --auto-plan --wait, swarm --worker id:files:prompt
-node .harness/memory.mjs list|remember|forget|context|sessions
+node .harness/memory.mjs list|remember|learn|promote|forget|forget-auto|context|sessions
 node .harness/doctor.mjs                 # setup check, engine flag probe + duplicate agy PATH guard
 node .harness/usage.mjs                  # daily/7d/30d token & call usage + ≥80% daily limit warnings (--json)
 node .harness/status.mjs --log 25        # state + recent JSONL events

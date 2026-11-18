@@ -408,6 +408,9 @@ function verify() {
   if (halted) { const r = restoreFiles(run, diffSnapshots(run.baseline.files, snap()).all); autoRolledBack = r.failed.length === 0 && run.baseline.rollbackAvailable; }
   run.status = passed ? 'PASSED' : halted ? 'HALTED_HITL_REQUIRED' : 'FAILED';
   delete run.pendingJobId;
+  const failSummary = !passed ? String(violations[0] || check.text.split('\n')[0]).replace(/\s+/g, ' ').slice(0, 180) : '';
+  if (!passed && !run.firstFailureSummary) run.firstFailureSummary = failSummary;
+  if (!passed) run.lastFailureSummary = failSummary;
   run.lastVerify = { at: new Date().toISOString(), passed, violations, reverted, check: check.text, antiCheatSignals: audit.signals };
   if (passed || halted) delete run.cycleSnapshot; else run.cycleSnapshot = snap(); // what the project looked like when this check failed
   run.lastVerify.skipped = check.skipped || 0; run.lastVerify.needsVisualReview = passed && uiFiles.length > 0;
@@ -418,6 +421,13 @@ function verify() {
 
   if (passed && run.backlogId) updateBacklogItem(run.backlogId, { status: 'DONE', completedAt: new Date().toISOString(), result: 'VERIFIED', cyclesUsed: run.cycles, visibleRun: run.id });
   if (halted && run.backlogId) updateBacklogItem(run.backlogId, { status: 'BLOCKED', blockedReason: `HALTED_HITL_REQUIRED after ${run.cycles} cycles: ${violations[0] || check.text.split('\n')[0]}` });
+  const recordAuto = (config.memory || {}).autoLessons !== false && !String(run.id).startsWith('V-test');
+  if (recordAuto) {
+    try {
+      if (violations.length) remember(`Scope violation in "${run.title}": ${violations.slice(0, 2).join('; ').replace(/\s+/g, ' ').slice(0, 180)} — keep edits inside assigned files (tests belong to lead-qa).`, FILES.autoLessons);
+      if (audit.signals.length) remember(`Quality/root-cause signal in "${run.title}": ${audit.signals[0].replace(/\s+/g, ' ').slice(0, 180)} — fix root cause cleanly without skipped tests or empty catches.`, FILES.autoLessons);
+    } catch { /* memory is best effort */ }
+  }
   if (passed || halted) {
     try {
       recordSession({
@@ -427,7 +437,8 @@ function verify() {
         subtasks: run.assignments.map((a) => ({ id: a.lead, targetFiles: a.files, prompt: a.goal })), errors: passed ? [] : [violations.join('\n') || check.text],
         outputs: Object.entries(reports).map(([id, output]) => ({ id, output })), finishedAt: new Date().toISOString()
       });
-      if (!passed && (config.memory || {}).autoLessons !== false && !String(run.id).startsWith('V-test')) remember(`"${run.title}": editor run ${run.status} — ${(violations[0] || check.text.split('\n')[0]).replace(/\s+/g, ' ').slice(0, 200)}. Needs a human decision before retrying.`, FILES.autoLessons);
+      if (recordAuto && passed && run.cycles > 1) remember(`"${run.title}": first attempt failed (${run.firstFailureSummary || run.lastFailureSummary || 'earlier check failure'}) — passed after ${run.cycles} cycles. Check for this earlier next time.`, FILES.autoLessons);
+      if (recordAuto && !passed) remember(`"${run.title}": editor run ${run.status} — ${(violations[0] || check.text.split('\n')[0]).replace(/\s+/g, ' ').slice(0, 200)}. Needs a human decision before retrying.`, FILES.autoLessons);
     } catch { /* memory is best effort */ }
   }
   if (run.baseline.dir && (passed || (halted && autoRolledBack)) && fs.existsSync(path.join(ROOT, run.baseline.dir))) {

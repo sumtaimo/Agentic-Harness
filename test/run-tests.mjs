@@ -4501,5 +4501,227 @@ await test('docs-drift guard catches stale lead rosters (incl. tree diagrams), w
   assert(drift.checkDoc('The entire generated QA test suite passed.', facts, { testCounts: true }).length === 0, 'number-free wording must pass');
 });
 
+// ───────────── Option A: multi-channel memory learn/promote, failure-signature deduplication, clipErrorTrace, visible/daemon auto-lessons ─────────────
+
+await test('memory learn / promote / forget-auto CLI, worker guard, .claude/settings.json rules, and start.mjs [6][5] menu actions', () => {
+  const d = sandbox();
+  const autoFile = path.join(d, '.harness', 'memory', 'auto-lessons.md');
+  const lessonsFile = path.join(d, '.harness', 'memory', 'lessons.md');
+  fs.rmSync(autoFile, { force: true });
+
+  // 1. learn writes only to auto-lessons.md (not tracked lessons.md) and enters context
+  const rLearn = node(d, ['.harness/memory.mjs', 'learn', 'SQLite tests need --experimental-sqlite']);
+  assert(rLearn.status === 0 && /Learned auto-lesson L1/.test(rLearn.stdout), rLearn.stdout + rLearn.stderr);
+  assert(/SQLite tests need --experimental-sqlite/.test(fs.readFileSync(autoFile, 'utf8')), 'auto-lessons.md missing learned entry');
+  assert(!/SQLite/.test(fs.readFileSync(lessonsFile, 'utf8')), 'learn must not write to tracked lessons.md');
+  assert(/## Lessons from earlier harness runs[\s\S]*SQLite tests need --experimental-sqlite/.test(node(d, ['.harness/memory.mjs', 'context']).stdout), 'context missing auto-lesson');
+
+  // 2. duplicate learn does not add a second line; remember-auto alias creates L2 for a new rule
+  const rDup = node(d, ['.harness/memory.mjs', 'learn', 'sqlite tests need experimental sqlite!']);
+  assert(rDup.status === 0 && /Already learned as L1/.test(rDup.stdout), rDup.stdout);
+  const rSecond = node(d, ['.harness/memory.mjs', 'remember-auto', 'Rebuild dist before e2e']);
+  assert(rSecond.status === 0 && /Learned auto-lesson L2/.test(rSecond.stdout), rSecond.stdout);
+
+  // 3. HARNESS_WORKER=1 refuses learn, remember-auto, promote, and forget-auto
+  for (const args of [['learn', 'evil'], ['remember-auto', 'evil'], ['promote', 'L1'], ['forget-auto', 'L1']]) {
+    const rw = node(d, ['.harness/memory.mjs', ...args], { HARNESS_WORKER: '1' });
+    assert(rw.status === 2, `worker must be blocked from memory ${args[0]}: status ${rw.status}`);
+  }
+  assert(!/evil/.test(fs.readFileSync(autoFile, 'utf8')) && !/evil/.test(fs.readFileSync(lessonsFile, 'utf8')), 'worker mutated memory');
+
+  // 4. promote L1 moves rule into lessons.md and removes it from auto-lessons.md; missing id fails exit 1
+  const rProm = node(d, ['.harness/memory.mjs', 'promote', 'L1']);
+  assert(rProm.status === 0 && /Promoted auto-lesson L1 → lessons\.md L1/.test(rProm.stdout), rProm.stdout + rProm.stderr);
+  assert(/SQLite tests need --experimental-sqlite/.test(fs.readFileSync(lessonsFile, 'utf8')), 'promote did not write to lessons.md');
+  assert(!/SQLite/.test(fs.readFileSync(autoFile, 'utf8')) && /Rebuild dist before e2e/.test(fs.readFileSync(autoFile, 'utf8')), 'promote did not remove L1 and preserve L2');
+  assert(node(d, ['.harness/memory.mjs', 'promote', 'L99']).status === 1, 'promoting nonexistent id must exit 1');
+
+  // 5. forget-auto removes L2
+  const rFg = node(d, ['.harness/memory.mjs', 'forget-auto', 'L2']);
+  assert(rFg.status === 0 && /Forgot L2\./.test(rFg.stdout) && !/Rebuild dist/.test(fs.readFileSync(autoFile, 'utf8')), rFg.stdout);
+
+  // 6. .claude/settings.json puts learn in allow and promote/forget-auto in ask
+  const perms = json(path.join(REPO, '.claude', 'settings.json')).permissions;
+  assert(perms.allow.includes('Bash(node .harness/memory.mjs learn:*)'), 'settings allow missing memory learn:*');
+  for (const risky of ['Bash(node .harness/memory.mjs promote:*)', 'Bash(node .harness/memory.mjs forget-auto:*)']) {
+    assert(perms.ask.includes(risky) && !perms.allow.includes(risky), `${risky} must be in ask, not allow`);
+  }
+
+  // 7. start.mjs piped [6] -> [5] executes learn and promote actions
+  const dMenu = sandbox();
+  fs.rmSync(path.join(dMenu, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+  const mRes = spawnSync(process.execPath, ['.harness/start.mjs'], {
+    cwd: dMenu, env, encoding: 'utf8', timeout: 30000,
+    input: '6\n5\nlearn Use UTC timestamps in migrations\n6\n5\npromote L1\n0\n'
+  });
+  assert(mRes.status === 0, `start.mjs [6][5] exited ${mRes.status}: ${mRes.stderr}\n${mRes.stdout}`);
+  assert(/Learned auto-lesson L1/.test(mRes.stdout) && /Promoted auto-lesson L1/.test(mRes.stdout), mRes.stdout);
+  assert(/Use UTC timestamps in migrations/.test(read(dMenu, '.harness/memory/lessons.md')), 'start.mjs [6][5] failed to learn/promote');
+  assert(!/Use UTC timestamps/.test(read(dMenu, '.harness/memory/auto-lessons.md')), 'L1 stayed in auto-lessons.md after start.mjs promote');
+});
+
+await test('clipErrorTrace preserves head and tail stack trace across daemon.mjs retry prompts', () => {
+  assert(common.clipErrorTrace('short error', 6000) === 'short error', 'short text should stay unchanged');
+  const huge = `HEADER_FIRST_FAIL\n${'X'.repeat(9000)}\nTAIL_ROOT_CAUSE_NEEDLE`;
+  const clipped = common.clipErrorTrace(huge, 6000);
+  assert(clipped.length <= 6000, `clipped length ${clipped.length} > 6000`);
+  assert(clipped.includes('HEADER_FIRST_FAIL') && clipped.includes('…[truncated middle of log]…') && clipped.includes('TAIL_ROOT_CAUSE_NEEDLE'), 'clipErrorTrace lost head, marker, or tail');
+
+  // E2E daemon cycle 2 retry: cycle 1 check prints HEADER + 9000 chars + TAIL_ROOT_CAUSE_NEEDLE; cycle 2 FIX prompt receives both ends
+  const d = sandbox();
+  const hugeVerify = `node -e "const fs=require('fs');if(fs.existsSync('fixed.txt'))process.exit(0);console.error('HEADER_FIRST_FAIL\\n'+'X'.repeat(9000)+'\\nTAIL_ROOT_CAUSE_NEEDLE');process.exit(1)"`;
+  drop(d, {
+    id: 'clip-retry', title: 'clip retry', verifyCmd: hugeVerify,
+    subtasks: [{ id: 'w', targetFiles: ['fixed.txt'], prompt: 'FIX fixed.txt ok' }]
+  });
+  runOnce(d);
+  assert(stateOf(d).phase === '4_COMMITTED' && stateOf(d).cycle === 2, JSON.stringify(stateOf(d)));
+  const wp = promptOf(d, 'w');
+  assert(wp.includes('[PREVIOUS VERIFIER ERROR TO FIX]:') && wp.includes('HEADER_FIRST_FAIL') && wp.includes('…[truncated middle of log]…') && wp.includes('TAIL_ROOT_CAUSE_NEEDLE'), `retry prompt missing head or tail:\n${wp.slice(0, 400)}\n...\n${wp.slice(-400)}`);
+});
+
+await test('failure-signature deduplication collapses repeated failures across tasks into (seen Nx; latest: "...") and promote strips the suffix cleanly', () => {
+  const d = sandbox();
+  const autoFile = path.join(d, '.harness', 'memory', 'auto-lessons.md');
+  fs.rmSync(autoFile, { force: true });
+
+  // Scope violations across 3 differently titled tasks with same root path pattern merge into 1 line (L1)
+  for (const title of ['Task Alpha', 'Task Beta', 'Task Gamma']) {
+    const r = node(d, ['.harness/memory.mjs', 'learn', `Scope violation in "${title}": worker lead-dev touched out-of-scope file(s) (src/rogue.js) — keep edits inside targetFiles (tests belong to QA_AUDITOR).`]);
+    assert(r.status === 0, r.stderr);
+  }
+  // Recovery + halt with varying tmp path, run id, line/col, and cycle counts also deduplicate cleanly
+  assert(node(d, ['.harness/memory.mjs', 'learn', '"Job One": first attempt failed with "TypeError at /tmp/a/parse.js:12:4 in V-20261118010203-xyz" — passed after 2 cycles. Check for this earlier next time.']).status === 0);
+  assert(node(d, ['.harness/memory.mjs', 'learn', '"Job Two": first attempt failed with "TypeError at /tmp/b/parse.js:99:8 in V-20261118090807-qqq" — passed after 3 cycles. Check for this earlier next time.']).status === 0);
+  assert(node(d, ['.harness/memory.mjs', 'learn', '"Crash One": HALTED_HITL_REQUIRED — last error "TypeError: Cannot read properties of undefined". Needs a human decision before retrying.']).status === 0);
+  assert(node(d, ['.harness/memory.mjs', 'learn', '"Crash Two": HALTED_HITL_REQUIRED — last error "TypeError: Cannot read properties of undefined". Needs a human decision before retrying.']).status === 0);
+
+  // Short noise (< 20 normalized core chars) across different tasks stays separate rather than over-merging
+  assert(node(d, ['.harness/memory.mjs', 'learn', 'Scope violation in "Short One": short']).status === 0);
+  assert(node(d, ['.harness/memory.mjs', 'learn', 'Scope violation in "Short Two": short']).status === 0);
+
+  const lines = fs.readFileSync(autoFile, 'utf8').split('\n').filter((l) => /^- \[L\d+\]/.test(l));
+  assert(lines.length === 5, `expected 5 deduplicated entries (L1..L5), got ${lines.length}:\n${lines.join('\n')}`);
+  assert(/\[L1\].*Task Alpha.*\(seen 3x; latest: "Task Gamma"\)$/.test(lines[0]), `unexpected L1: ${lines[0]}`);
+  assert(/\[L2\].*Job One.*\(seen 2x; latest: "Job Two"\)$/.test(lines[1]), `unexpected L2: ${lines[1]}`);
+  assert(/\[L3\].*Crash One.*\(seen 2x; latest: "Crash Two"\)$/.test(lines[2]), `unexpected L3: ${lines[2]}`);
+
+  // Promote strips the "(seen ...)" tally when moving to permanent lessons.md
+  const rProm = node(d, ['.harness/memory.mjs', 'promote', 'L1']);
+  assert(rProm.status === 0, rProm.stderr);
+  const lessons = read(d, '.harness/memory/lessons.md');
+  assert(/Scope violation in "Task Alpha": worker lead-dev touched out-of-scope file\(s\)/.test(lessons) && !/\(seen 3x/.test(lessons), `promote kept seen suffix:\n${lessons}`);
+});
+
+await test('auto-lessons capture across visible.mjs and daemon.mjs, plus V-test*/self-test* skip guards and config.memory.autoLessons=false opt-out', () => {
+  // 1. visible.mjs captures: scope violation, antiCheatSignals, Cycle 2 recovery, HALTED_HITL_REQUIRED, and deduplicates across runs; skips V-test*
+  const dv = sandbox();
+  const autoV = () => (fs.existsSync(path.join(dv, '.harness', 'memory', 'auto-lessons.md')) ? read(dv, '.harness/memory/auto-lessons.md') : '');
+  fs.rmSync(path.join(dv, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+
+  // 1a. Scope violations across two different run titles deduplicate into (seen 2x; latest: ...)
+  const idS1 = runIdOf(vis(dv, 'brief', '--goal', 'Scope Run One', '--check', PASS));
+  assert(vis(dv, 'assign', idS1, deleg([{ lead: 'lead-dev', goal: 'code', files: ['src/a.js'] }])).status === 0);
+  agentsWrite(dv, [['src/a.js', 'ok'], ['src/rogue.js', 'rogue']]);
+  assert(vis(dv, 'verify', idS1).status === 1);
+  assert(/Scope violation in "Scope Run One": src\/rogue\.js: not inside any lead's assigned files/.test(autoV()), autoV());
+  assert(vis(dv, 'rollback', idS1).status === 0);
+
+  const idS2 = runIdOf(vis(dv, 'brief', '--goal', 'Scope Run Two', '--check', PASS));
+  assert(vis(dv, 'assign', idS2, deleg([{ lead: 'lead-dev', goal: 'code', files: ['src/a.js'] }])).status === 0);
+  agentsWrite(dv, [['src/a.js', 'ok'], ['src/rogue.js', 'rogue']]);
+  assert(vis(dv, 'verify', idS2).status === 1);
+  assert(/Scope violation in "Scope Run One".*\(seen 2x; latest: "Scope Run Two"\)/.test(autoV()), autoV());
+  assert(vis(dv, 'rollback', idS2).status === 0);
+
+  // 1b. antiCheatSignals + Cycle 2 recovery (FAILED -> PASSED)
+  fs.rmSync(path.join(dv, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+  const checkRec = `node -e "process.exit(require('fs').readFileSync('src/f.js','utf8').includes('return 7')?0:1)"`;
+  const idRec = runIdOf(vis(dv, 'brief', '--bugfix', '--goal', 'Fix return value', '--check', checkRec));
+  assert(vis(dv, 'assign', idRec, deleg([{ lead: 'lead-dev', goal: 'fix', files: ['src/f.js'] }])).status === 0);
+  agentsWrite(dv, [['src/f.js', 'export function f(){ try { return 0; } catch (e) {} }\n']]);
+  assert(vis(dv, 'verify', idRec, '--reports', JSON.stringify({ 'lead-dev': 'wip' })).status === 1);
+  assert(/Quality\/root-cause signal in "Fix return value":/.test(autoV()), autoV());
+  agentsWrite(dv, [['src/f.js', 'export function f(){ return 7; }\n']]);
+  assert(vis(dv, 'verify', idRec, '--reports', JSON.stringify({ 'lead-dev': 'Symptom: returned 0. Root Cause: stub. Blast Radius: src/f.js.' })).status === 0);
+  assert(/"Fix return value": first attempt failed \(.*\) — passed after 2 cycles/.test(autoV()), autoV());
+
+  // 1c. 3-cycle HALTED_HITL_REQUIRED + V-test* skip guard
+  const idH = runIdOf(vis(dv, 'brief', '--goal', 'Always Fails Visible', '--check', FAIL_VERIFY));
+  assert(vis(dv, 'assign', idH, deleg([{ lead: 'lead-dev', goal: 'x', files: ['src/a.js'] }])).status === 0);
+  for (let i = 0; i < 3; i++) vis(dv, 'verify', idH);
+  assert(/"Always Fails Visible": editor run HALTED_HITL_REQUIRED — /.test(autoV()), autoV());
+
+  const beforeVTest = autoV();
+  const idRaw = runIdOf(vis(dv, 'brief', '--goal', 'Should Skip Auto Lesson', '--check', FAIL_VERIFY));
+  const oldRunDir = path.join(dv, '.harness', 'visible', idRaw);
+  const vTestDir = path.join(dv, '.harness', 'visible', 'V-test-skip-01');
+  fs.renameSync(oldRunDir, vTestDir);
+  const vtRun = json(path.join(vTestDir, 'run.json'));
+  vtRun.id = 'V-test-skip-01';
+  if (vtRun.baseline?.dir) vtRun.baseline.dir = '.harness/visible/V-test-skip-01/baseline';
+  fs.writeFileSync(path.join(vTestDir, 'run.json'), JSON.stringify(vtRun, null, 2));
+  assert(vis(dv, 'assign', 'V-test-skip-01', deleg([{ lead: 'lead-dev', goal: 'x', files: ['src/a.js'] }])).status === 0);
+  agentsWrite(dv, [['src/rogue-vtest.js', 'rogue']]);
+  vis(dv, 'verify', 'V-test-skip-01');
+  assert(vis(dv, 'rollback', 'V-test-skip-01').status === 0);
+  assert(autoV() === beforeVTest, 'V-test* runs must not write auto-lessons');
+
+  // 1d. config.memory.autoLessons = false disables auto-lesson capture in visible.mjs
+  const dvOff = sandbox();
+  { const cf = path.join(dvOff, '.harness', 'config.json'); const c = json(cf); c.memory = { ...(c.memory || {}), autoLessons: false }; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  fs.rmSync(path.join(dvOff, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+  const idOff = runIdOf(vis(dvOff, 'brief', '--goal', 'Opt Out Visible', '--check', PASS));
+  vis(dvOff, 'assign', idOff, deleg([{ lead: 'lead-dev', goal: 'x', files: ['src/a.js'] }]));
+  agentsWrite(dvOff, [['src/rogue.js', 'rogue']]);
+  vis(dvOff, 'verify', idOff);
+  assert(!fs.existsSync(path.join(dvOff, '.harness', 'memory', 'auto-lessons.md')), 'autoLessons:false must disable visible.mjs writes');
+
+  // 2. daemon.mjs captures: ANTI_CHEAT_SIGNAL, worktree syncWorktree scope violation, uat commitScoped discard; skips self-test* & autoLessons=false
+  const dd = sandbox();
+  fs.rmSync(path.join(dd, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+  drop(dd, {
+    id: 'ac-auto', title: 'Daemon AntiCheat', verifyCmd: PASS,
+    subtasks: [{ id: 'dev', role: 'DEV_ENGINEER', targetFiles: ['src/bad.js'], prompt: 'WRITE src/bad.js try { x(); } catch (e) {}' }]
+  });
+  runOnce(dd);
+  assert(/Quality\/root-cause signal in "Daemon AntiCheat":/.test(read(dd, '.harness/memory/auto-lessons.md')), read(dd, '.harness/memory/auto-lessons.md'));
+
+  // syncWorktree scope violation (useGitWorktrees: true)
+  const dw = sandbox({ worktrees: true });
+  fs.rmSync(path.join(dw, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+  execFileSync('git', ['init', '-q'], { cwd: dw });
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: dw });
+  drop(dw, { id: 'wt-scope', title: 'Worktree Scope Task', subtasks: [{ id: 'w', targetFiles: ['src/'], prompt: 'WRITE src/in.txt yes\nWRITE outside.txt no' }] });
+  runOnce(dw);
+  assert(/Scope violation in "Worktree Scope Task": worker w touched out-of-scope file\(s\) \(outside\.txt\)/.test(read(dw, '.harness/memory/auto-lessons.md')), read(dw, '.harness/memory/auto-lessons.md'));
+
+  // uat commitScoped discard
+  const { d: du } = gitSandbox();
+  fs.rmSync(path.join(du, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+  setBacklog(du, [{
+    id: 'U-SCP', title: 'UAT Scope Discard', priority: 1, status: 'READY', verifyCmd: existsCheck('src/g.js'),
+    subtasks: [{ id: 'dev', role: 'DEV_ENGINEER', targetFiles: ['src/g.js'], prompt: 'WRITE src/g.js ok\nWRITE docs/leak.md leak' }]
+  }]);
+  tick(du);
+  assert(/Scope violation in "UAT Scope Discard": worker dev touched out-of-scope file\(s\) \(docs\/leak\.md\)/.test(read(du, '.harness/memory/auto-lessons.md')), read(du, '.harness/memory/auto-lessons.md'));
+
+  // self-test* skip guard & config.memory.autoLessons=false guard in daemon.mjs
+  const ds = sandbox({ worktrees: true });
+  fs.rmSync(path.join(ds, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+  execFileSync('git', ['init', '-q'], { cwd: ds });
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: ds });
+  drop(ds, { id: 'self-test-guard', title: 'Self Test Guard', verifyCmd: FAIL_VERIFY, subtasks: [{ id: 'w', targetFiles: ['src/'], prompt: 'WRITE src/a.js a\nWRITE outside.txt no' }] });
+  runOnce(ds);
+  assert(!fs.existsSync(path.join(ds, '.harness', 'memory', 'auto-lessons.md')), 'self-test* must never write auto-lessons');
+
+  const dOff = sandbox();
+  { const cf = path.join(dOff, '.harness', 'config.json'); const c = json(cf); c.memory = { ...(c.memory || {}), autoLessons: false }; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  fs.rmSync(path.join(dOff, '.harness', 'memory', 'auto-lessons.md'), { force: true });
+  drop(dOff, { id: 'off-halt', title: 'Off Halt', verifyCmd: FAIL_VERIFY, subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'WRITE a.txt x' }] });
+  runOnce(dOff);
+  assert(!fs.existsSync(path.join(dOff, '.harness', 'memory', 'auto-lessons.md')), 'autoLessons:false must disable daemon.mjs auto-lessons');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

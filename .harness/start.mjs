@@ -797,12 +797,14 @@ export async function menuUsageAndStatus(_rl, ask, _info, run = runScript, say =
   if (choice === '4') { run('visible.mjs', ['status']); return; }
   if (choice === '5') {
     run('memory.mjs', ['list']);
-    const ans = await ask('Action — type rule to teach, "forget <id>", "forget-auto <id>", "context", "sessions [n]", or Enter to go back: ');
+    const ans = await ask('Action — type permanent rule, "learn <text>" (local), "promote <id>", "forget <id>", "forget-auto <id>", "context", "sessions [n]", or Enter to go back: ');
     if (ans === null || !ans.trim() || isBackCmd(ans)) return;
     const t = ans.trim();
     let m;
     if (/^context$/i.test(t)) run('memory.mjs', ['context']);
     else if ((m = t.match(/^sessions(?:\s+(\d+))?$/i))) run('memory.mjs', ['sessions', ...(m[1] ? [m[1]] : [])]);
+    else if ((m = t.match(/^learn\s+(.+)$/i))) run('memory.mjs', ['learn', m[1]]);
+    else if ((m = t.match(/^promote\s+(\S+)$/i))) run('memory.mjs', ['promote', m[1]]);
     else if ((m = t.match(/^forget\s+(\S+)$/i))) run('memory.mjs', ['forget', m[1]]);
     else if ((m = t.match(/^forget-auto\s+(\S+)$/i))) run('memory.mjs', ['forget-auto', m[1]]);
     else run('memory.mjs', ['remember', t]);

@@ -677,15 +677,64 @@ export function listLessons(file = FILES.lessons) {
     .map(([, id, date, text]) => ({ id, date, text }));
 }
 
-const norm = (t) => String(t).toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim();
+const norm = (t) => String(t).toLowerCase().replace(/[-_/\\]+/g, ' ').replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim();
+
+const SEEN_SUFFIX_RE = /\s+\(seen (\d+)x(?:;\s*latest:\s*"[^"]*")?\)\s*$/;
+const stripSeen = (t) => String(t || '').replace(SEEN_SUFFIX_RE, '').trim();
+
+function extractTaskTitle(t) {
+  const m = String(t || '').match(/^(?:Scope violation in |Quality\/root-cause signal in )?"([^"\n]+)"/);
+  return m ? m[1].trim() : '';
+}
+
+function autoLessonSignature(text) {
+  const s = stripSeen(text);
+  let kind = '';
+  let rest = '';
+  let m;
+  if ((m = s.match(/^Scope violation in "[^"\n]+":\s*(.+)$/))) { kind = 'scope'; rest = m[1]; }
+  else if ((m = s.match(/^Quality\/root-cause signal in "[^"\n]+":\s*(.+)$/))) { kind = 'anticheat'; rest = m[1]; }
+  else if ((m = s.match(/^"[^"\n]+":\s*first attempt failed(?:\s+with|\s*\()\s*(.+?)(?:\s+—\s+passed|\s*\)\s*—\s+passed)/))) { kind = 'recover'; rest = m[1]; }
+  else if ((m = s.match(/^"[^"\n]+":\s*(?:HALTED_HITL_REQUIRED|REJECTED|editor run [A-Z_]+)\s+—\s+(?:last error\s+)?(.+?)(?:\.\s+Needs a human|$)/))) { kind = 'halt'; rest = m[1]; }
+  if (!kind || !rest) return '';
+  const core = rest
+    .replace(/[A-Za-z]:\\[^\s"']+|\/(?:tmp|var|home|Users)\/[^\s"']+/g, '<path>')
+    .replace(/\b(?:V-\d{8,14}-[a-z0-9]+|job-\d+|BL-\d+|FEAT-\d+)\b/g, '<id>')
+    .replace(/:\d+:\d+/g, ':<pos>')
+    .replace(/\d+/g, '#');
+  const k = norm(core);
+  return k.length >= 20 ? `${kind}:${k}` : '';
+}
 
 export function remember(text, file = FILES.lessons) {
-  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  const clean = stripSeen(String(text || '').replace(/\s+/g, ' ').trim());
   if (!clean) throw new Error('Nothing to remember (empty text).');
   ensureDirs();
   const existing = listLessons(file);
-  const dup = existing.find((l) => norm(l.text) === norm(clean));
+  const dup = existing.find((l) => norm(stripSeen(l.text)) === norm(clean));
   if (dup) return { ...dup, duplicate: true };
+
+  if (file === FILES.autoLessons) {
+    const sig = autoLessonSignature(clean);
+    if (sig) {
+      const match = existing.find((l) => autoLessonSignature(l.text) === sig);
+      if (match) {
+        const seenMatch = match.text.match(SEEN_SUFFIX_RE);
+        const count = (seenMatch ? Number(seenMatch[1]) : 1) + 1;
+        const base = stripSeen(match.text);
+        const latest = extractTaskTitle(clean);
+        const today = new Date().toISOString().slice(0, 10);
+        const updatedText = `${base} (seen ${count}x${latest && latest !== extractTaskTitle(base) ? `; latest: "${latest.slice(0, 60)}"` : ''})`;
+        const lines = readText(file).split('\n').map((line) => {
+          const lm = line.match(LESSON_RE);
+          return lm && lm[1].toUpperCase() === match.id.toUpperCase() ? `- [${match.id}] (${today}) ${updatedText}` : line;
+        });
+        fs.writeFileSync(file, lines.join('\n'));
+        return { id: match.id, date: today, text: updatedText, duplicate: true, updated: true, seen: count };
+      }
+    }
+  }
+
   const next = existing.reduce((max, l) => Math.max(max, Number(l.id.slice(1))), 0) + 1;
   const lesson = { id: `L${next}`, date: new Date().toISOString().slice(0, 10), text: clean };
   let body = readText(file);
@@ -701,6 +750,26 @@ export function forget(id, file = FILES.lessons) {
   if (kept.length === lines.length) return false;
   fs.writeFileSync(file, kept.join('\n'));
   return true;
+}
+
+/** Promote a learned entry from auto-lessons.md into shared lessons.md and remove it from auto-lessons.md. */
+export function promoteLesson(id) {
+  const target = String(id || '').trim().toUpperCase();
+  if (!target) return null;
+  const entry = listLessons(FILES.autoLessons).find((l) => l.id.toUpperCase() === target);
+  if (!entry) return null;
+  const lesson = remember(stripSeen(entry.text), FILES.lessons);
+  forget(entry.id, FILES.autoLessons);
+  return { fromId: entry.id, lesson };
+}
+
+/** Clip a long verifier error while keeping BOTH the command/exit header and the failing tail stack trace. */
+export function clipErrorTrace(trace, limit = 6000) {
+  const s = String(trace || '');
+  if (s.length <= limit) return s;
+  const head = Math.max(400, Math.floor(limit * 0.25));
+  const tail = Math.max(400, limit - head - 32);
+  return `${s.slice(0, head)}\n…[truncated middle of log]…\n${s.slice(-tail)}`;
 }
 
 /**
@@ -721,7 +790,7 @@ export function memoryContext(config, { skip = [] } = {}) {
   }
 
   const seen = new Set();
-  const fresh = (l) => { const k = norm(l.text); if (seen.has(k)) return false; seen.add(k); return true; };
+  const fresh = (l) => { const k = norm(stripSeen(l.text)); if (seen.has(k)) return false; seen.add(k); return true; };
   const taught = listLessons(FILES.lessons).filter(fresh).slice(-maxLines); // dedupe even if skipped,
   const autoRoom = Math.max(0, Math.min(mem.maxAutoLessons ?? 10, maxLines - (skip.includes('lessons') ? 0 : taught.length)));
   const auto = listLessons(FILES.autoLessons).reverse().filter(fresh).slice(0, autoRoom).reverse(); // so auto never repeats a rule
@@ -776,17 +845,19 @@ export function recordSession(record) {
 
 export const LESSONS_HEADER = `# Lessons the user taught
 
-Rules here are injected into every harness worker prompt and should be read by any
-editor AI before it starts work. Add with:  node .harness/memory.mjs remember "..."
-Remove with:  node .harness/memory.mjs forget L3
+Rules here are read by every AI (editor chats, terminal CLIs, cloud sessions) and
+injected into every harness worker prompt.
+Add permanent rule (git-tracked):         node .harness/memory.mjs remember "..."
+Save local/technical lesson (git-ignored): node .harness/memory.mjs learn "..."
+Remove rule:                               node .harness/memory.mjs forget L3
 
 `;
 
-export const AUTO_LESSONS_HEADER = `# Lessons learned automatically
+export const AUTO_LESSONS_HEADER = `# Lessons learned automatically (git-ignored)
 
-Written by the harness when a task failed verification and then recovered, or halted.
-Only the most recent entries are injected into prompts. Promote a good one to
-lessons.md with  node .harness/memory.mjs remember "..."  and delete noise freely.
-This file is git-ignored (it is about your machine's history, not the template).
+Written by the harness controller (headless daemon and editor runs) on task failures,
+retry recoveries, scope violations, or anti-cheat signals — or via  node .harness/memory.mjs learn "..." .
+Most recent entries are injected into worker prompts and skimmed before starting work.
+Promote a proven rule to shared lessons.md:  node .harness/memory.mjs promote L2
 
 `;

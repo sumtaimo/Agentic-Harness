@@ -49,7 +49,7 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 
 - **Charter** (`.harness/charter.md`)៖ កំណត់ថា agent ស្វ័យប្រវត្តិអាចកែបានតែ `src/**`, `docs/**`, `tests/**`, `test/**`, `__tests__/**` ប៉ុណ្ណោះ ហើយហាមកែ `.harness/**`។
 - **ការបែងចែកឯកសារតេស្ត និង Root-Cause / Anti-Cheating**៖ `lead-qa` តែមួយគត់ជាម្ចាស់ឯកសារតេស្ត (`tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*`) — controller (`validateDelegation` និង `verify`) រារាំង ឬស្តារភ្លាមបើ `lead-dev` ប៉ះឯកសារតេស្ត។ លើការជួសជុល bug (`visible.mjs brief --bugfix`) ប្រព័ន្ធស្កេន `auditPatchSignals` រក `.skip`/`.todo` ក្នុងតេស្ត, `catch {}` ទទេលាក់ error និងទាមទារការពន្យល់ `Symptom / Root Cause / Blast Radius` (ហើយ `daemon.mjs` បញ្ចូល `[TWO-PHASE ROOT-CAUSE DIRECTIVE]` ពេល retry) មុននឹង `reviewer` អានពិនិត្យ diff។<!-- docs-drift:ignore -->
-- **Memory** (`.harness/memory/`)៖ `profile.md` និង `lessons.md` ត្រូវបានអានដោយ AI គ្រប់ៗ។ ឧទាហរណ៍ ច្បាប់ L1 តម្រូវឱ្យសួរម្ចាស់ project មុនរាល់ពេល push។
+- **Memory** (`.harness/memory/`)៖ `profile.md`, `lessons.md` (ច្បាប់អចិន្ត្រៃយ៍ក្នុង git) និង `auto-lessons.md` (មេរៀនស្វ័យប្រវត្តិពេលបរាជ័យ/recover/កែខុស scope ឬកត់តាម `memory.mjs learn "..."` — មិនឡើង git ហើយអាច `promote <id>` បញ្ជូនឡើង `lessons.md`) ត្រូវបានអានដោយ AI គ្រប់ៗទាំង editor, terminal CLI និង workers។<!-- docs-drift:ignore -->
 - **Rollback៖** បើការងារបរាជ័យ ឯកសារទាំងអស់ត្រូវបានស្តារមកដូចដើមវិញដោយស្វ័យប្រវត្តិ។
 - AI មិនដែល push ឬ merge ទៅ `main` ដោយគ្មានការអនុញ្ញាតពីម្ចាស់ project ទេ។
 - **ឧបករណ៍ AI នីមួយៗត្រូវអនុញ្ញាតម្តង** (`node .harness/engines.mjs`)៖ harness មិនប្រើឧបករណ៍ដែលបាន login ដោយស្ងាត់ៗទេ។

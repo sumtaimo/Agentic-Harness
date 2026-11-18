@@ -30,7 +30,7 @@ import { exec, execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
-  resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd,
+  resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd, clipErrorTrace,
   listProjectFiles, safeTarget, normalizeTarget, isSecretFile, isSameDir, validateExternalWorkRoot,
   winQuote, winCommandLine, needsWinShell, MODEL_TIERS, chooseModelTier, resolveModel, compatibleModelFor, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
 } from './lib/common.mjs';
@@ -504,7 +504,7 @@ function buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov = {}, cy
     subtask.goal ? `[OVERALL GOAL (other workers handle the other parts in parallel)]:\n${subtask.goal}` : '',
     subtask.interfaceContract ? `[SHARED INTERFACE CONTRACT — other workers build against exactly this; do not deviate]:\n${subtask.interfaceContract}` : '',
     Array.isArray(ac) && ac.length ? `[ACCEPTANCE CRITERIA]:\n${ac.map((c) => `- ${c}`).join('\n')}` : '',
-    errorContext ? `[PREVIOUS VERIFIER ERROR TO FIX]:\n${String(errorContext).slice(0, 6000)}` : '',
+    errorContext ? `[PREVIOUS VERIFIER ERROR TO FIX]:\n${clipErrorTrace(errorContext, 6000)}` : '',
     cycle > 1 ? `[TWO-PHASE ROOT-CAUSE DIRECTIVE — cycle ${cycle}]:\nPhase 1 (read-only): state Symptom, Root Cause, and Blast Radius from the failure trace. Phase 2: apply the minimal root-cause fix — never hardcode returns, add test-input special cases, weaken assertions, disable validation, or swallow errors.` : '',
     `[TASK INSTRUCTIONS]:\n${subtask.prompt}`
   ].filter(Boolean).join('\n\n');
@@ -579,7 +579,7 @@ const inScope = (file, targets) => {
 };
 
 /** Copy the worker's changes from its worktree back to the target folder — only files in scope. */
-async function syncWorktree(wtPath, sub, destRoot = ROOT, scopeFn = inScope) {
+async function syncWorktree(wtPath, sub, destRoot = ROOT, scopeFn = inScope, taskTitle = null, taskId = null) {
   const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-uall', '-z'], { cwd: wtPath });
   const entries = stdout.split('\0').filter(Boolean);
   const copied = []; const blocked = [];
@@ -593,7 +593,14 @@ async function syncWorktree(wtPath, sub, destRoot = ROOT, scopeFn = inScope) {
     if (fs.existsSync(src)) { fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.copyFileSync(src, dest); } else if (fs.existsSync(dest)) fs.rmSync(dest);
     copied.push(file);
   }
-  if (blocked.length) logTelemetry('2_SCOPE_VIOLATION', `Worker ${sub.id} changed files outside its scope; those changes were discarded`, { worker: sub.id, blocked });
+  if (blocked.length) {
+    logTelemetry('2_SCOPE_VIOLATION', `Worker ${sub.id} changed files outside its scope; those changes were discarded`, { worker: sub.id, blocked });
+    if ((config.memory || {}).autoLessons !== false && !String(taskId || '').startsWith('self-test')) {
+      try {
+        remember(`Scope violation in "${taskTitle || taskId || sub.id}": worker ${sub.id} touched out-of-scope file(s) (${blocked.slice(0, 3).join(', ')}) — keep edits inside targetFiles (tests belong to QA_AUDITOR).`, FILES.autoLessons);
+      } catch { /* memory is best effort */ }
+    }
+  }
   return { copied, blocked };
 }
 
@@ -1097,13 +1104,20 @@ async function runExecutorSwarm(plan, gitCtx = null) {
       }
       const subRole = String(sub.resolvedRole || sub.role || '').toUpperCase();
       const scopeCheck = teamHasQa && subRole !== 'QA_AUDITOR' ? (file, targets) => inScope(file, targets) && !isTestFilePath(file) : inScope;
-      if (useWorktrees) result.sync = await syncWorktree(wtPath, sub, workRoot, scopeCheck);
+      if (useWorktrees) result.sync = await syncWorktree(wtPath, sub, workRoot, scopeCheck, plan.title, plan.taskId);
       if (gitCtx && sub.prompt) {
         const c = await commitScoped({
           wtPath: workerCwd, targets: sub.targetFiles, inScope: scopeCheck, root: ROOT, ignore: gitCtx.link,
           message: `harness(${plan.taskId}): ${sub.resolvedRole ? `${sub.resolvedRole} ` : ''}${sub.id}\n\n${String(sub.prompt).slice(0, 400)}`
         });
-        if (c.discarded.length) logTelemetry('2_SCOPE_VIOLATION', `Worker ${sub.id} changed files outside its scope; discarded before commit`, { worker: sub.id, blocked: c.discarded });
+        if (c.discarded.length) {
+          logTelemetry('2_SCOPE_VIOLATION', `Worker ${sub.id} changed files outside its scope; discarded before commit`, { worker: sub.id, blocked: c.discarded });
+          if ((config.memory || {}).autoLessons !== false && !String(plan.taskId || '').startsWith('self-test')) {
+            try {
+              remember(`Scope violation in "${plan.title || plan.taskId}": worker ${sub.id} touched out-of-scope file(s) (${c.discarded.slice(0, 3).join(', ')}) — keep edits inside targetFiles (tests belong to QA_AUDITOR).`, FILES.autoLessons);
+            } catch { /* memory is best effort */ }
+          }
+        }
         if (c.secrets?.length) logTelemetry('GIT_HELD_BACK_SECRETS', `Worker ${sub.id} touched secret-like file(s); held back before commit: ${c.secrets.join(', ')}`, { worker: sub.id, secrets: c.secrets });
         logTelemetry('GIT_WORKER_COMMIT', `${sub.id}: ${c.sha ? `committed ${c.kept.length} file(s) @ ${c.sha.slice(0, 8)}` : 'no in-scope changes'}`, { worker: sub.id, kept: c.kept, sha: c.sha });
         result.git = c;
@@ -1245,6 +1259,11 @@ async function auditDaemonPatch(plan, task, outputs, cycle, backup, gitCtx, preR
     });
     if (audit.signals.length > 0) {
       logTelemetry('ANTI_CHEAT_SIGNAL', audit.signals.join('; '), { taskId: plan.taskId, signals: audit.signals });
+      if ((config.memory || {}).autoLessons !== false && !String(plan.taskId || '').startsWith('self-test')) {
+        try {
+          remember(`Quality/root-cause signal in "${plan.title || plan.taskId}": ${audit.signals[0].replace(/\s+/g, ' ').slice(0, 180)} — fix root cause cleanly without skipped tests or empty catches.`, FILES.autoLessons);
+        } catch { /* memory is best effort */ }
+      }
     }
   } catch { /* non-blocking audit telemetry */ }
 }
@@ -1275,7 +1294,14 @@ async function runCommitter(plan, task, taskFile, gitCtx = null, { archive = tru
         const hasHead = await execFileAsync('git', ['rev-parse', '--verify', '-q', 'HEAD'], { cwd: workRoot }).then(() => true, () => false);
         await execFileAsync('git', hasHead ? ['reset', '-q', 'HEAD', '--', ...unstage] : ['rm', '-r', '--cached', '-q', '--ignore-unmatch', '--', ...unstage], { cwd: workRoot });
         if (heldBack.length) logTelemetry('4_GIT_HELD_BACK_SECRETS', `Held back secret-like file(s) from auto-commit: ${heldBack.join(', ')}`, { files: heldBack });
-        if (rogueTests.length) logTelemetry('2_SCOPE_VIOLATION', `Held back out-of-role test file(s) from auto-commit: ${rogueTests.join(', ')}`, { files: rogueTests });
+        if (rogueTests.length) {
+          logTelemetry('2_SCOPE_VIOLATION', `Held back out-of-role test file(s) from auto-commit: ${rogueTests.join(', ')}`, { files: rogueTests });
+          if ((config.memory || {}).autoLessons !== false && !String(plan.taskId || '').startsWith('self-test')) {
+            try {
+              remember(`Scope violation in "${plan.title || plan.taskId}": out-of-role test file(s) touched (${rogueTests.slice(0, 3).join(', ')}) — test files belong exclusively to QA_AUDITOR.`, FILES.autoLessons);
+            } catch { /* memory is best effort */ }
+          }
+        }
       }
       const { stdout } = await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd: workRoot });
       if (stdout.trim()) {

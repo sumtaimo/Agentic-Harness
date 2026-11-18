@@ -21,6 +21,7 @@
       "Bash(node .harness/memory.mjs context:*)",
       "Bash(node .harness/memory.mjs sessions:*)",
       "Bash(node .harness/memory.mjs remember:*)",
+      "Bash(node .harness/memory.mjs learn:*)",
       "Bash(node .harness/visible.mjs brief:*)",
       "Bash(node .harness/visible.mjs assign:*)",
       "Bash(node .harness/visible.mjs verify:*)",
@@ -49,6 +50,8 @@
       "Bash(node .harness/backlog.mjs ready:*)",
       "Bash(node .harness/backlog.mjs block:*)",
       "Bash(node .harness/memory.mjs forget:*)",
+      "Bash(node .harness/memory.mjs forget-auto:*)",
+      "Bash(node .harness/memory.mjs promote:*)",
       "Edit(.harness/charter.md)",
       "Edit(.harness/config.json)",
       "Bash(git push:*)"

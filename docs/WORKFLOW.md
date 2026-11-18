@@ -122,7 +122,7 @@ is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
 | a role's persona or tools | `.harness/roles/*.json` | `node .harness/team.mjs sync-agents` |
 | rules injected into agents | `.harness/skills/<name>/SKILL.md` | `node .harness/doctor.mjs` |
 | what autonomous mode may touch / how much it may do | `.harness/charter.md` (section 0) | `node .harness/doctor.mjs` |
-| what the AIs should remember | `node .harness/memory.mjs remember "<rule>"` (or `/harness:teach`) | |
+| what the AIs should remember | `node .harness/memory.mjs remember "<rule>"` (permanent/git) · `learn "<note>"` (local) · `promote <id>` (or `/harness:teach`) | |
 
 `node .harness/doctor.mjs` checks all of it, including that the named agents match `team.json`.
 
@@ -130,8 +130,8 @@ is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
 
 `.claude/settings.json` ships with narrow rules, so the workflow runs without asking you for every command (the folder must be trusted):
 
-- **Allowed without asking:** only the workflow commands (`visible.mjs brief | assign | verify | handoff | propose | status | report`, `sessions.mjs board`, `status`, `doctor`, `team`, `dispatch`, the read-only `backlog` and `memory` commands) and the two test commands the agents use to check their own work: `npm test` and `node --test`. Never a whole interpreter (`node`, `git`, `npm`).
-- **Always asks:** `visible.mjs rollback`, `sessions.mjs merge`, editing `.harness/team.json`, `.harness/charter.md` or `.harness/config.json`, `backlog import | ready | block`, `memory forget`, `daemon --autonomous`, `git push`.
+- **Allowed without asking:** only the workflow commands (`visible.mjs brief | assign | verify | handoff | propose | status | report`, `sessions.mjs board`, `status`, `doctor`, `team`, `dispatch`, the read-only `backlog` and `memory` commands, plus `memory.mjs remember` and `memory.mjs learn`) and the two test commands the agents use to check their own work: `npm test` and `node --test`. Never a whole interpreter (`node`, `git`, `npm`).
+- **Always asks:** `visible.mjs rollback`, `sessions.mjs merge`, editing `.harness/team.json`, `.harness/charter.md` or `.harness/config.json`, `backlog import | ready | block`, `memory forget | forget-auto | promote`, `daemon --autonomous`, `git push`.
 - **Denied:** editing `.harness/releases/**`, force-pushing.
 
 For a project that already has its own `.claude/settings.json`, `node install.mjs <project>` **merges** these rules in (your rules stay; a rule you put in a stricter list is never loosened).

@@ -52,7 +52,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline/promises';
-import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, costlyRunReasons, engineUsable, detectEngines, compatibleModelFor, aiUsageSince, usageLine, usageTodayLine, quotaWarnings, formatQuotaWarning, MODEL_TIERS, isSameDir, validateExternalWorkRoot } from './lib/common.mjs';
+import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, clipErrorTrace, costlyRunReasons, engineUsable, detectEngines, compatibleModelFor, aiUsageSince, usageLine, usageTodayLine, quotaWarnings, formatQuotaWarning, MODEL_TIERS, isSameDir, validateExternalWorkRoot } from './lib/common.mjs';
 import { askEngineConsent } from './lib/consent.mjs';
 import { loadTeam } from './lib/governance.mjs';
 import { RESUMABLE_STATUSES, VISIBLE_TERMINAL, editorDisplayName, listVisibleRuns, readVisibleRun, writeVisibleRun, inspectVisibleRun } from './lib/handoff.mjs';
@@ -216,7 +216,7 @@ if (resumeVisible) {
     const errBits = [];
     if (resumedRun.lastVerify.violations?.length) errBits.push(...resumedRun.lastVerify.violations);
     if (resumedRun.lastVerify.check) errBits.push(resumedRun.lastVerify.check);
-    if (errBits.length) initialError = errBits.join('\n').slice(0, 6000);
+    if (errBits.length) initialError = clipErrorTrace(errBits.join('\n'), 6000);
   }
   const teamDef = loadTeam();
   if (resumedRun.assignments?.length > 0 && subtasks.length === 0 && !hierarchy && !explicitMode) {
