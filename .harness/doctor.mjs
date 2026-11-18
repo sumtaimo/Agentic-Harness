@@ -9,9 +9,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, helpIfAsked } from './lib/common.mjs';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, which, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
-import { SKILL_MATCH, readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
+import { SKILL_MATCH, readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents, planScopeAdaptation } from './lib/governance.mjs';
 
 ensureDirs();
 const ok = (m) => console.log(`  ✔ ${m}`);
@@ -105,8 +105,8 @@ if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.G
 
 // Harness core integrity: in a project, the harness code is the template's. Editing it locally (by a person or an AI)
 // is how projects drift apart and fixes get lost; doctor says so. The template repository itself is where it IS edited.
+const isTemplate = fs.existsSync(path.join(ROOT, 'install.mjs')) && /"name":\s*"agentic-harness"/.test((() => { try { return fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'); } catch { return ''; } })());
 {
-  const isTemplate = fs.existsSync(path.join(ROOT, 'install.mjs')) && /"name":\s*"agentic-harness"/.test((() => { try { return fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'); } catch { return ''; } })());
   console.log('\nHarness core (the template\'s code in .harness/*.mjs)');
   if (isTemplate) note('this is the template repository itself: the core is maintained here (see docs/MAINTAINING.md)');
   else {
@@ -122,7 +122,13 @@ if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.G
 
 console.log('\nAutomatic check (used when a task has no --check)');
 const v = detectVerifyCmd(ROOT, config);
-v.real ? ok(`${v.cmd}  (${v.source})`) : warn(`${v.source}. Add a "test" (or "check") script to package.json, or always pass --check.`);
+v.real ? ok(`${v.cmd}  (${v.source})`) : warn(`${v.source}. Add a "test" / "check" script (package.json, Makefile, pytest/go/cargo) or always pass --check.`);
+if (v.real) {
+  const firstTok = v.cmd.trim().split(/\s+/)[0].replace(/^["']|["']$/g, '');
+  if (firstTok && !firstTok.includes('/') && !firstTok.includes('\\') && !which(firstTok)) {
+    warn(`detected check runner '${firstTok}' is not on PATH — install it or pass --check "<command>"`);
+  }
+}
 
 // A project with UI files needs a real browser in its check, or a broken page script or layout still passes.
 // The doctor only looks and suggests; it never installs anything (that adds a dependency to YOUR project).
@@ -152,7 +158,7 @@ if (!charter.exists) warn('No .harness/charter.md — autonomous mode is off. Co
 else {
   ok(`charter.md: autonomous ${charter.autonomous ? 'ON' : 'off'}, maxAutoTasksPerRun ${charter.maxAutoTasksPerRun}, requireRealCheck ${charter.requireRealCheck ? 'yes' : 'no'}`);
   ok(`allowedPaths: ${charter.allowedPaths.join(', ') || '(any)'} | forbiddenPaths: ${charter.forbiddenPaths.join(', ')}`);
-  if (charter.autonomous && charter.requireRealCheck && !v.real) { bad('Autonomous is ON but the project has no real check: the controller will pause. Add a "test" script to package.json.'); problems++; }
+  if (charter.autonomous && charter.requireRealCheck && !v.real) { bad('Autonomous is ON but the project has no real check: the controller will pause. Add a project test/check script or --verify command.'); problems++; }
   if (charter.autonomous && /\(describe your product goals here/.test(charter.text)) note('charter.md objectives are still the placeholder. Autonomous mode is on but plans nothing by itself until you describe your goals (section 1 of .harness/charter.md); it still runs any READY task you add.');
 }
 const roles = loadRoles();
@@ -228,6 +234,12 @@ console.log('\nAgent team (hierarchy: orchestrator → leads → workers)');
       const ag = syncAgents(team, roles, { check: true });
       if (ag.stale.length) warn(`editor agents out of sync with team.json (${ag.stale.join(', ')}): run  node .harness/team.mjs sync-agents  and restart the Claude Code session`);
       else ok(`editor agents in sync: ${leads.map((l) => l.id).join(', ')} are named agents in .claude/agents/ (visible when the orchestrator delegates in Claude Code)`);
+      if (!isTemplate) {
+        const adapt = planScopeAdaptation(ROOT, { team, roles, charter });
+        if (adapt.changed && adapt.uncoveredDirs.length) {
+          note(`project folders outside team/charter scopes (${adapt.uncoveredDirs.join(', ')}) — preview: node .harness/team.mjs adapt-scopes`);
+        }
+      }
       ok(`workflow: human → controller → orchestrator (editor session) → named agents → controller verify → report. Autonomous mode: ${charter.autonomous ? 'ON' : 'off'} (${charter.autonomous ? 'acts on READY tasks; plans new ones only once the charter objectives are filled in' : 'set "- autonomous: on" in charter.md to enable'})`);
     }
   }

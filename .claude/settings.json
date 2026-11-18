@@ -44,6 +44,7 @@
       "Bash(node .harness/sessions.mjs cleanup:*)",
       "Edit(.harness/team.json)",
       "Bash(node .harness/team.mjs auto-assign:*)",
+      "Bash(node .harness/team.mjs adapt-scopes --apply:*)",
       "Bash(node .harness/daemon.mjs --autonomous:*)",
       "Bash(node .harness/backlog.mjs import:*)",
       "Bash(node .harness/backlog.mjs approve:*)",

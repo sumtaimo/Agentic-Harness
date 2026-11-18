@@ -423,8 +423,8 @@ export function applyEngineRouting(team, routing) {
   return { ...team, members: team.members.map((m) => ({ ...m, engine: routing[ROLE_JOB[String(m.role).toUpperCase()] || 'code'] })) };
 }
 
-const TEST_FILE_RE = /(^|\/)(tests?|__tests__)(\/|$)|\.(test|spec)\.[a-z0-9*?]+$/i;
-/** True when `p` matches a test directory or `.test.` / `.spec.` file name. */
+const TEST_FILE_RE = /(^|\/)(tests?|__tests__|e2e)(\/|$)|\.(test|spec)\.[a-z0-9*?]+$|(^|\/)(test_[^/]+\.py|[^/]+_test\.(py|go))$/i;
+/** True when `p` matches a test directory or test file convention (JS/TS/Python/Go). */
 export function isTestFilePath(p) {
   const n = String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
   return TEST_FILE_RE.test(n);
@@ -541,18 +541,18 @@ export function renderAgentFile(lead, role, team, config = (() => { try { return
 }
 
 /** { 'lead-dev.md': content, … } for every lead whose role is known. */
-export function expectedAgentFiles(team, roles) {
+export function expectedAgentFiles(team, roles, config = undefined) {
   const out = {};
   for (const l of (team?.members || []).filter((m) => m.level === 'lead')) {
     const role = roles[String(l.role).toUpperCase()];
-    if (role) out[`${l.id}.md`] = renderAgentFile(l, role, team);
+    if (role) out[`${l.id}.md`] = renderAgentFile(l, role, team, config);
   }
   return out;
 }
 
 /** Write (or check) .claude/agents/*.md. Returns { written[], unchanged[], stale[] }; with check:true nothing is written. */
-export function syncAgents(team, roles, { dir = AGENTS_DIR, check = false } = {}) {
-  const want = expectedAgentFiles(team, roles);
+export function syncAgents(team, roles, { dir = AGENTS_DIR, check = false, config = undefined } = {}) {
+  const want = expectedAgentFiles(team, roles, config);
   const res = { written: [], unchanged: [], stale: [] };
   if (!check) fs.mkdirSync(dir, { recursive: true });
   for (const [f, content] of Object.entries(want)) {
@@ -918,6 +918,362 @@ export function auditPatchSignals({ baseFiles = {}, curFiles = {}, root = ROOT, 
     }
   }
   return { signals, skippedTests, emptyCatches, missingRootCause };
+}
+
+// ───────────────────────────── adaptive project layout & role scopes ─────────────────────────────
+
+const LAYOUT_SKIP_DIRS = new Set([
+  '.git', '.harness', '.claude', '.cursor', '.vscode', '.github', '.idea',
+  '.next', '.nuxt', '.svelte-kit', '.astro', '.output', '.cache', '.turbo', '.parcel-cache',
+  '.pytest_cache', '.mypy_cache', '.ruff_cache', '.venv', 'venv', 'env', '__pycache__',
+  'node_modules', 'dist', 'build', 'out', 'coverage', 'target', 'vendor', 'demo-project', '.agent-state',
+  'examples'
+]);
+const STD_DEV_DIRS = new Set(['src']);
+const STD_DOC_DIRS = new Set(['docs']);
+const STD_TEST_DIRS = new Set(['tests', 'test', '__tests__']);
+const EXTRA_DOC_DIRS = new Set(['documentation', 'doc']);
+const EXTRA_TEST_DIRS = new Set(['spec', 'specs', 'e2e', 'cypress', 'playwright', 'unit_tests']);
+const STYLE_ONLY_DIR_NAMES = new Set(['styles', 'style', 'css', 'scss', 'less', 'theme', 'themes']);
+const BACKEND_ONLY_DIRS = new Set(['server', 'api', 'cmd', 'internal', 'pkg', 'backend', 'worker', 'workers', 'prisma', 'db', 'migrations']);
+const KNOWN_CODE_DIRS = new Set([
+  'app', 'pages', 'components', 'lib', 'server', 'api', 'cmd', 'internal', 'pkg',
+  'backend', 'frontend', 'web', 'core', 'utils', 'scripts', 'modules', 'routes',
+  'services', 'views', 'models', 'controllers', 'handlers', 'apps', 'packages',
+  'client', 'worker', 'workers', 'shared', 'common', 'features', 'hooks',
+  'store', 'stores', 'context', 'actions', 'middleware', 'plugins', 'layouts',
+  'templates', 'prisma', 'db', 'migrations', 'website'
+]);
+const UI_CAPABLE_DIRS = new Set([
+  'src', 'app', 'pages', 'components', 'styles', 'style', 'css', 'scss', 'less',
+  'theme', 'themes', 'views', 'layouts', 'templates', 'web', 'frontend', 'client',
+  'apps', 'packages', 'website'
+]);
+const CODE_EXT_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx|py|go|rs|php|rb|java|kt|cs|vue|svelte|astro|html?)$/i;
+const STYLE_EXT_RE = /\.(?:css|scss|less)$/i;
+const UI_EXT_RE = /\.(?:css|scss|less|jsx|tsx|vue|svelte|astro|html?)$/i;
+
+function scanDirStats(rootDir, relDir) {
+  const stats = { fileCount: 0, hasCode: false, hasStyle: false, hasUi: false, hasGo: false, hasPy: false };
+  const walk = (absDir, depth) => {
+    if (stats.fileCount >= 1500 || depth > 4) return;
+    let entries;
+    try { entries = fs.readdirSync(absDir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (stats.fileCount >= 1500) break;
+      if (e.name.startsWith('.') || LAYOUT_SKIP_DIRS.has(e.name)) continue;
+      const full = path.join(absDir, e.name);
+      if (e.isDirectory()) { walk(full, depth + 1); continue; }
+      if (!e.isFile()) continue;
+      stats.fileCount++;
+      if (STYLE_EXT_RE.test(e.name)) stats.hasStyle = true;
+      if (UI_EXT_RE.test(e.name)) stats.hasUi = true;
+      if (CODE_EXT_RE.test(e.name)) stats.hasCode = true;
+      if (/\.go$/i.test(e.name)) stats.hasGo = true;
+      if (/\.py$/i.test(e.name)) stats.hasPy = true;
+    }
+  };
+  walk(path.join(rootDir, relDir), 0);
+  return stats;
+}
+
+/**
+ * Inspect top-level folders and language manifests under `root` without mutating anything.
+ * Identifies extra code, test, doc, and style folders outside template defaults (`src`, `docs`, `tests`, `test`, `__tests__`).
+ */
+export function detectProjectLayout(root = ROOT) {
+  const extraCodeDirs = [];
+  const extraTestDirs = [];
+  const extraDocDirs = [];
+  const extraStyleDirs = [];
+  const existingCodeDirs = [];
+  let hasGo = fs.existsSync(path.join(root, 'go.mod'));
+  let hasPy = ['pyproject.toml', 'pytest.ini', 'setup.cfg', 'setup.py', 'requirements.txt', 'uv.lock'].some((f) => fs.existsSync(path.join(root, f)));
+  let hasUi = false;
+
+  let top = [];
+  try { top = fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)); } catch { top = []; }
+
+  for (const e of top) {
+    if (!e.isDirectory() || e.name.startsWith('.') || LAYOUT_SKIP_DIRS.has(e.name)) continue;
+    const name = e.name;
+    const st = scanDirStats(root, name);
+    if (!st.fileCount) continue;
+    if (st.hasGo) hasGo = true;
+    if (st.hasPy) hasPy = true;
+    if (st.hasUi || st.hasStyle) hasUi = true;
+
+    if (STD_DOC_DIRS.has(name)) continue;
+    if (EXTRA_DOC_DIRS.has(name)) { extraDocDirs.push(name); continue; }
+    if (STD_TEST_DIRS.has(name)) continue;
+    if (EXTRA_TEST_DIRS.has(name)) { extraTestDirs.push(name); continue; }
+
+    if (STYLE_ONLY_DIR_NAMES.has(name)) {
+      if (st.hasStyle || st.fileCount > 0) extraStyleDirs.push(name);
+      if (st.hasCode) { extraCodeDirs.push(name); existingCodeDirs.push(name); }
+      continue;
+    }
+
+    if (STD_DEV_DIRS.has(name)) {
+      existingCodeDirs.push(name);
+      continue;
+    }
+
+    if (KNOWN_CODE_DIRS.has(name) || st.hasCode) {
+      extraCodeDirs.push(name);
+      existingCodeDirs.push(name);
+      if ((UI_CAPABLE_DIRS.has(name) || st.hasUi || st.hasStyle) && (!BACKEND_ONLY_DIRS.has(name) || st.hasStyle || st.hasUi)) {
+        extraStyleDirs.push(name);
+      }
+    }
+  }
+
+  return {
+    extraCodeDirs,
+    extraTestDirs,
+    extraDocDirs,
+    extraStyleDirs: [...new Set(extraStyleDirs)],
+    existingCodeDirs,
+    hasGo,
+    hasPy,
+    hasUi,
+    uncoveredDirsCandidates: [...new Set([...extraCodeDirs, ...extraTestDirs, ...extraDocDirs, ...extraStyleDirs])]
+  };
+}
+
+function cloneJson(v) { return JSON.parse(JSON.stringify(v)); }
+
+function loadRolesFrom(dir) {
+  const roles = {};
+  try {
+    for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json'))) {
+      const r = readJsonSafe(path.join(dir, f), null);
+      if (r?.name) roles[String(r.name).toUpperCase()] = { ...r, file: f };
+    }
+  } catch { /* no roles dir */ }
+  return roles;
+}
+
+/**
+ * Plan additive scope updates so team.json, charter.md, and roles/*.json match `detectProjectLayout(root)`.
+ * Strictly preserves all existing scopes and never widens past forbiddenPaths or overlap rules.
+ */
+export function planScopeAdaptation(root = ROOT, { team = null, roles = null, charter = null, allowTeam = true, allowCharter = true, allowRoles = true } = {}) {
+  const layout = detectProjectLayout(root);
+  const curTeam = team || loadTeam(path.join(root, '.harness', 'team.json'));
+  const curRoles = roles || loadRolesFrom(path.join(root, '.harness', 'roles'));
+  const curCharter = charter || readCharter(path.join(root, '.harness', 'charter.md'));
+
+  const canRole = (name) => (allowRoles === true ? true : allowRoles && typeof allowRoles === 'object' ? allowRoles[name] === true : false);
+  const forbidden = curCharter?.forbiddenPaths || [];
+  const isSafeGlob = (g) => globProbes(g).every((p) => !matchesAny(p, forbidden));
+  const coveredBy = (g, globs = []) => globs.includes(g) || (globs.length > 0 && globWithin(g, globs));
+
+  const nextTeam = curTeam ? cloneJson(curTeam) : null;
+  const nextRoles = cloneJson(curRoles);
+  let nextAllowed = curCharter?.exists && Array.isArray(curCharter.allowedPaths) && curCharter.allowedPaths.length
+    ? [...curCharter.allowedPaths]
+    : null;
+
+  const changes = [];
+  const charterAdds = [];
+  const addedRolePaths = {};
+  const addCharterPath = (g) => {
+    if (!nextAllowed || !isSafeGlob(g)) return;
+    if (!coveredBy(g, nextAllowed)) {
+      nextAllowed.push(g);
+      charterAdds.push(g);
+    }
+  };
+
+  if (nextTeam && Array.isArray(nextTeam.members)) {
+    const leads = nextTeam.members.filter((m) => m.level === 'lead');
+    const findLead = (roleName, preferredId) => leads.find((l) => l.id === preferredId && String(l.role).toUpperCase() === roleName)
+      || leads.find((l) => String(l.role).toUpperCase() === roleName);
+
+    const leadDev = findLead('DEV_ENGINEER', 'lead-dev');
+    const leadQa = findLead('QA_AUDITOR', 'lead-qa');
+    const leadUx = findLead('UX_DESIGNER', 'lead-ux');
+    const leadBa = findLead('BA_ANALYST', 'lead-ba');
+
+    const conflictsOtherLead = (selfLead, candidateGlob) => leads.some((other) => {
+      if (other.id === selfLead.id) return false;
+      return (other.scope || []).some((og) => {
+        if (isFileTypeGlob(candidateGlob) !== isFileTypeGlob(og)) return false;
+        return globsOverlap(candidateGlob, og);
+      });
+    });
+
+    const addRoleWritable = (roleName, g) => {
+      const r = nextRoles[roleName];
+      if (!r || !Array.isArray(r.writablePaths)) return false;
+      if (coveredBy(g, r.writablePaths)) return true;
+      if (!canRole(roleName)) return false;
+      r.writablePaths.push(g);
+      (addedRolePaths[roleName] ||= []).push(g);
+      return true;
+    };
+
+    const addLeadGlobs = (lead, candidates, { expandRole = false, roleGlobFor = (g) => g } = {}) => {
+      if (!lead || !Array.isArray(lead.scope)) return [];
+      const roleName = String(lead.role).toUpperCase();
+      const roleObj = nextRoles[roleName];
+      const added = [];
+      for (const g of candidates) {
+        if (!isSafeGlob(g)) continue;
+        const rootFolder = `${g.split('/')[0]}/**`;
+        addCharterPath(rootFolder);
+        if (coveredBy(g, lead.scope) || conflictsOtherLead(lead, g)) continue;
+        const roleGlob = roleGlobFor(g);
+        const canFitRole = roleObj && (
+          coveredBy(g, roleObj.writablePaths || [])
+          || (allowTeam && expandRole && addRoleWritable(roleName, roleGlob))
+        );
+        if (!canFitRole) continue;
+        if (allowTeam) {
+          lead.scope.push(g);
+          added.push(g);
+        }
+      }
+      if (added.length) changes.push({ target: 'team', id: lead.id, role: roleName, added });
+      return added;
+    };
+
+    // 1. BA docs folders
+    if (layout.extraDocDirs.length) {
+      addLeadGlobs(leadBa, layout.extraDocDirs.map((d) => `${d}/**`), { expandRole: allowTeam });
+    }
+
+    // 2. Dev code folders
+    if (layout.extraCodeDirs.length) {
+      addLeadGlobs(leadDev, layout.extraCodeDirs.map((d) => `${d}/**`));
+    }
+
+    // 3. UX style globs
+    if (layout.extraStyleDirs.length) {
+      const styleGlobs = [];
+      for (const d of layout.extraStyleDirs) {
+        for (const ext of ['css', 'scss', 'less']) styleGlobs.push(`${d}/**/*.${ext}`);
+      }
+      addLeadGlobs(leadUx, styleGlobs, { expandRole: allowTeam });
+    }
+
+    // 4. QA test folders + colocated tests in code dirs + Go/Python conventions
+    {
+      const qaGlobs = [];
+      for (const d of layout.extraTestDirs) qaGlobs.push(`${d}/**`);
+      for (const d of layout.extraCodeDirs) {
+        qaGlobs.push(`${d}/**/*.test.*`, `${d}/**/*.spec.*`);
+      }
+      if (layout.hasGo) {
+        for (const d of layout.existingCodeDirs) qaGlobs.push(`${d}/**/*_test.go`);
+      }
+      if (layout.hasPy) {
+        for (const d of layout.existingCodeDirs) qaGlobs.push(`${d}/**/test_*.py`, `${d}/**/*_test.py`);
+      }
+      const qaRoleGlob = (g) => {
+        if (g.endsWith('/**/*_test.go')) return '**/*_test.go';
+        if (g.endsWith('/**/test_*.py')) return '**/test_*.py';
+        if (g.endsWith('/**/*_test.py')) return '**/*_test.py';
+        return g;
+      };
+      addLeadGlobs(leadQa, qaGlobs, { expandRole: allowTeam, roleGlobFor: qaRoleGlob });
+    }
+  } else {
+    // Even without team.json, still adapt charter.allowedPaths if present
+    for (const d of layout.uncoveredDirsCandidates) addCharterPath(`${d}/**`);
+  }
+
+  // If allowCharter is false, revert any proposed charter changes
+  if (!allowCharter) {
+    charterAdds.length = 0;
+    nextAllowed = curCharter?.allowedPaths ? [...curCharter.allowedPaths] : null;
+  }
+
+  for (const [roleName, added] of Object.entries(addedRolePaths)) {
+    if (added.length) changes.push({ target: 'role', id: nextRoles[roleName].file || roleName, role: roleName, added });
+  }
+  if (charterAdds.length) changes.push({ target: 'charter', id: 'charter.md', added: charterAdds });
+
+  const uncoveredDirs = layout.uncoveredDirsCandidates.filter((d) => {
+    const rootGlob = `${d}/**`;
+    const matchesAdded = changes.some((c) => c.added.some((g) => g === rootGlob || g.startsWith(`${d}/`)));
+    return matchesAdded;
+  });
+
+  return {
+    changed: changes.length > 0,
+    layout,
+    uncoveredDirs,
+    changes,
+    nextTeam,
+    nextCharterAllowedPaths: charterAdds.length ? nextAllowed : null,
+    nextRoles
+  };
+}
+
+/**
+ * Apply (or preview with dryRun: true) adaptive layout scopes to .harness/team.json, .harness/charter.md,
+ * changed .harness/roles/*.json, and re-sync .claude/agents/*.md. Validates result before writing.
+ */
+export function applyAdaptedScopes(root = ROOT, { dryRun = false, allowTeam = true, allowCharter = true, allowRoles = true, allowSyncAgents = true } = {}) {
+  const harnessDir = path.join(root, '.harness');
+  const teamPath = path.join(harnessDir, 'team.json');
+  const charterPath = path.join(harnessDir, 'charter.md');
+  const rolesDir = path.join(harnessDir, 'roles');
+  const agentsDir = path.join(root, '.claude', 'agents');
+  const cfgPath = path.join(harnessDir, 'config.json');
+
+  const team = readJsonSafe(teamPath, null);
+  const charter = readCharter(charterPath);
+  const roles = loadRolesFrom(rolesDir);
+  const cfg = readJsonSafe(cfgPath, {});
+
+  const plan = planScopeAdaptation(root, { team, roles, charter, allowTeam, allowCharter, allowRoles });
+  if (!plan.changed) return { applied: false, dryRun, writtenFiles: [], syncedAgents: [], ...plan };
+
+  const validationCharter = plan.nextCharterAllowedPaths
+    ? { ...charter, allowedPaths: plan.nextCharterAllowedPaths }
+    : charter;
+  if (plan.nextTeam) {
+    const v = validateTeam(plan.nextTeam, {
+      roles: plan.nextRoles,
+      charter: validationCharter,
+      plannerMaxWorkers: (cfg.planner || {}).maxWorkers || 4,
+      engines: Object.keys(cfg.profiles || {})
+    });
+    if (v.errors.length) return { applied: false, dryRun, errors: v.errors, warnings: v.warnings, writtenFiles: [], syncedAgents: [], ...plan };
+  }
+  if (dryRun) return { applied: false, dryRun: true, writtenFiles: [], syncedAgents: [], ...plan };
+
+  const writtenFiles = [];
+  if (allowTeam && plan.nextTeam && plan.changes.some((c) => c.target === 'team')) {
+    fs.writeFileSync(teamPath, `${JSON.stringify(plan.nextTeam, null, 2)}\n`);
+    writtenFiles.push('.harness/team.json');
+  }
+  if (allowCharter && plan.nextCharterAllowedPaths && fs.existsSync(charterPath)) {
+    const rawCharter = fs.readFileSync(charterPath, 'utf8');
+    const updated = rawCharter.replace(/^(\s*[-*]\s*\**allowedPaths\**\s*:\s*)(.+?)\s*$/mi, (_, pfx) => `${pfx}${plan.nextCharterAllowedPaths.join(', ')}`);
+    if (updated !== rawCharter) {
+      fs.writeFileSync(charterPath, updated);
+      writtenFiles.push('.harness/charter.md');
+    }
+  }
+  for (const c of plan.changes.filter((x) => x.target === 'role')) {
+    const r = plan.nextRoles[c.role];
+    if (!r?.file) continue;
+    const roleOut = { ...r };
+    delete roleOut.file;
+    fs.writeFileSync(path.join(rolesDir, r.file), `${JSON.stringify(roleOut, null, 2)}\n`);
+    writtenFiles.push(`.harness/roles/${r.file}`);
+  }
+  let syncedAgents = [];
+  const teamOrRolesWritten = writtenFiles.includes('.harness/team.json') || writtenFiles.some((w) => w.startsWith('.harness/roles/'));
+  if (allowSyncAgents && plan.nextTeam && teamOrRolesWritten) {
+    const ag = syncAgents(plan.nextTeam, plan.nextRoles, { dir: agentsDir, config: cfg });
+    syncedAgents = ag.written;
+  }
+  return { applied: writtenFiles.length > 0, dryRun: false, writtenFiles, syncedAgents, ...plan };
 }
 
 export { ROOT };

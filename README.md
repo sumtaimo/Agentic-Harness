@@ -250,7 +250,7 @@ L1  orchestrator [PO_ARCHITECT]       plans only; read-only. Splits the goal bet
 (after the real check passes on code changes, read-only `reviewer` and `security` agents audit the diff)
 ```
 `node .harness/team.mjs show` prints it with every member's set-up (role, engine, scope, tools, budget). Each member has its own set-up in that file.
-Each member can run on its own AI engine (`"engine"` in `team.json`); `node .harness/team.mjs auto-assign` sets that from the engines you have installed ([`docs/MULTI-MODEL-SETUP.md`](docs/MULTI-MODEL-SETUP.md)).
+Each member can run on its own AI engine (`"engine"` in `team.json`); `node .harness/team.mjs auto-assign` sets that from the engines you have installed ([`docs/MULTI-MODEL-SETUP.md`](docs/MULTI-MODEL-SETUP.md)). Existing projects using folders outside `src/` (such as `app/`, `components/`, `styles/`, `cmd/`, or `e2e/`) are adapted automatically on fresh install, or previewed/applied anytime with `node .harness/team.mjs adapt-scopes [--apply]`.
 Run it with `node .harness/dispatch.mjs --goal "…" --hierarchy --max-cost 2` or `/harness:run` (say "use the team").
 Team and parallel runs, 3+ workers, or `--model high` first **ask you in the terminal** (y / n / a = don't ask again);
 a normal one-worker run never asks. An AI tool already logged in on your machine is used only after you allow it once
@@ -275,15 +275,15 @@ What the controller enforces deterministically, so no agent can talk its way aro
 ### The check (verifier)
 The check is what makes this safe: the work is only accepted when the check command succeeds.
 - If you give one (`--check "npm test"`), that is used.
-- If you don't, the planner picks the strongest check from your `package.json` scripts:
-  `check` → else `typecheck` + `test` → else `build` → else `lint`.
+- If you don't, the controller auto-detects the strongest check for your repo:
+  root `package.json` scripts (`check` → `typecheck` + `test` → `build` → `lint`), Node/TS workspaces (`npm`/`pnpm`/`yarn`/`bun`), Python (`.venv` `pytest` / `uv.lock` / `pytest` / `unittest`), Go (`go test ./...`), Rust (`cargo test`), PHP/Laravel (`php artisan test` / `composer test` / `phpunit`), or `Makefile` (`check` / `test`).
 - If there is none, **nothing really checks the work**, and the harness warns you.
   Ask your AI chat to add a test script.
 
 ### The AI planner (parallel workers)
 Answer **yes** to *"Split into parallel AI workers?"* (or use `--auto-plan`). An AI first
 **reads** the project (read-only, so it cannot change anything) and splits your goal into up to
-4 workers. Each worker gets **its own files**. The plan is rejected if two workers would share
+4 workers. The planner and orchestrator also receive a compact zero-token Repo Intelligence summary (detected stack, top directory counts, entrypoints, and recent git hotspots). Each worker gets **its own files**. The plan is rejected if two workers would share
 a file, if a path is unsafe (`..`, `.git`, `.harness`), or if it goes outside the files you
 allowed. The planner gets one chance to fix a rejected plan, and is then stopped. It may
 *suggest* a check command; that suggestion is written in the session note and **never run
@@ -326,7 +326,7 @@ The template ships a project config for Claude Code (VS Code extension, terminal
 
 `.claude/settings.json` adds permission rules and the hook:
 - **Allowed without asking:** only the harness scripts (`status`, `doctor`, `start.mjs --summary`/`--json`, `hook-session.mjs --brief`, `usage`, `watch`, `team`, `dispatch`, `daemon` plain/`--status`/`--tick`, `visible` `brief`/`assign`/`verify`/`handoff`/`propose`/`status`/`report`, `sessions` `board`/`new`/`start`/`checkpoint`/`handoff`/`report`, read-only `backlog`/`memory` commands, `backlog add`, `memory remember`). Never a whole interpreter (`node`, `git`, `npm`).
-- **Always asks:** `visible.mjs rollback`, `sessions.mjs merge`/`cleanup`, `team.mjs auto-assign`, `daemon --autonomous`, `backlog import/approve/ready/block`, `memory forget`, editing `team.json`/`charter.md`/`config.json`, `git push`.
+- **Always asks:** `visible.mjs rollback`, `sessions.mjs merge`/`cleanup`, `team.mjs auto-assign`, `team.mjs adapt-scopes --apply`, `daemon --autonomous`, `backlog import/approve/ready/block`, `memory forget`, editing `team.json`/`charter.md`/`config.json`, `git push`.
 - **Denied:** editing `.harness/releases/**`, force-pushing.
 - **Hook:** at the start of every session the AI is told the harness state (controller running? backlog? autonomy? `uat`?).
 
@@ -538,7 +538,7 @@ connectivity checks and custom routing: [`docs/MULTI-MODEL-SETUP.md`](docs/MULTI
 | `planner.defaultAutoPlan` | false | use the AI planner even without `--auto-plan` |
 | `planner.maxWorkers` / `maxAttempts` | 4 / 2 | most workers per plan / planning tries |
 | `planner.allowedTools` | Read, Glob, Grep | tools the planner may use (read-only) |
-| `defaultVerifyCmd` | always passes | the check used when there is no `--check` and no usable package.json script |
+| `defaultVerifyCmd` | always passes | the check used when there is no `--check` and no auto-detected project check script |
 | `memory.maxLessonLines` | 50 | most lesson lines put into a worker prompt |
 | `autonomous.intervalSeconds` (or `heartbeatIntervalSeconds`) | 60 | heartbeat: how often the autonomous controller wakes (`--interval <s>` / `--schedule <min>` override) |
 | `liveAgentOutput` | true | stream each agent's actions into the terminal |
@@ -574,7 +574,7 @@ node .harness/sessions.mjs board|new|checkpoint|handoff|merge|cleanup   # multi-
 node .harness/start.mjs                  # interactive numbered menu + live overview banner (or: npm start, --summary)
 node .harness/ui.mjs                     # read-only local web dashboard on 127.0.0.1:4173 (or: npm run ui, --port <n>, --no-open)
 node .harness/hook-session.mjs --brief   # 4–8 line status & quota summary for any editor or terminal
-node .harness/team.mjs show|validate     # the agent team and its guardrails
+node .harness/team.mjs show|validate|adapt-scopes   # agent team, guardrails, and project-layout scope adapter
 ```
 
 Job file format (`.harness/inbox/*.json`):
@@ -598,7 +598,7 @@ Or let the AI plan it: `{ "id": "job-2", "title": "…", "autoPlan": true, "goal
 - A failed check feeds its error into the next cycle, and the loop stops after `maxCycles`.
 - Failed tasks restore the scoped files and land in `failed/` with a full trace.
 - An unavailable engine falls back to `auto`, and a missing engine flag is caught by the probe.
-- The check is auto-detected from `package.json`.
+- The check is auto-detected across `package.json`, Node/TS workspaces, Python, Go, Rust, PHP/Laravel, and `Makefile`.
 - Memory is de-duplicated, capped, and never injected twice.
 - State is written atomically, only one daemon runs per folder, and workers cannot dispatch jobs.
 - Autonomous mode (v2):
@@ -738,6 +738,7 @@ Orchestrator (plans) → leads: `lead-ba` (specs, `docs/**`), `lead-dev` (code, 
 - **Interactive Launcher & Dashboard:** `npm start` (`node .harness/start.mjs`, `--summary`), `node .harness/hook-session.mjs --brief` (4–8 line status), `npm run ui` (`node .harness/ui.mjs`, read-only local web dashboard on `127.0.0.1`), and `npm run usage` (`node .harness/usage.mjs`, with ≥80% daily quota warnings).
 - **Cross-Editor Handoff & Resume:** `node .harness/visible.mjs handoff` and `node .harness/dispatch.mjs --resume-visible [RUN_ID]` preserve partial edits and remap cross-engine models when switching editors or hitting usage caps.
 - **Root-Cause & Anti-Cheating Enforcement:** `visible.mjs brief --bugfix`, strict test-file isolation (`isTestFilePath()` prevents non-QA leads from owning test files), Two-Phase Root-Cause retry directives (`daemon.mjs`), and `auditPatchSignals()` flagging `.skip`/`.only`/`.todo`, empty `catch {}` blocks, and missing root-cause notes.
+- **Adaptive Scopes & Repo Intelligence:** `install.mjs` and `node .harness/team.mjs adapt-scopes [--apply]` detect project layouts (`app/`, `components/`, `styles/`, `cmd/`, `e2e/`, Go/Python tests) cleanly without overwriting custom rules, while `buildRepoMap()` injects a zero-token stack/entrypoint/hotspot summary into planners and `visible.mjs brief`.
 - **Skill Matching & Composition:** `SKILL_MATCH` (`keywords` + explicit/`autoApply` selection) and `additive-union` (`SKILL_COMPOSITION`) explicit tool narrowing ensure skills inject targeted rules cleanly without ever exceeding a role's permissions.
 
 ## Many sessions at once (Session A + child sessions)

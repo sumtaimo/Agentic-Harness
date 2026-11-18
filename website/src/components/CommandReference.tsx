@@ -38,6 +38,7 @@ const COMMANDS: Command[] = [
   { cmd: 'node .harness/sessions.mjs checkpoint <ID>', where: 'terminal', key: 'sessionCheckpoint' },
   { cmd: 'node .harness/sessions.mjs handoff [ID]', where: 'terminal', key: 'sessionHandoff' },
   { cmd: 'node .harness/team.mjs auto-assign --dry-run', where: 'terminal', key: 'autoAssign' },
+  { cmd: 'node .harness/team.mjs adapt-scopes', where: 'terminal', key: 'adaptScopes' },
   { cmd: 'node .harness/team.mjs show', where: 'terminal', key: 'show' },
   { cmd: 'node .harness/team.mjs validate', where: 'terminal', key: 'validate' },
   { cmd: 'node .harness/team.mjs sync-agents', where: 'terminal', key: 'sync' },

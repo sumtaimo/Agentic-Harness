@@ -211,7 +211,7 @@ node .harness/dispatch.mjs --goal "<clear goal incl. exact names/formats>" --hie
 - **Always agree a money cap with the user first** (`--max-cost`). The controller counts the real cost of every
   agent and stops the task (files restored) when it is over; never raise it without the user's OK.
 - Never edit `team.json` to widen a scope, add overlap or raise a budget without the user's explicit OK.
-  `node .harness/team.mjs validate` must pass; Doctor checks it too.
+  `node .harness/team.mjs validate` must pass; Doctor checks it too. (On non-`src/` project layouts like `app/`, `cmd/`, or `styles/`, preview additive scope updates with `node .harness/team.mjs adapt-scopes` and ask the user before running `--apply`.)
 
 Rules for you when dispatching:
 - **AI tools need the person's OK once.** If dispatch exits with `ENGINE_APPROVAL_NEEDED`, tell the user which tools are
@@ -221,8 +221,8 @@ Rules for you when dispatching:
   `node .harness/backlog.mjs approve <id>` only after they say yes for that item.
 - **Big runs need the person's OK.** If dispatch exits with `APPROVAL_NEEDED` (code 3), show the user the reasons it
   printed (mode, number of workers, high-tier models) and ask in chat. Add `--yes` only after a clear yes for THAT run.
-- **Make sure there is a real check.** Without `--check`, the harness picks one from
-  `package.json` (`check` > `typecheck`+`test` > `build` > `lint`). If dispatch prints
+- **Make sure there is a real check.** Without `--check`, the harness auto-detects one from
+  `package.json` (`check` > `typecheck`+`test` > `build` > `lint`), Node/TS workspaces (`npm`/`pnpm`/`yarn`/`bun`), Python (`pytest`/`unittest`), Go (`go test`), Rust (`cargo test`), PHP/Laravel (`artisan`/`composer test`/`phpunit`), or `Makefile` (`check`/`test`). If dispatch prints
   "NO real check", the verifier passes anything: tell the user, and propose a test or `--check`.
 - `--files` limits what a worker may change, and lets the harness **back those files up and
   restore them if the task fails**. With no files and no `--auto-plan`, there is no automatic
@@ -302,7 +302,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/charter.md` · `backlog.json` | autonomous limits · task backlog |
 | `.harness/backlog.mjs` | backlog list / add / ready / pop / import (with snapshot) / releases |
 | `.harness/roles/` · `skills/` | role personas + tool limits · skill rules |
-| `.harness/team.json` · `team.mjs` | the agent team (orchestrator → leads → workers): scopes, limits, budgets · show / validate / `sync-agents` |
+| `.harness/team.json` · `team.mjs` | the agent team (orchestrator → leads → workers): scopes, limits, budgets · show / validate / `sync-agents` / `adapt-scopes` |
 | `.harness/visible.mjs` | the controller for the editor workflow: brief / assign / verify / handoff / rollback / propose / status / report |
 | `.harness/sessions.mjs` · `/harness:sessions` | session board: Session A (role COORDINATOR) runs up to 4 child sessions, one task each; `checkpoint` saves WIP, `handoff` inspects & prepares cross-engine resume (`dispatch.mjs --cwd`), merge only with the owner's yes; merged tasks are cleaned up, unfinished ones flagged HIGH RISK, never deleted |
 | `.claude/agents/lead-*.md` | the named agents (generated from team.json; the user sees them working in the session) |

@@ -11,17 +11,21 @@
  *        detect which AI CLIs are usable here (claude, agy, codex) and route each role to one of them in
  *        team.json ("engine" per member). Only the "engine" fields change. --dry-run prints the routing without writing.
  *        HARNESS_ENGINES="claude,codex" skips detection and routes to exactly those engines.
+ *   node .harness/team.mjs adapt-scopes [--apply]
+ *        detect framework/project folders (app/, components/, styles/, cmd/, etc.) and add uncovered scopes to
+ *        team.json, charter.md, and roles/*.json without removing existing custom rules. Default is a read-only preview;
+ *        pass --apply to write changes and re-sync .claude/agents/*.md.
  *
- * show / validate / sync-agents --check are read-only. The team lives in .harness/team.json (plain JSON).
+ * show / validate / sync-agents --check / adapt-scopes (without --apply) are read-only. The team lives in .harness/team.json (plain JSON).
  * After editing team.json or a role, run sync-agents again.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { ensureDirs, loadConfig, detectEngines, HARNESS_DIR, memberModels, helpIfAsked } from './lib/common.mjs';
+import { ROOT, ensureDirs, loadConfig, detectEngines, HARNESS_DIR, memberModels, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { askEngineConsent } from './lib/consent.mjs';
-import { readCharter, loadRoles, loadTeam, validateTeam, describeMember, syncAgents, planEngineRouting, applyEngineRouting } from './lib/governance.mjs';
+import { readCharter, loadRoles, loadTeam, validateTeam, describeMember, syncAgents, planEngineRouting, applyEngineRouting, applyAdaptedScopes } from './lib/governance.mjs';
 
 ensureDirs();
 const cmd = process.argv[2] || 'show';
@@ -43,6 +47,40 @@ if (cmd === 'validate') {
   warnings.forEach((w) => console.log(`  ! ${w}`));
   console.log(errors.length ? `\nTeam is INVALID: ${errors.length} error(s). Nothing will start until they are fixed.` : `Team is valid.${warnings.length ? ` (${warnings.length} warning(s))` : ''}`);
   process.exit(errors.length ? 1 : 0);
+} else if (cmd === 'adapt-scopes') {
+  const apply = process.argv.includes('--apply');
+  const res = applyAdaptedScopes(ROOT, { dryRun: !apply });
+  const l = res.layout;
+  const detected = [
+    l.extraCodeDirs.length ? `code: ${l.extraCodeDirs.join(', ')}` : '',
+    l.extraStyleDirs.length ? `styles/ui: ${l.extraStyleDirs.join(', ')}` : '',
+    l.extraTestDirs.length ? `tests: ${l.extraTestDirs.join(', ')}` : '',
+    l.extraDocDirs.length ? `docs: ${l.extraDocDirs.join(', ')}` : '',
+    l.hasGo ? 'lang: Go' : '',
+    l.hasPy ? 'lang: Python' : ''
+  ].filter(Boolean);
+  console.log(`Detected extra layout signals: ${detected.length ? detected.join(' | ') : 'standard template layout only'}`);
+  if (res.errors?.length) {
+    res.errors.forEach((e) => console.error(`  ✖ ${e}`));
+    console.error('\nRefused to adapt scopes because the resulting team would not validate.');
+    process.exit(1);
+  }
+  if (!res.changed) {
+    console.log('\nTeam and charter scopes already cover the detected project folders; nothing to change.');
+    process.exit(0);
+  }
+  console.log('');
+  for (const c of res.changes) {
+    const what = c.target === 'team' ? `team ${c.id} [${c.role}]` : c.target === 'role' ? `role .harness/roles/${c.id}` : `.harness/${c.id}`;
+    console.log(`  + ${what.padEnd(32)} add: ${c.added.join(', ')}`);
+  }
+  if (!apply) {
+    console.log('\nPreview only (no files changed). Run with --apply to write these additions:\n  node .harness/team.mjs adapt-scopes --apply');
+    process.exit(0);
+  }
+  console.log(`\nApplied scope updates to: ${res.writtenFiles.join(', ')}`);
+  if (res.syncedAgents.length) console.log(`Synced editor agents: ${res.syncedAgents.join(', ')}`);
+  console.log('Undo (if tracked in git): git checkout -- .harness/team.json .harness/charter.md .harness/roles/ .claude/agents/');
 } else if (cmd === 'auto-assign') {
   const dry = process.argv.includes('--dry-run');
   if (process.env.HARNESS_ENGINES === undefined) await askEngineConsent(config, Object.keys(config.profiles)); // a logged-in tool is never routed to silently
@@ -100,9 +138,10 @@ if (cmd === 'validate') {
   });
   console.log(`\nRun a task through it:  node .harness/dispatch.mjs --goal "…" --hierarchy [--max-cost <usd>] --wait`);
   console.log('Route roles to your installed engines:  node .harness/team.mjs auto-assign [--dry-run]');
+  console.log('Adapt scopes to project layout:         node .harness/team.mjs adapt-scopes [--apply]');
   console.log(errors.length ? `\n✖ ${errors.length} error(s) — run "node .harness/team.mjs validate"` : '\n✔ team is valid');
   if (warnings.length) warnings.forEach((w) => console.log(`! ${w}`));
 } else {
-  console.error('Usage: team.mjs show | validate | sync-agents [--check] | auto-assign [--dry-run]');
+  console.error('Usage: team.mjs show | validate | sync-agents [--check] | auto-assign [--dry-run] | adapt-scopes [--apply]');
   process.exit(1);
 }

@@ -10,8 +10,8 @@
  *   node .harness/dispatch.mjs --goal "Add a /health API endpoint with tests" --auto-plan --wait
  *   (--files then limits which files the planner may hand out; --auto-plan no turns it off)
  *
- * No --check?  The planner picks the strongest check from package.json scripts
- *   (check > typecheck + test > build > lint). With none, nothing really checks the work.
+ * No --check?  The planner picks the strongest check from package.json scripts, workspaces,
+ *   or project test runners (pytest, go test, cargo test, composer/artisan, Makefile). With none, nothing really checks the work.
  *
  * Swarm (original spec form — several workers in parallel, each owning its files):
  *   node .harness/dispatch.mjs "Build API & Tests" --engine claude --verify "npm test" \
@@ -262,7 +262,7 @@ if (resumeVisible) {
 if (!title) title = goal ? goal.slice(0, 80) : 'Dispatched Swarm Task';
 if (!goal && subtasks.length === 0) goal = title;
 
-// No --check: the planner (Node 1) picks one from package.json when the job runs. Preview it here.
+// No --check: the planner (Node 1) picks one from package.json, workspaces, or project test runners. Preview it here.
 let checkLine;
 if (verifyCmd) checkLine = verifyCmd;
 else {

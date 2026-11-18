@@ -25,7 +25,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, memoryContext, recordSession, remember, normalizeTarget, helpIfAsked, pendingCostReasons, aiUsageSince, usageTodayLine } from './lib/common.mjs';
+import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, buildRepoMap, memoryContext, recordSession, remember, normalizeTarget, helpIfAsked, pendingCostReasons, aiUsageSince, usageTodayLine } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor, runsNode, ENGINE_SCRIPTS, isTestFilePath, auditPatchSignals } from './lib/governance.mjs';
 import { VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, listVisibleRuns, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
@@ -206,7 +206,7 @@ function brief() {
 
   const goal = item ? (item.goal || item.title) : goalArg;
   let check = flag('--check') ? { cmd: flag('--check'), source: 'given by the human', real: true } : item?.verifyCmd ? { cmd: item.verifyCmd, source: `backlog item ${item.id}`, real: true } : (() => { const d = detectVerifyCmd(ROOT, config); return { cmd: d.cmd, source: d.source, real: d.real }; })();
-  if (auto && charter.requireRealCheck && !check.real) die('This project has no real check (add a "test" script to package.json or a "verifyCmd" to the task). Autonomous work needs one (charter requireRealCheck).', 1);
+  if (auto && charter.requireRealCheck && !check.real) die('This project has no real check (add a project test/check script or a "verifyCmd" to the task). Autonomous work needs one (charter requireRealCheck).', 1);
 
   const id = `V-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 5)}`;
   const scopeGlobs = userAllowed.length ? userAllowed : charter.allowedPaths;
@@ -230,6 +230,7 @@ function brief() {
   if (item) updateBacklogItem(item.id, { status: 'IN_PROGRESS', startedAt: new Date().toISOString(), visibleRun: id });
   const { files } = listProjectFiles(ROOT, 60);
   const memory = memoryContext(config);
+  const repoMap = buildRepoMap(ROOT, { maxChars: 1200 });
   console.log(`RUN_ID=${id}`);
   console.log(`\nORCHESTRATOR BRIEF — run ${id}${auto ? ' (autonomous mode)' : ''}${run.bugfix ? ' (bugfix)' : ''}`);
   if (editor !== 'claude-code') console.log(`Editor: ${editorDisplayName(editor)}`);
@@ -247,6 +248,7 @@ function brief() {
   }
   console.log(`\nHow to proceed, as the orchestrator (you only plan; the agents do the work):\n  1. Decide which lead gets which files. Write the delegation as JSON:\n     {"interfaceContract":"exact names/signatures/formats the agents share","assignments":[{"lead":"lead-dev","goal":"…","files":["src/x.js"]}]}\n  2. Validate it: node .harness/visible.mjs assign ${id} '<json>'   (it prints each agent's ready-made prompt)\n  3. Start ALL assigned agents in ONE message with the Agent tool (subagent_type = the lead's id) so they run in parallel and are visible.\n  4. When they have reported: node .harness/visible.mjs verify ${id} --reports '{"lead-dev":"<their one-line report>"}'\n  5. Report to the human in plain words, from the controller's report.`);
   if (memory) console.log(`\nRules the user taught:\n${memory}`);
+  if (repoMap) console.log(`\nRepo summary:\n${repoMap}`);
   console.log(`\nProject files (first ${files.length}):\n${files.join('\n') || '(empty project)'}`);
 }
 

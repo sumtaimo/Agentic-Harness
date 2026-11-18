@@ -2,7 +2,7 @@
 /**
  * install.mjs — copy this harness into another project, without overwriting that project's files.
  *
- *   node install.mjs /path/to/your/project [--autonomous off] [--no-auto-assign] [--with-skills | --no-skills]
+ *   node install.mjs /path/to/your/project [--autonomous off] [--no-auto-assign] [--no-adapt-scopes] [--with-skills | --no-skills]
  *     default: once, also installs Skill Foundry's default skills (it decides the set); --with-skills all of them; --no-skills none; skipped with HARNESS_OFFLINE=1
  *   node install.mjs --reset [/path/to/your/project] [--autonomous off]   (clean a "Use this template" copy)
  *
@@ -324,6 +324,33 @@ if (optI > -1) {
   if (want === 'off' && report.some((r) => r.replaceAll('\\', '/').startsWith('wrote  .harness/charter.md')) && fs.existsSync(cp)) {
     fs.writeFileSync(cp, fs.readFileSync(cp, 'utf8').replace(/^- autonomous: on$/m, '- autonomous: off'));
     report.push('set   autonomous mode OFF in the new .harness/charter.md');
+  }
+}
+
+// Adaptive project layout scopes: for newly written .harness/team.json or .harness/charter.md, widen scopes additively
+// to cover non-template project folders (app/, components/, styles/, cmd/, e2e/, etc.) and Go/Python test conventions.
+// Existing team.json, charter.md, roles/*.json, or custom .claude/agents/*.md in the project are never modified.
+if (!ARGS.includes('--no-adapt-scopes')) {
+  const wroteFile = (rel) => report.some((r) => r.replaceAll('\\', '/').startsWith(`wrote  ${rel}`));
+  const allowTeam = wroteFile('.harness/team.json');
+  const allowCharter = wroteFile('.harness/charter.md');
+  if (allowTeam || allowCharter) {
+    const { applyAdaptedScopes } = await import(pathToFileURL(path.join(target, '.harness', 'lib', 'governance.mjs')).href);
+    const allowSyncAgents = !report.some((r) => /^kept +\.claude\/agents\//.test(r.replaceAll('\\', '/')));
+    const res = applyAdaptedScopes(target, {
+      allowTeam,
+      allowCharter,
+      allowRoles: {
+        UX_DESIGNER: wroteFile('.harness/roles/ux-designer.json'),
+        QA_AUDITOR: wroteFile('.harness/roles/qa-auditor.json'),
+        BA_ANALYST: wroteFile('.harness/roles/ba-analyst.json')
+      },
+      allowSyncAgents
+    });
+    if (res.applied) {
+      const sig = [...res.layout.extraCodeDirs, ...res.layout.extraStyleDirs, ...res.layout.extraTestDirs, ...res.layout.extraDocDirs].slice(0, 6).join(', ');
+      report.push(`adapted scopes in ${res.writtenFiles.join(', ')} for detected project layout (${sig || 'Go/Python test files'})`);
+    }
   }
 }
 

@@ -4723,5 +4723,404 @@ await test('auto-lessons capture across visible.mjs and daemon.mjs, plus V-test*
   assert(!fs.existsSync(path.join(dOff, '.harness', 'memory', 'auto-lessons.md')), 'autoLessons:false must disable daemon.mjs auto-lessons');
 });
 
+// ───────────── Package A: polyglot & workspace checks, adaptive layout scopes, repo intelligence map ─────────────
+
+await test('auto-verify (Point 1): detects Node workspaces (npm/pnpm/yarn/bun), Python (venv/uv/pytest/unittest), Go, Rust, PHP/Laravel, Makefile; root package.json wins', async () => {
+  const cfg = { defaultVerifyCmd: 'NOOP' };
+  const mk = (setup) => {
+    const p = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-poly-'));
+    setup(p);
+    return common.detectVerifyCmd(p, cfg);
+  };
+  const write = (root, rel, content = '') => {
+    const f = path.join(root, rel);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    if (typeof content === 'string' && content.startsWith('#!/')) {
+      fs.writeFileSync(f, content);
+      try { fs.chmodSync(f, 0o755); } catch { /* win32 */ }
+    } else {
+      fs.writeFileSync(f, content);
+    }
+  };
+
+  // Workspaces (when root package.json has no check scripts)
+  const npmWs = mk((p) => {
+    write(p, 'package.json', JSON.stringify({ name: 'mono', private: true, workspaces: ['packages/*'] }));
+    write(p, 'packages/a/package.json', JSON.stringify({ name: 'a', scripts: { typecheck: 'tsc --noEmit', test: 'node --test' } }));
+  });
+  assert(npmWs.real && npmWs.cmd === 'npm run typecheck --workspaces --if-present && npm test --workspaces --if-present', npmWs.cmd);
+
+  const npmObjWs = mk((p) => {
+    write(p, 'package.json', JSON.stringify({ name: 'mono2', private: true, workspaces: { packages: ['apps/**'] } }));
+    write(p, 'apps/web/client/package.json', JSON.stringify({ name: 'web', scripts: { test: 'vitest run' } }));
+  });
+  assert(npmObjWs.real && npmObjWs.cmd === 'npm test --workspaces --if-present', npmObjWs.cmd);
+
+  const pnpmWs = mk((p) => {
+    write(p, 'package.json', JSON.stringify({ name: 'pmono', private: true }));
+    write(p, 'pnpm-workspace.yaml', "packages:\n  - 'apps/*'\n  - 'packages/**'\n");
+    write(p, 'apps/api/package.json', JSON.stringify({ name: 'api', scripts: { check: 'biome check .' } }));
+  });
+  assert(pnpmWs.real && pnpmWs.cmd === 'pnpm -r --if-present run check', pnpmWs.cmd);
+
+  const yarnWs = mk((p) => {
+    write(p, 'package.json', JSON.stringify({ name: 'ymono', private: true, workspaces: ['packages/*'] }));
+    write(p, 'yarn.lock', '');
+    write(p, 'packages/ui/package.json', JSON.stringify({ name: 'ui', scripts: { test: 'jest' } }));
+  });
+  assert(yarnWs.real && yarnWs.cmd === 'yarn workspaces run test', yarnWs.cmd);
+
+  const bunWs = mk((p) => {
+    write(p, 'package.json', JSON.stringify({ name: 'bmono', private: true, workspaces: ['packages/*'] }));
+    write(p, 'bun.lock', '');
+    write(p, 'packages/core/package.json', JSON.stringify({ name: 'core', scripts: { test: 'bun test' } }));
+  });
+  assert(bunWs.real && bunWs.cmd === "bun --filter '*' run test", bunWs.cmd);
+
+  const emptyWs = mk((p) => {
+    write(p, 'package.json', JSON.stringify({ name: 'empty-ws', private: true, workspaces: ['packages/*'] }));
+    write(p, 'packages/a/package.json', JSON.stringify({ name: 'a', scripts: { test: 'echo "Error: no test specified" && exit 1' } }));
+  });
+  assert(emptyWs.real === false && emptyWs.cmd === 'NOOP', JSON.stringify(emptyWs));
+
+  // Python
+  const pyVenv = mk((p) => {
+    write(p, 'pyproject.toml', '[project]\nname = "demo"\n');
+    write(p, '.venv/bin/pytest', '#!/bin/sh\nexit 0\n');
+  });
+  assert(pyVenv.real && pyVenv.cmd === '.venv/bin/pytest', pyVenv.cmd);
+
+  const pyUv = mk((p) => {
+    write(p, 'uv.lock', 'version = 1\n');
+    write(p, 'pyproject.toml', '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n');
+  });
+  assert(pyUv.real && pyUv.cmd === 'uv run pytest', pyUv.cmd);
+
+  const pyTestIni = mk((p) => {
+    write(p, 'pytest.ini', '[pytest]\n');
+    write(p, 'tests/test_app.py', 'def test_ok(): assert True\n');
+  });
+  assert(pyTestIni.real && pyTestIni.cmd === 'pytest', pyTestIni.cmd);
+
+  const pyUnit = mk((p) => {
+    write(p, 'requirements.txt', 'requests==2.32.0\n');
+    write(p, 'tests/test_math.py', 'import unittest\n');
+  });
+  assert(pyUnit.real && /python3? -m unittest discover/.test(pyUnit.cmd), pyUnit.cmd);
+
+  const pyNoTests = mk((p) => { write(p, 'requirements.txt', 'requests==2.32.0\n'); });
+  assert(pyNoTests.real === false, JSON.stringify(pyNoTests));
+
+  // Go, Rust, PHP/Laravel, Makefile
+  assert(mk((p) => write(p, 'go.mod', 'module example.com/app\n')).cmd === 'go test ./...');
+  assert(mk((p) => write(p, 'Cargo.toml', '[package]\nname = "app"\n')).cmd === 'cargo test');
+  assert(mk((p) => write(p, 'artisan', '<?php\n')).cmd === 'php artisan test');
+  assert(mk((p) => write(p, 'composer.json', JSON.stringify({ scripts: { test: 'phpunit' } }))).cmd === 'composer test');
+  assert(mk((p) => { write(p, 'phpunit.xml', '<phpunit/>'); write(p, 'vendor/bin/phpunit', '#!/bin/sh\nexit 0\n'); }).cmd === './vendor/bin/phpunit');
+  assert(mk((p) => write(p, 'Makefile', 'test:\n\techo test\ncheck:\n\techo check\n')).cmd === 'make check');
+  assert(mk((p) => write(p, 'GNUmakefile', 'test:\n\techo t\n')).cmd === 'make test');
+  assert(mk((p) => write(p, 'Makefile', 'test := foo\nall:\n\techo ok\n')).real === false, 'Makefile variable assignment must not match target');
+
+  // Precedence: root package.json beats workspace & polyglot; workspace beats polyglot
+  const rootWins = mk((p) => {
+    write(p, 'package.json', JSON.stringify({ name: 'r', workspaces: ['packages/*'], scripts: { test: 'node --test' } }));
+    write(p, 'packages/a/package.json', JSON.stringify({ name: 'a', scripts: { check: 'biome' } }));
+    write(p, 'go.mod', 'module x\n');
+  });
+  assert(rootWins.cmd === 'npm test', rootWins.cmd);
+
+  const wsBeatsPoly = mk((p) => {
+    write(p, 'package.json', JSON.stringify({ name: 'r', workspaces: ['packages/*'] }));
+    write(p, 'packages/a/package.json', JSON.stringify({ name: 'a', scripts: { test: 'node --test' } }));
+    write(p, 'Makefile', 'test:\n\techo m\n');
+  });
+  assert(wsBeatsPoly.cmd === 'npm test --workspaces --if-present', wsBeatsPoly.cmd);
+
+  // E2E daemon auto-verify on an npm workspace repo
+  const dw = sandbox();
+  write(dw, 'package.json', JSON.stringify({ name: 'e2e-ws', private: true, workspaces: ['packages/*'] }));
+  write(dw, 'packages/core/package.json', JSON.stringify({
+    name: '@t/core',
+    scripts: { test: 'node -e "process.exit(require(\'fs\').existsSync(\'../../src/ws.txt\')?0:1)"' }
+  }));
+  drop(dw, { id: 'ws-av', title: 'ws auto-verify', subtasks: [{ id: 'w', targetFiles: ['src/ws.txt'], prompt: 'WRITE src/ws.txt ok' }] });
+  runOnce(dw);
+  assert(stateOf(dw).phase === '4_COMMITTED', `${stateOf(dw).phase} ${stateOf(dw).lastGateStatus}`);
+  assert(log(dw).some((e) => e.phase === '3_VERIFIER' && /npm test --workspaces --if-present/.test(e.message)), 'daemon did not run workspace auto-check');
+
+  // doctor.mjs missing-runner check (and skip relative venv paths)
+  const minBin = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-minbin-'));
+  const gitBin = common.which('git');
+  try {
+    fs.symlinkSync(process.execPath, path.join(minBin, path.basename(process.execPath)));
+    if (gitBin) fs.symlinkSync(gitBin, path.join(minBin, path.basename(gitBin)));
+    const dGo = sandbox();
+    write(dGo, 'go.mod', 'module example.com/miss\n');
+    const drGo = node(dGo, ['.harness/doctor.mjs'], { PATH: minBin });
+    assert(/go test \/\.\.\./.test(drGo.stdout) && /! detected check runner 'go' is not on PATH/.test(drGo.stdout), drGo.stdout);
+
+    const dVenv = sandbox();
+    write(dVenv, 'pyproject.toml', '[project]\nname = "v"\n');
+    write(dVenv, '.venv/bin/pytest', '#!/bin/sh\nexit 0\n');
+    const drVenv = node(dVenv, ['.harness/doctor.mjs'], { PATH: minBin });
+    assert(/\.venv\/bin\/pytest/.test(drVenv.stdout) && !/is not on PATH/.test(drVenv.stdout), drVenv.stdout);
+  } catch { /* symlink fallback skipped on restricted FS */ }
+});
+
+await test('adaptive project layout & scopes (Point 2): install adapts Next.js/Go/Python repos safely, team.mjs adapt-scopes previews/applies, doctor notes uncovered dirs, template & existing projects untouched', () => {
+  const mkFiles = (root, files) => {
+    for (const [rel, body] of Object.entries(files)) {
+      const f = path.join(root, rel);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, body);
+    }
+  };
+  const gInit = (cwd) => {
+    const G = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    G('init', '-q', '-b', 'main');
+    execFileSync('git', ['config', 'user.name', 't'], { cwd, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd, stdio: 'ignore' });
+    G('add', '-A'); G('commit', '-q', '-m', 'init');
+  };
+
+  // 1. Next.js project: fresh install adapts team, charter, ux role, agents; doctor clean; delegation guardrails work
+  const nextDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-next-'));
+  mkFiles(nextDir, {
+    'package.json': JSON.stringify({ name: 'next-app', private: true, scripts: { test: PASS } }),
+    'app/page.tsx': 'export default function Page(){return null;}\n',
+    'components/Button.tsx': 'export const Button=()=>null;\n',
+    'styles/global.css': 'body { margin: 0; }\n',
+    'e2e/home.spec.ts': 'test("ok",()=>{});\n',
+    'tests/home.test.ts': 'test("unit",()=>{});\n'
+  });
+  gInit(nextDir);
+  const instNext = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), nextDir, '--no-auto-assign'], { encoding: 'utf8', env: { ...env, HARNESS_ENGINES: '' } });
+  assert(instNext.status === 0 && /adapted scopes in/.test(instNext.stdout), instNext.stdout + instNext.stderr);
+  assert(node(nextDir, ['.harness/team.mjs', 'validate']).status === 0, 'adapted Next.js team must validate');
+  assert(node(nextDir, ['.harness/team.mjs', 'sync-agents', '--check']).status === 0, 'editor agents must be in sync after adapt');
+  const nextTeam = teamOf(nextDir).members;
+  const nDev = nextTeam.find((m) => m.id === 'lead-dev');
+  const nUx = nextTeam.find((m) => m.id === 'lead-ux');
+  const nQa = nextTeam.find((m) => m.id === 'lead-qa');
+  assert(nDev.scope.includes('app/**') && nDev.scope.includes('components/**') && !nDev.scope.includes('styles/**') && !nDev.scope.includes('e2e/**'), JSON.stringify(nDev.scope));
+  assert(nUx.scope.includes('styles/**/*.css') && nUx.scope.includes('app/**/*.css') && nUx.scope.includes('components/**/*.css'), JSON.stringify(nUx.scope));
+  assert(nQa.scope.includes('e2e/**') && nQa.scope.includes('app/**/*.test.*') && nQa.scope.includes('components/**/*.spec.*'), JSON.stringify(nQa.scope));
+  const nextCharter = gov.readCharter(path.join(nextDir, '.harness', 'charter.md'));
+  for (const g of ['app/**', 'components/**', 'styles/**', 'e2e/**']) assert(nextCharter.allowedPaths.includes(g), `charter missing ${g}`);
+  const uxRole = json(path.join(nextDir, '.harness', 'roles', 'ux-designer.json'));
+  assert(uxRole.writablePaths.includes('styles/**/*.css') && uxRole.writablePaths.includes('app/**/*.css'), JSON.stringify(uxRole.writablePaths));
+
+  // doctor checks pass cleanly on fresh install (and 0 failures / 0 warnings once a mock engine is configured)
+  const drNextRaw = node(nextDir, ['.harness/doctor.mjs'], { PATH: env.PATH });
+  assert(/✔ unchanged since install/.test(drNextRaw.stdout) && /✔ npm test/.test(drNextRaw.stdout) && /✔ team\.json valid/.test(drNextRaw.stdout) && /✔ editor agents in sync/.test(drNextRaw.stdout) && !/project folders outside team\/charter scopes/.test(drNextRaw.stdout), drNextRaw.stdout);
+  {
+    const nCfgPath = path.join(nextDir, '.harness', 'config.json');
+    const nCfg = json(nCfgPath);
+    nCfg.profiles.mock = { verified: true, binary: process.execPath, args: [MOCK], promptVia: 'stdin', allowedTools: [] };
+    nCfg.activeProfile = 'mock';
+    nCfg.autoOrder = ['mock'];
+    fs.writeFileSync(nCfgPath, JSON.stringify(nCfg, null, 2));
+    fs.writeFileSync(path.join(nextDir, '.harness', 'approvals.json'), JSON.stringify({ engines: { mock: true } }));
+  }
+  const drNext = node(nextDir, ['.harness/doctor.mjs'], { PATH: env.PATH });
+  assert(drNext.status === 0 && /Failures: 0 · Warnings: 0/.test(drNext.stdout) && !/project folders outside team\/charter scopes/.test(drNext.stdout), drNext.stdout);
+
+  // Delegation rules on Next.js scopes
+  const nextLeads = nextTeam.filter((m) => m.level === 'lead');
+  const okDel = gov.validateDelegation({
+    assignments: [
+      { lead: 'lead-dev', goal: 'ui component', files: ['components/Button.tsx'] },
+      { lead: 'lead-ux', goal: 'styles', files: ['styles/global.css'] },
+      { lead: 'lead-qa', goal: 'tests', files: ['e2e/home.spec.ts', 'app/page.test.ts'] }
+    ]
+  }, { leads: nextLeads, delegable: new Set(nextLeads.map((l) => l.id)) });
+  assert(okDel.assignments.length === 3);
+  for (const badFile of ['app/page.test.ts', 'styles/global.css', 'app/globals.css']) {
+    let threw = '';
+    try { gov.validateDelegation({ assignments: [{ lead: 'lead-dev', goal: 'bad', files: [badFile] }] }, { leads: nextLeads, delegable: new Set(['lead-dev', 'lead-ux', 'lead-qa']) }); } catch (e) { threw = e.message; }
+    assert(threw, `lead-dev must not own ${badFile}`);
+  }
+
+  // 2. Go layout
+  const goDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-go-'));
+  mkFiles(goDir, {
+    'go.mod': 'module example.com/svc\n',
+    'cmd/server/main.go': 'package main\nfunc main(){}\n',
+    'internal/auth/auth.go': 'package auth\n'
+  });
+  assert(spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), goDir, '--no-auto-assign'], { encoding: 'utf8', env: { ...env, HARNESS_ENGINES: '' } }).status === 0);
+  assert(node(goDir, ['.harness/team.mjs', 'validate']).status === 0, 'adapted Go team must validate');
+  const goTeam = teamOf(goDir).members;
+  const goQa = goTeam.find((m) => m.id === 'lead-qa');
+  const goDev = goTeam.find((m) => m.id === 'lead-dev');
+  assert(goDev.scope.includes('cmd/**') && goDev.scope.includes('internal/**'), JSON.stringify(goDev.scope));
+  assert(goQa.scope.includes('cmd/**/*_test.go') && goQa.scope.includes('internal/**/*_test.go'), JSON.stringify(goQa.scope));
+  assert(json(path.join(goDir, '.harness', 'roles', 'qa-auditor.json')).writablePaths.includes('**/*_test.go'));
+  assert(gov.isTestFilePath('internal/auth/auth_test.go') && !gov.isTestFilePath('internal/auth/auth.go'));
+  const goLeads = goTeam.filter((m) => m.level === 'lead');
+  assert(gov.validateDelegation({ assignments: [
+    { lead: 'lead-dev', goal: 'auth', files: ['internal/auth/auth.go'] },
+    { lead: 'lead-qa', goal: 'auth tests', files: ['internal/auth/auth_test.go'] }
+  ] }, { leads: goLeads, delegable: new Set(['lead-dev', 'lead-qa']) }).assignments.length === 2);
+  let goErr = '';
+  try { gov.validateDelegation({ assignments: [{ lead: 'lead-dev', goal: 'x', files: ['internal/auth/auth_test.go'] }] }, { leads: goLeads, delegable: new Set(['lead-dev', 'lead-qa']) }); } catch (e) { goErr = e.message; }
+  assert(/only lead-qa owns test files/.test(goErr), goErr);
+
+  // 3. Python layout with documentation/ & backend/ & tests/
+  const pyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-py-'));
+  mkFiles(pyDir, {
+    'pyproject.toml': '[project]\nname="api"\n',
+    'backend/api.py': 'def ok(): return True\n',
+    'documentation/arch.md': '# Arch\n',
+    'tests/test_api.py': 'def test_ok(): assert True\n'
+  });
+  assert(spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), pyDir, '--no-auto-assign'], { encoding: 'utf8', env: { ...env, HARNESS_ENGINES: '' } }).status === 0);
+  assert(node(pyDir, ['.harness/team.mjs', 'validate']).status === 0, 'adapted Python team must validate');
+  const pyTeam = teamOf(pyDir).members;
+  assert(pyTeam.find((m) => m.id === 'lead-ba').scope.includes('documentation/**'));
+  assert(pyTeam.find((m) => m.id === 'lead-dev').scope.includes('backend/**'));
+  assert(pyTeam.find((m) => m.id === 'lead-qa').scope.includes('backend/**/test_*.py'));
+  assert(gov.isTestFilePath('backend/test_api.py') && gov.isTestFilePath('backend/api_test.py') && gov.isTestFilePath('e2e/login.spec.ts'));
+  const pyLeads = pyTeam.filter((m) => m.level === 'lead');
+  assert(gov.validateDelegation({ assignments: [{ lead: 'lead-qa', goal: 'py test', files: ['backend/test_api.py'] }] }, { leads: pyLeads, delegable: new Set(['lead-qa']) }).assignments.length === 1);
+  let pyErr = '';
+  try { gov.validateDelegation({ assignments: [{ lead: 'lead-dev', goal: 'py', files: ['backend/test_api.py'] }] }, { leads: pyLeads, delegable: new Set(['lead-dev', 'lead-qa']) }); } catch (e) { pyErr = e.message; }
+  assert(/only lead-qa owns test files/.test(pyErr), pyErr);
+
+  // 4. Guardrails: std src/, empty dir, --no-adapt-scopes, and existing custom team/charter/agent preservation
+  const stdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-std-'));
+  mkFiles(stdDir, { 'src/index.js': 'export default 1;\n' });
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), stdDir, '--no-auto-assign'], { encoding: 'utf8', env: { ...env, HARNESS_ENGINES: '' } });
+  const tplTeam = json(path.join(REPO, '.harness', 'team.json'));
+  assert(JSON.stringify(teamOf(stdDir)) === JSON.stringify(tplTeam), 'standard src/-only project team must match template');
+
+  const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-empty-'));
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), emptyDir, '--no-auto-assign'], { encoding: 'utf8', env: { ...env, HARNESS_ENGINES: '' } });
+  assert(JSON.stringify(teamOf(emptyDir)) === JSON.stringify(tplTeam), 'empty repo team must match template');
+
+  const noAdapt = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-noadapt-'));
+  mkFiles(noAdapt, {
+    'package.json': JSON.stringify({ name: 'na', private: true, scripts: { test: PASS } }),
+    'app/page.tsx': 'export default null;\n',
+    'styles/site.css': 'body {}\n'
+  });
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), noAdapt, '--no-auto-assign', '--no-adapt-scopes'], { encoding: 'utf8', env: { ...env, HARNESS_ENGINES: '' } });
+  assert(JSON.stringify(teamOf(noAdapt)) === JSON.stringify(tplTeam), '--no-adapt-scopes must keep template scopes');
+
+  // Re-install into a project that already has custom team.json, charter.md, and .claude/agents/lead-dev.md -> NEVER overwritten
+  const customDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-keepcustom-'));
+  mkFiles(customDir, {
+    'app/page.tsx': 'export default null;\n',
+    '.harness/team.json': JSON.stringify({ ...tplTeam, description: 'CUSTOM-TEAM' }, null, 2),
+    '.harness/charter.md': '# Custom Charter\n- autonomous: on\n- allowedPaths: src/**\n',
+    '.claude/agents/lead-dev.md': '# Custom lead-dev agent\n'
+  });
+  spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), customDir, '--no-auto-assign'], { encoding: 'utf8', env: { ...env, HARNESS_ENGINES: '' } });
+  assert(read(customDir, '.harness/team.json').includes('CUSTOM-TEAM'), 'existing team.json must never be adapted/overwritten on install');
+  assert(read(customDir, '.harness/charter.md').startsWith('# Custom Charter'), 'existing charter.md must never be overwritten');
+  assert(read(customDir, '.claude/agents/lead-dev.md') === '# Custom lead-dev agent\n', 'existing .claude/agents/lead-dev.md must never be overwritten');
+
+  // 5. doctor note + team.mjs adapt-scopes preview (read-only) vs --apply (mutates + syncs agents + clears doctor note)
+  const docBefore = node(noAdapt, ['.harness/doctor.mjs'], { PATH: env.PATH });
+  assert(/ℹ project folders outside team\/charter scopes \(app, styles\) — preview: node \.harness\/team\.mjs adapt-scopes/.test(docBefore.stdout), docBefore.stdout);
+
+  const beforeTeam = read(noAdapt, '.harness/team.json');
+  const beforeCharter = read(noAdapt, '.harness/charter.md');
+  const beforeUx = read(noAdapt, '.harness/roles/ux-designer.json');
+  const beforeAgent = read(noAdapt, '.claude/agents/lead-dev.md');
+  const prev = node(noAdapt, ['.harness/team.mjs', 'adapt-scopes']);
+  assert(prev.status === 0 && /Preview only \(no files changed\)/.test(prev.stdout) && /app\/\*\*/.test(prev.stdout), prev.stdout + prev.stderr);
+  assert(read(noAdapt, '.harness/team.json') === beforeTeam && read(noAdapt, '.harness/charter.md') === beforeCharter && read(noAdapt, '.harness/roles/ux-designer.json') === beforeUx && read(noAdapt, '.claude/agents/lead-dev.md') === beforeAgent, 'preview must not mutate files');
+
+  const applied = node(noAdapt, ['.harness/team.mjs', 'adapt-scopes', '--apply']);
+  assert(applied.status === 0 && /Applied scope updates to:/.test(applied.stdout) && /Synced editor agents:/.test(applied.stdout), applied.stdout + applied.stderr);
+  assert(teamOf(noAdapt).members.find((m) => m.id === 'lead-dev').scope.includes('app/**'));
+  assert(node(noAdapt, ['.harness/team.mjs', 'validate']).status === 0 && node(noAdapt, ['.harness/team.mjs', 'sync-agents', '--check']).status === 0);
+  const docAfter = node(noAdapt, ['.harness/doctor.mjs'], { PATH: env.PATH });
+  assert(!/project folders outside team\/charter scopes/.test(docAfter.stdout), `uncovered-folder note persisted after apply:\n${docAfter.stdout}`);
+
+  // 6. Template REPO itself never shows uncovered-folder note; settings.json puts adapt-scopes --apply in ask only
+  const docRepo = node(REPO, ['.harness/doctor.mjs'], { PATH: env.PATH });
+  assert(!/project folders outside team\/charter scopes/.test(docRepo.stdout), `template repo doctor should skip uncovered-folder note:\n${docRepo.stdout}`);
+  const st = json(path.join(REPO, '.claude', 'settings.json')).permissions;
+  assert(st.ask.includes('Bash(node .harness/team.mjs adapt-scopes --apply:*)') && !st.allow.includes('Bash(node .harness/team.mjs adapt-scopes --apply:*)'), 'adapt-scopes --apply must require confirmation in ask');
+});
+
+await test('repo intelligence map (Point 3): buildRepoMap summarizes stack, layout, entrypoints, git hotspots (excl .harness); injected into brief, aiDecompose, hierDecompose, poGenerate', () => {
+  // 1. Empty folder returns ''
+  const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-map-empty-'));
+  assert(common.buildRepoMap(emptyDir) === '', 'empty dir should return empty map');
+
+  // 2. Git Next.js + TS + Tailwind + Vitest repo with commits & .harness commit
+  const nx = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-map-nx-'));
+  const wr = (rel, body) => { const f = path.join(nx, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, body); };
+  const G = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: nx, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  wr('package.json', JSON.stringify({ name: 'nx', dependencies: { next: '15.0.0', react: '19.0.0' }, devDependencies: { typescript: '5.0.0', tailwindcss: '4.0.0', vitest: '3.0.0' }, scripts: { test: 'vitest run' } }));
+  wr('tsconfig.json', '{}');
+  wr('app/layout.tsx', 'export default function L({children}:any){return children;}\n');
+  wr('app/page.tsx', 'export default function P(){return 1;}\n');
+  wr('styles/global.css', 'body{}\n');
+  wr('.harness/config.json', '{}');
+  G('init', '-q', '-b', 'main'); G('add', '-A'); G('commit', '-q', '-m', 'c1');
+  wr('app/page.tsx', 'export default function P(){return 2;}\n');
+  wr('.harness/config.json', '{"v":2}');
+  G('add', '-A'); G('commit', '-q', '-m', 'c2');
+  const map = common.buildRepoMap(nx, { maxChars: 1200 });
+  for (const want of ['Stack: Node.js/TypeScript, Next.js', 'Tailwind', 'Vitest', 'Layout (5 files):', 'Entrypoints:', 'app/page.tsx', 'Hotspots (recent git edits): app/page.tsx (2x)']) {
+    assert(map.includes(want), `missing "${want}" in:\n${map}`);
+  }
+  assert(!map.includes('.harness/config.json'), `.harness edits leaked into hotspots:\n${map}`);
+  const clippedMap = common.buildRepoMap(nx, { maxChars: 90 });
+  assert(clippedMap.length <= 90 && clippedMap.endsWith('…'), `maxChars not respected (${clippedMap.length}): ${clippedMap}`);
+
+  // 3. Python FastAPI + pytest repo
+  const py = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-map-py-'));
+  fs.writeFileSync(path.join(py, 'pyproject.toml'), '[project]\ndependencies = ["fastapi", "pytest"]\n');
+  fs.mkdirSync(path.join(py, 'backend'));
+  fs.writeFileSync(path.join(py, 'backend', 'main.py'), 'from fastapi import FastAPI\n');
+  const pyMap = common.buildRepoMap(py, { maxChars: 1200 });
+  assert(/Stack: Python \(FastAPI, pytest\)/.test(pyMap), pyMap);
+
+  // 4. Integration: visible.mjs brief -> Repo summary
+  const dv = sandbox();
+  fs.writeFileSync(path.join(dv, 'package.json'), JSON.stringify({ name: 'brief-app', dependencies: { express: '4.0.0' }, scripts: { test: PASS } }));
+  fs.mkdirSync(path.join(dv, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(dv, 'src', 'index.js'), 'console.log(1);\n');
+  const briefRes = vis(dv, 'brief', '--goal', 'Add health route', '--check', PASS);
+  assert(briefRes.status === 0 && /Repo summary:\nStack: Node\.js, Express/.test(briefRes.stdout), briefRes.stdout);
+
+  // 5. Integration: dispatch --auto-plan -> [REPO INTELLIGENCE] in ai-planner.txt
+  const da = sandbox();
+  fs.writeFileSync(path.join(da, 'package.json'), JSON.stringify({ name: 'plan-app', dependencies: { react: '19.0.0' }, scripts: { test: PASS } }));
+  const autoPlan = { subtasks: [{ id: 'p1', targetFiles: ['src/p1.js'], prompt: 'WRITE src/p1.js ok' }] };
+  const dr = node(da, ['.harness/dispatch.mjs', '--goal', planGoal(autoPlan), '--auto-plan', '--check', PASS, '--wait']);
+  assert(dr.status === 0, dr.stdout + dr.stderr);
+  const aiPrompt = promptOf(da, 'ai-planner');
+  assert(aiPrompt.includes('[REPO INTELLIGENCE]:') && aiPrompt.includes('Stack: Node.js, React'), aiPrompt.slice(0, 1200));
+
+  // 6. Integration: hierDecompose -> [REPO INTELLIGENCE] in orchestrator.txt & lead-dev.txt
+  const dh = sandbox();
+  fs.writeFileSync(path.join(dh, 'package.json'), JSON.stringify({ name: 'hier-app', devDependencies: { typescript: '5.0.0' }, scripts: { test: PASS } }));
+  fs.writeFileSync(path.join(dh, 'tsconfig.json'), '{}');
+  hierJob(dh, 'hier-map', hierGoal(happyPlan()));
+  runOnce(dh);
+  assert(stateOf(dh).phase === '4_COMMITTED', stateOf(dh).lastGateStatus);
+  assert(promptOf(dh, 'orchestrator').includes('[REPO INTELLIGENCE]:') && promptOf(dh, 'orchestrator').includes('Node.js/TypeScript'), 'orchestrator missing repo map');
+  assert(promptOf(dh, 'lead-dev').includes('[REPO INTELLIGENCE]:') && promptOf(dh, 'lead-dev').includes('Node.js/TypeScript'), 'lead-dev missing repo map');
+
+  // 7. Integration: poGenerate -> [REPO INTELLIGENCE] & [DETECTED VERIFY COMMAND] in po-architect.txt
+  const dp = sandbox();
+  realTest(dp);
+  fs.mkdirSync(path.join(dp, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(dp, 'src', 'index.js'), 'export const x = 1;\n');
+  setCharter(dp, { autonomous: 'on', maxAutoTasksPerRun: 1 }, 'PO_JSON {"tasks":[]}');
+  setBacklog(dp, []);
+  const pt = tick(dp);
+  assert(pt.status === 0, pt.stdout + pt.stderr);
+  const poPrompt = promptOf(dp, 'po-architect');
+  assert(poPrompt.includes('[REPO INTELLIGENCE]:') && poPrompt.includes('[DETECTED VERIFY COMMAND]: npm test'), poPrompt.slice(0, 1400));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
+

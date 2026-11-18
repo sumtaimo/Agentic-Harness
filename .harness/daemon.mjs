@@ -30,7 +30,7 @@ import { exec, execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
-  resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd, clipErrorTrace,
+  resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd, buildRepoMap, clipErrorTrace,
   listProjectFiles, safeTarget, normalizeTarget, isSecretFile, isSameDir, validateExternalWorkRoot,
   winQuote, winCommandLine, needsWinShell, MODEL_TIERS, chooseModelTier, resolveModel, compatibleModelFor, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
 } from './lib/common.mjs';
@@ -797,6 +797,7 @@ async function aiDecompose(task, gov, workRoot = ROOT) {
   const allowed = (task.targetFiles || []).map(safeTarget).filter(Boolean);
   const { files, total } = listProjectFiles(workRoot, pc.maxFilesListed || 400);
   const scripts = readJsonSafe(path.join(workRoot, 'package.json'), null)?.scripts;
+  const repoMap = buildRepoMap(workRoot, { maxChars: 1200 });
   const memory = memoryContext(config);
   const hasRoles = Object.keys(gov.roles).length > 0;
   let feedback = '';
@@ -819,6 +820,7 @@ async function aiDecompose(task, gov, workRoot = ROOT) {
       `{"interfaceContract":"shared names, signatures, return values","subtasks":[{"id":"short-kebab-id",${hasRoles ? '"role":"DEV_ENGINEER","skills":[],' : ''}"targetFiles":["path/file.ext"],"prompt":"instructions"}],"verifySuggestion":"optional shell command that would prove the goal works"}`,
       hasRoles ? `\n${catalog(gov)}` : '',
       `\n[GOAL]:\n${task.goal || task.prompt || task.title}`,
+      repoMap ? `\n[REPO INTELLIGENCE]:\n${repoMap}` : '',
       `\n[PROJECT FILES (${files.length} of ${total})]:\n${files.join('\n') || '(empty project)'}`,
       scripts ? `\n[package.json scripts]:\n${JSON.stringify(scripts, null, 2)}` : '',
       memory ? `\n[USER MEMORY]:\n${memory}` : '',
@@ -880,11 +882,13 @@ async function hierDecompose(task, gov, workRoot = ROOT) {
   const userAllowed = (task.targetFiles || []).map(safeTarget).filter(Boolean);
   const { files, total } = listProjectFiles(workRoot, pc.maxFilesListed || 400);
   const scripts = readJsonSafe(path.join(workRoot, 'package.json'), null)?.scripts;
+  const repoMap = buildRepoMap(workRoot, { maxChars: 1200 });
   const memory = memoryContext(config);
   const readOnly = ['Read', 'Glob', 'Grep'];
   const deny = computeDisallowedTools(gov.charter);
   const persona = (m) => { const r = gov.roles[String(m.role).toUpperCase()]; return r?.mission || r?.description || m.role; };
   const context = [
+    repoMap ? `\n[REPO INTELLIGENCE]:\n${repoMap}` : '',
     `\n[PROJECT FILES (${files.length} of ${total})]:\n${files.join('\n') || '(empty project)'}`,
     scripts ? `\n[package.json scripts]:\n${JSON.stringify(scripts, null, 2)}` : '',
     memory ? `\n[USER MEMORY]:\n${memory}` : ''
@@ -1051,7 +1055,7 @@ async function runPlanner(task, errorTrace = null, previous = null, workRoot = R
   let verifyCmd = task.verifyCmd; let verifySource = 'given by task'; let verifyReal = !!task.verifyCmd;
   if (!verifyCmd) { const d = detectVerifyCmd(workRoot, config); verifyCmd = d.cmd; verifySource = d.source; verifyReal = d.real; }
   if (task.autonomous && gov.charter.requireRealCheck && !verifyReal) {
-    throw fatal('Autonomous task has no real check (charter requireRealCheck). Add a "test" script to package.json or a human-approved "verifyCmd" to the backlog item.');
+    throw fatal('Autonomous task has no real check (charter requireRealCheck). Add a project test/check script or a human-approved "verifyCmd" to the backlog item.');
   }
   const mode = subtasks.length > 1 ? `SWARM-MESH (${subtasks.length}W)` : 'SQUARE-4-NODE';
   writeState({ engine: engineLabel(subtasks), mode, planSummary, lastGateStatus: `Check: ${verifyCmd}  (${verifySource})` });
@@ -1564,13 +1568,15 @@ async function poGenerate(gov, max) {
   const view = await projectView();
   const { files, total } = listProjectFiles(view.dir, (config.planner || {}).maxFilesListed || 400);
   const scripts = readJsonSafe(path.join(view.dir, 'package.json'), null)?.scripts;
+  const detectedCheck = detectVerifyCmd(view.dir, config);
+  const repoMap = buildRepoMap(view.dir, { maxChars: 1200 });
   const maxWorkers = (config.planner || {}).maxWorkers || 4;
   const prompt = [
     '[HARNESS PO_ARCHITECT]',
     `[ROLE PERSONA — PO_ARCHITECT]:\n${po.mission || po.description}`,
     'You act on behalf of the project owner, strictly inside the CHARTER below. Do NOT create, edit or delete any file — only read. The harness writes the backlog for you.',
     `Propose AT MOST ${max} next task(s) that move the charter objectives forward, most important first. Rules:`,
-    '- Each task is small, independently verifiable by the project\'s existing check (package.json scripts), and does not repeat a DONE or IN_PROGRESS task.',
+    '- Each task is small, independently verifiable by the project\'s existing check (package.json scripts or project test runner), and does not repeat a DONE or IN_PROGRESS task.',
     `- Each task has 1 to ${maxWorkers} parallel workers; every worker has a "role", explicit "targetFiles" inside the charter allowedPaths and its role's paths, and no file/folder overlap with another worker of the same task.`,
     '- Write "acceptanceCriteria" a reviewer can check, and an "interfaceContract" (exact names, signatures, return values) whenever workers must agree.',
     '- If the objectives are already met, return {"tasks":[]}.',
@@ -1580,6 +1586,8 @@ async function poGenerate(gov, max) {
     gov.charter.allowedPaths.length ? `[ALLOWED PATHS for autonomous work]: ${gov.charter.allowedPaths.join(', ')}` : '',
     `\n[CHARTER]:\n${gov.charter.text}`,
     `\n[CURRENT BACKLOG]:\n${b.tasks.map((t) => `- ${t.id} [${t.status}] ${t.title || t.goal}`).join('\n') || '(empty)'}`,
+    repoMap ? `\n[REPO INTELLIGENCE]:\n${repoMap}` : '',
+    detectedCheck.real ? `\n[DETECTED VERIFY COMMAND]: ${detectedCheck.cmd} (${detectedCheck.source})` : '',
     `\n[PROJECT FILES (${files.length} of ${total})${view.tip ? ` — the '${integrationFor({ autonomous: true })}' branch @ ${view.tip.slice(0, 8)}, which is what autonomous work builds on` : ''}]:\n${files.join('\n') || '(empty project)'}`,
     scripts ? `\n[package.json scripts]:\n${JSON.stringify(scripts, null, 2)}` : '',
     memoryContext(config) ? `\n[USER MEMORY]:\n${memoryContext(config)}` : ''
@@ -1677,7 +1685,7 @@ async function autonomousTick(reason = 'interval') {
       const checkView = await projectView();
       const realCheck = detectVerifyCmd(checkView.dir, config).real; await checkView.cleanup();
       if (gov.charter.requireRealCheck && !realCheck) {
-        auto.paused = 'no real check for PO-generated tasks (add a package.json test script)';
+        auto.paused = 'no real check for PO-generated tasks (add a project test/check script)';
         logTelemetry('AUTO_PAUSED', auto.paused); refreshAutoStatus(); return 'paused';
       }
       const fp = await poFingerprint(gov);

@@ -551,28 +551,186 @@ export function resolveProfile(config, requested, { allowFallback = true } = {})
 
 // ───────────────────────────── verify-command detection ─────────────────────────────
 
+function readHeadText(file, maxBytes = 32768) {
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const buf = Buffer.allocUnsafe(maxBytes);
+      const n = fs.readSync(fd, buf, 0, maxBytes, 0);
+      return buf.subarray(0, n).toString('utf8');
+    } finally { fs.closeSync(fd); }
+  } catch { return ''; }
+}
+
+function collectWorkspacePackageDirs(root, globs) {
+  const dirs = [];
+  const seen = new Set();
+  const add = (dir) => {
+    const abs = path.resolve(root, dir);
+    if (seen.has(abs)) return;
+    const pkgPath = path.join(abs, 'package.json');
+    if (fs.existsSync(pkgPath)) { seen.add(abs); dirs.push(abs); }
+  };
+  for (const raw of globs || []) {
+    const g = String(raw || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+    if (!g || g.startsWith('!')) continue;
+    if (g.endsWith('/**') || g.endsWith('/*')) {
+      const deep = g.endsWith('/**');
+      const base = g.slice(0, deep ? -3 : -2);
+      const baseDir = base ? path.join(root, base) : root;
+      const walk = (d, depth) => {
+        let entries = [];
+        try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+        for (const e of entries) {
+          if (!e.isDirectory() || e.name.startsWith('.') || e.name === 'node_modules') continue;
+          const sub = path.join(d, e.name);
+          add(sub);
+          if (deep && depth < 2) walk(sub, depth + 1);
+        }
+      };
+      walk(baseDir, 0);
+    } else if (!/[*?]/.test(g)) {
+      add(g);
+    }
+  }
+  return dirs;
+}
+
 /**
- * Pick the strongest deterministic check from package.json scripts:
- *   "check" (usually an aggregate)  >  "typecheck" + "test"  >  "build"  >  "lint"
+ * Pick the strongest deterministic check across Node/workspaces and polyglot ecosystems:
+ *   1. root package.json scripts: "check" > "typecheck" + "test" > "build" > "lint"
+ *   2. Node/TS workspaces (npm / pnpm / yarn / bun) when root has no check scripts
+ *   3. Python (.venv/venv pytest, uv.lock, pytest config, or unittest discovery)
+ *   4. Go (go.mod -> go test ./...)
+ *   5. Rust (Cargo.toml -> cargo test)
+ *   6. PHP / Laravel / Composer (artisan -> php artisan test, composer scripts.test, phpunit)
+ *   7. Makefile / GNUmakefile (check > test)
  * Falls back to config.defaultVerifyCmd (always passes) with real=false.
  */
-export function detectVerifyCmd(root, config) {
+export function detectVerifyCmd(root, config = {}) {
   const pkg = readJsonSafe(path.join(root, 'package.json'), null);
   const scripts = pkg?.scripts || {};
-  const has = (n) => typeof scripts[n] === 'string' && scripts[n].trim() && !/no test specified/.test(scripts[n]);
+  const hasScript = (s, n) => typeof s?.[n] === 'string' && s[n].trim() && !/no test specified/.test(s[n]);
+  const has = (n) => hasScript(scripts, n);
   const exists = (f) => fs.existsSync(path.join(root, f));
-  const pm = exists('pnpm-lock.yaml') ? 'pnpm' : exists('yarn.lock') ? 'yarn' : (exists('bun.lockb') || exists('bun.lock')) ? 'bun' : 'npm';
+  const pm = (exists('pnpm-lock.yaml') || exists('pnpm-workspace.yaml')) ? 'pnpm'
+    : exists('yarn.lock') ? 'yarn'
+      : (exists('bun.lockb') || exists('bun.lock')) ? 'bun'
+        : 'npm';
   const run = (n) => (n === 'test' && pm !== 'bun' ? `${pm} test` : `${pm} run ${n}`);
   let chosen = has('check') ? ['check'] : ['typecheck', 'test'].filter(has);
   if (!chosen.length) chosen = ['build'].filter(has);
   if (!chosen.length) chosen = ['lint'].filter(has);
   if (chosen.length) return { cmd: chosen.map(run).join(' && '), source: `auto-detected from package.json scripts: ${chosen.join(' + ')}`, real: true };
+
+  // Monorepo / workspace Node projects where root package.json delegates to workspace packages
+  const wsGlobs = (() => {
+    if (Array.isArray(pkg?.workspaces)) return pkg.workspaces;
+    if (Array.isArray(pkg?.workspaces?.packages)) return pkg.workspaces.packages;
+    if (exists('pnpm-workspace.yaml')) {
+      const yaml = readHeadText(path.join(root, 'pnpm-workspace.yaml'));
+      return [...yaml.matchAll(/^\s*-\s*['"]?([^'"#\r\n]+?)['"]?\s*(?:#.*)?$/gm)].map((m) => m[1].trim()).filter(Boolean);
+    }
+    return [];
+  })();
+  if (wsGlobs.length) {
+    const wsPkgs = collectWorkspacePackageDirs(root, wsGlobs)
+      .map((d) => readJsonSafe(path.join(d, 'package.json'), null)?.scripts)
+      .filter(Boolean);
+    const hasWs = (n) => wsPkgs.some((s) => hasScript(s, n));
+    let wsChosen = hasWs('check') ? ['check'] : ['typecheck', 'test'].filter(hasWs);
+    if (!wsChosen.length) wsChosen = ['build'].filter(hasWs);
+    if (!wsChosen.length) wsChosen = ['lint'].filter(hasWs);
+    if (wsChosen.length) {
+      const wsRun = (n) => (
+        pm === 'pnpm' ? (n === 'test' ? 'pnpm -r --if-present test' : `pnpm -r --if-present run ${n}`)
+          : pm === 'yarn' ? `yarn workspaces run ${n}`
+            : pm === 'bun' ? `bun --filter '*' run ${n}`
+              : (n === 'test' ? 'npm test --workspaces --if-present' : `npm run ${n} --workspaces --if-present`)
+      );
+      return {
+        cmd: wsChosen.map(wsRun).join(' && '),
+        source: `auto-detected from workspace package.json scripts (${wsPkgs.length} packages): ${wsChosen.join(' + ')}`,
+        real: true
+      };
+    }
+  }
+
+  // Python
+  const hasPythonTests = () => {
+    try {
+      for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+        if (e.isFile() && (/^test_.*\.py$/i.test(e.name) || /_test\.py$/i.test(e.name))) return true;
+        if (e.isDirectory() && /^(tests?|unit_tests)$/i.test(e.name)) {
+          try { if (fs.readdirSync(path.join(root, e.name)).some((f) => /\.py$/i.test(f))) return true; } catch { /* ignore */ }
+        }
+      }
+    } catch { /* ignore */ }
+    return false;
+  };
+  const venvPytest = ['.venv/bin/pytest', 'venv/bin/pytest', '.venv/Scripts/pytest.exe', 'venv/Scripts/pytest.exe'].find((rel) => exists(rel));
+  if (venvPytest) {
+    return { cmd: venvPytest, source: `auto-detected from Python venv (${venvPytest})`, real: true };
+  }
+  const pyproject = exists('pyproject.toml') ? readHeadText(path.join(root, 'pyproject.toml')) : '';
+  const setupCfg = exists('setup.cfg') ? readHeadText(path.join(root, 'setup.cfg')) : '';
+  const reqText = ['requirements.txt', 'requirements-dev.txt', 'dev-requirements.txt']
+    .map((f) => (exists(f) ? readHeadText(path.join(root, f)) : ''))
+    .join('\n');
+  const hasPytestConfig = exists('pytest.ini') || exists('conftest.py')
+    || /\[tool\.pytest|\bpytest\b/i.test(pyproject)
+    || /\[tool:pytest\]/i.test(setupCfg)
+    || /(^|\n)\s*pytest\b/im.test(reqText);
+  const pyProject = Boolean(pyproject || setupCfg || reqText.trim() || exists('setup.py') || exists('uv.lock') || exists('pytest.ini') || exists('conftest.py'));
+  if (pyProject || hasPythonTests()) {
+    if (exists('uv.lock') && (hasPytestConfig || hasPythonTests())) {
+      return { cmd: 'uv run pytest', source: 'auto-detected from uv.lock (pytest)', real: true };
+    }
+    if (hasPytestConfig) {
+      return { cmd: 'pytest', source: 'auto-detected from Python pytest configuration', real: true };
+    }
+    if (hasPythonTests()) {
+      const pyBin = which('python3') ? 'python3' : (which('python') ? 'python' : 'python3');
+      return { cmd: `${pyBin} -m unittest discover`, source: 'auto-detected from Python tests (unittest)', real: true };
+    }
+  }
+
+  // Go
+  if (exists('go.mod')) {
+    return { cmd: 'go test ./...', source: 'auto-detected from go.mod', real: true };
+  }
+
+  // Rust
+  if (exists('Cargo.toml')) {
+    return { cmd: 'cargo test', source: 'auto-detected from Cargo.toml', real: true };
+  }
+
+  // PHP / Laravel / Composer
+  if (exists('artisan')) {
+    return { cmd: 'php artisan test', source: 'auto-detected from Laravel artisan', real: true };
+  }
+  const composer = readJsonSafe(path.join(root, 'composer.json'), null);
+  if (typeof composer?.scripts?.test === 'string' && composer.scripts.test.trim()) {
+    return { cmd: 'composer test', source: 'auto-detected from composer.json scripts: test', real: true };
+  }
+  if ((exists('phpunit.xml') || exists('phpunit.xml.dist')) && exists('vendor/bin/phpunit')) {
+    return { cmd: './vendor/bin/phpunit', source: 'auto-detected from phpunit configuration', real: true };
+  }
+
+  // Makefile
+  const makeFile = ['Makefile', 'makefile', 'GNUmakefile'].find((f) => exists(f));
+  if (makeFile) {
+    const mk = readHeadText(path.join(root, makeFile));
+    if (/^[ \t]*check[ \t]*:(?!=)/m.test(mk)) return { cmd: 'make check', source: `auto-detected from ${makeFile} target: check`, real: true };
+    if (/^[ \t]*test[ \t]*:(?!=)/m.test(mk)) return { cmd: 'make test', source: `auto-detected from ${makeFile} target: test`, real: true };
+  }
+
   return { cmd: config.defaultVerifyCmd, source: 'default — NO real check (always passes)', real: false };
 }
 
 // ───────────────────────────── project file listing ─────────────────────────────
 
-const SKIP_DIRS = new Set(['.git', '.harness', 'node_modules', 'dist', 'build', '.next', 'coverage', '.venv', 'venv', '__pycache__', 'target']);
+const SKIP_DIRS = new Set(['.git', '.harness', 'node_modules', 'dist', 'build', '.next', '.nuxt', '.svelte-kit', '.astro', 'coverage', '.venv', 'venv', '__pycache__', 'target', 'vendor']);
 
 export function listProjectFiles(root, max = 400) {
   try {
@@ -589,6 +747,89 @@ export function listProjectFiles(root, max = 400) {
   };
   walk(root, '');
   return { files: files.slice(0, max), total: files.length };
+}
+
+/**
+ * Zero-token repository intelligence summary for planners, orchestrators, and briefs:
+ * stack & test tools, top directory counts, key entrypoints/configs, and recent git hotspots.
+ */
+export function buildRepoMap(root, { maxChars = 1200, maxFiles = 2000 } = {}) {
+  const pkg = readJsonSafe(path.join(root, 'package.json'), null);
+  const { files, total } = listProjectFiles(root, maxFiles);
+  if (!files.length && !pkg) return '';
+
+  const exists = (f) => fs.existsSync(path.join(root, f));
+  const stack = [];
+  if (pkg) {
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    const hasTs = Boolean(deps.typescript || exists('tsconfig.json') || files.some((f) => /\.tsx?$/i.test(f)));
+    stack.push(hasTs ? 'Node.js/TypeScript' : 'Node.js');
+    const fw = [
+      ['next', 'Next.js'], ['nuxt', 'Nuxt'], ['@sveltejs/kit', 'SvelteKit'], ['svelte', 'Svelte'],
+      ['astro', 'Astro'], ['react', 'React'], ['vue', 'Vue'],
+      ['@nestjs/core', 'NestJS'], ['fastify', 'Fastify'], ['express', 'Express'], ['hono', 'Hono'],
+      ['tailwindcss', 'Tailwind'], ['electron', 'Electron']
+    ];
+    for (const [dep, label] of fw) if (deps[dep]) stack.push(label);
+    const testers = [['vitest', 'Vitest'], ['jest', 'Jest'], ['@playwright/test', 'Playwright'], ['playwright', 'Playwright'], ['cypress', 'Cypress'], ['mocha', 'Mocha']];
+    for (const [dep, label] of testers) if (deps[dep] && !stack.includes(label)) stack.push(label);
+    if (pkg.workspaces || exists('pnpm-workspace.yaml')) stack.push('Workspaces');
+  }
+  if (exists('pyproject.toml') || exists('requirements.txt') || exists('setup.py') || files.some((f) => /\.py$/i.test(f))) {
+    const pyTxt = [
+      exists('pyproject.toml') ? readHeadText(path.join(root, 'pyproject.toml'), 8192) : '',
+      exists('requirements.txt') ? readHeadText(path.join(root, 'requirements.txt'), 8192) : ''
+    ].join('\n');
+    const extras = [];
+    if (/\bfastapi\b/i.test(pyTxt)) extras.push('FastAPI');
+    else if (/\bdjango\b/i.test(pyTxt)) extras.push('Django');
+    else if (/\bflask\b/i.test(pyTxt)) extras.push('Flask');
+    if (exists('pytest.ini') || /\bpytest\b/i.test(pyTxt)) extras.push('pytest');
+    stack.push(extras.length ? `Python (${extras.join(', ')})` : 'Python');
+  }
+  if (exists('go.mod')) stack.push('Go');
+  if (exists('Cargo.toml')) stack.push('Rust');
+  if (exists('composer.json') || exists('artisan')) stack.push(exists('artisan') ? 'PHP/Laravel' : 'PHP');
+
+  const dirCounts = new Map();
+  for (const f of files) {
+    const n = f.replace(/\\/g, '/');
+    const seg = n.includes('/') ? `${n.split('/')[0]}/` : '(root)';
+    dirCounts.set(seg, (dirCounts.get(seg) || 0) + 1);
+  }
+  const topDirs = [...dirCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 8)
+    .map(([d, c]) => `${d}(${c})`);
+
+  const ENTRY_RE = /^(?:package\.json|tsconfig\.json|pnpm-workspace\.yaml|Makefile|makefile|pyproject\.toml|go\.mod|Cargo\.toml|composer\.json|artisan|index\.html|(?:next|vite|vitest|astro|svelte|playwright|tailwind)\.config\.[a-z]+|(?:src|app|pages)\/(?:index|main|app|server|layout|page|_app)\.[a-z]+|cmd\/[^/]+\/main\.go)$/i;
+  const entrypoints = files.filter((f) => ENTRY_RE.test(f.replace(/\\/g, '/'))).slice(0, 8);
+
+  let hotspots = [];
+  try {
+    const raw = execFileSync('git', ['log', '-n', '15', '--name-only', '--pretty=format:'], {
+      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000
+    });
+    const freq = new Map();
+    for (const line of raw.split(/\r?\n/)) {
+      const p = line.trim().replace(/\\/g, '/');
+      if (!p || p.startsWith('.harness/') || p.startsWith('.git/')) continue;
+      if (fs.existsSync(path.join(root, p))) freq.set(p, (freq.get(p) || 0) + 1);
+    }
+    hotspots = [...freq.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 6)
+      .map(([p, c]) => `${p} (${c}x)`);
+  } catch { /* non-git or empty history */ }
+
+  const lines = [];
+  if (stack.length) lines.push(`Stack: ${stack.join(', ')}`);
+  if (topDirs.length) lines.push(`Layout (${total} files): ${topDirs.join(', ')}`);
+  if (entrypoints.length) lines.push(`Entrypoints: ${entrypoints.join(', ')}`);
+  if (hotspots.length) lines.push(`Hotspots (recent git edits): ${hotspots.join(', ')}`);
+  let text = lines.join('\n');
+  if (text.length > maxChars) text = `${text.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+  return text;
 }
 
 /** Normalise a target path; returns null if it is unsafe (absolute, "..", root, .git, .harness). */
