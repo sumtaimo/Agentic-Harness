@@ -336,6 +336,7 @@ const job = {
   createdAt: new Date().toISOString(),
   ...(maxCost !== undefined ? { maxCostUsd: maxCost } : {}),
   ...(resumedRun ? { visibleRunId: resumedRun.id } : {}),
+  ...(resumedRun?.bugfix ? { bugfix: true } : {}),
   ...(backlogId ? { backlogId } : {}),
   ...(acceptanceCriteria ? { acceptanceCriteria } : {}),
   ...(interfaceContract ? { interfaceContract } : {}),

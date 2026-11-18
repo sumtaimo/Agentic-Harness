@@ -57,6 +57,7 @@
       "scope": [
         "tests/**",
         "test/**",
+        "__tests__/**",
         "src/**/*.test.*",
         "src/**/*.spec.*"
       ],

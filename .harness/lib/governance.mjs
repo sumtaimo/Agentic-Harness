@@ -6,6 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { ROOT, HARNESS_DIR, DIRS, FILES, atomicWriteJson, readJsonSafe, ensureDirs, LESSONS_HEADER, AUTO_LESSONS_HEADER, normalizeTarget, loadConfig, memberModels } from './common.mjs';
 
 export const GOV = {
@@ -422,11 +423,19 @@ export function applyEngineRouting(team, routing) {
   return { ...team, members: team.members.map((m) => ({ ...m, engine: routing[ROLE_JOB[String(m.role).toUpperCase()] || 'code'] })) };
 }
 
+const TEST_FILE_RE = /(^|\/)(tests?|__tests__)(\/|$)|\.(test|spec)\.[a-z0-9*?]+$/i;
+/** True when `p` matches a test directory or `.test.` / `.spec.` file name. */
+export function isTestFilePath(p) {
+  const n = String(p || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  return TEST_FILE_RE.test(n);
+}
+
 /**
  * Level-1 guardrail, shared by the headless controller and the editor workflow: is the orchestrator's
  * delegation allowed? Throws an Error with a plain message on the first broken rule.
  *  - each assignment goes to a lead the orchestrator may delegate to, each lead at most once
  *  - every file is a safe relative path inside that lead's scope (and inside what the user allowed)
+ *  - when a QA_AUDITOR lead exists on the team, only QA_AUDITOR leads may own test files
  *  - no two leads are given overlapping files
  */
 export function validateDelegation(plan, { leads, delegable, userAllowed = [] }) {
@@ -437,6 +446,7 @@ export function validateDelegation(plan, { leads, delegable, userAllowed = [] })
     const n = strip(raw);
     return file === n || file.startsWith(`${n}/`) || (/[*?]/.test(raw) && matchesAny(file, [raw]));
   });
+  const hasQaLead = leads.some((l) => String(l.role).toUpperCase() === 'QA_AUDITOR');
   const seenLeads = new Set(); const claimed = [];
   for (const a of plan.assignments) {
     const lead = leads.find((l) => l.id === a.lead);
@@ -447,6 +457,9 @@ export function validateDelegation(plan, { leads, delegable, userAllowed = [] })
     if (!Array.isArray(a.files) || !a.files.length) throw new Error(`assignment to "${lead.id}" has no files.`);
     a.files = a.files.map((f) => { const s = normalizeTarget(f); if (!s) throw new Error(`assignment to "${lead.id}" has an unsafe path "${f}".`); return s; });
     for (const f of a.files) {
+      if (hasQaLead && String(lead.role).toUpperCase() !== 'QA_AUDITOR' && isTestFilePath(f)) {
+        throw new Error(`lead "${a.lead}" (${lead.role}) may not own test file "${f}" — only lead-qa owns test files.`);
+      }
       if (!leadOwns(lead, f, leads)) throw new Error(`file "${f}" is outside lead "${lead.id}"'s scope (${lead.scope.join(', ')})${withinAll(f, lead.scope) ? '; a more specific scope of another lead owns it (e.g. test files belong to the QA lead)' : ''}.`);
       if (userAllowed.length && !inside(strip(f), userAllowed)) throw new Error(`file "${f}" is outside the files the user allowed (${userAllowed.join(', ')}).`);
       for (const [other, by] of claimed) {
@@ -687,6 +700,224 @@ export function listReleases() {
   try {
     return fs.readdirSync(GOV.releases).filter((d) => d.startsWith('release-')).sort();
   } catch { return []; }
+}
+
+// ───────────────────────────── anti-cheat & root-cause patch audit ─────────────────────────────
+
+const MAX_AUDIT_BYTES = 256 * 1024;
+const NON_CODE_FILE_RE = /\.(md|mdx|txt|json|css|scss|less|svg|png|jpg|jpeg|gif|webp|ico|yml|yaml|toml|lock)$/i;
+const TEST_BYPASS_RE = /(?:\.skip\s*\(|\.only\s*\(|\bx(?:it|test)\s*\(|\b(?:describe|it|test)\.(?:skip|todo)\b|\.todo\s*\()/;
+const EMPTY_CATCH_RE = /(?<![.\w$])catch\s*(?:\([^)]*\))?\s*\{\s*(?:(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)\s*)*\}/;
+const EMPTY_PROMISE_CATCH_RE = /\.catch\s*\(\s*(?:(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*(?:\{\s*(?:(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)\s*)*\}|null\b|undefined\b)|function\s*(?:[A-Za-z_$][\w$]*)?\s*\([^)]*\)\s*\{\s*(?:(?:\/\/[^\n]*|\/\*[\s\S]*?\*\/)\s*)*\})\s*\)/;
+const ROOT_CAUSE_RE = /root.?cause|symptom|because|caused by|blast radius/i;
+const NON_DEV_REPORT_KEY_RE = /^(?:lead-)?(?:qa|ba)(?:[-.]|$)/i;
+const isHashOrFlag = (v) => typeof v !== 'string' || /^[0-9a-f]{40}$/i.test(v) || v === 'HEAD';
+
+function parseUnifiedDiffAddedHunks(diffText) {
+  const hunks = [];
+  let cur = null;
+  for (const line of String(diffText || '').split(/\r?\n/)) {
+    if (line.startsWith('@@')) {
+      if (cur && cur.length) hunks.push(cur);
+      cur = [];
+      continue;
+    }
+    if (!cur) continue;
+    if (line.startsWith('+')) cur.push(line.slice(1));
+  }
+  if (cur && cur.length) hunks.push(cur);
+  return hunks;
+}
+
+function diffAddedHunks(oldText, newText) {
+  const a = String(oldText || '').split(/\r?\n/);
+  const b = String(newText || '').split(/\r?\n/);
+  let pre = 0;
+  while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+  let suf = 0;
+  while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+  const aMid = a.slice(pre, a.length - suf);
+  const bMid = b.slice(pre, b.length - suf);
+  if (!bMid.length) return [];
+  if (!aMid.length) return [bMid];
+  if (aMid.length * bMid.length <= 250000) {
+    const m = aMid.length; const n = bMid.length;
+    const dp = Array.from({ length: m + 1 }, () => new Uint32Array(n + 1));
+    for (let i = m - 1; i >= 0; i--) {
+      for (let j = n - 1; j >= 0; j--) {
+        dp[i][j] = aMid[i] === bMid[j] ? 1 + dp[i + 1][j + 1] : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+    const hunks = []; let cur = [];
+    let i = 0; let j = 0;
+    while (i < m && j < n) {
+      if (aMid[i] === bMid[j]) { if (cur.length) { hunks.push(cur); cur = []; } i++; j++; }
+      else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+      else cur.push(bMid[j++]);
+    }
+    while (j < n) cur.push(bMid[j++]);
+    if (cur.length) hunks.push(cur);
+    return hunks;
+  }
+  const counts = new Map();
+  for (const l of aMid) counts.set(l, (counts.get(l) || 0) + 1);
+  const added = [];
+  for (const l of bMid) {
+    const c = counts.get(l) || 0;
+    if (c > 0) counts.set(l, c - 1);
+    else added.push(l);
+  }
+  return added.length ? [added] : [];
+}
+
+function insideDir(baseDir, targetPath) {
+  const b = path.resolve(baseDir);
+  const r = path.relative(b, targetPath);
+  return r === '' || (!r.startsWith('..') && !path.isAbsolute(r));
+}
+
+function extractAddedHunks({ rel, root, baseVal, curVal, baselineDir, baseRef, hasGitHead }) {
+  const abs = path.resolve(root, rel);
+  if (!insideDir(root, abs)) return [];
+  let st = null;
+  try { st = fs.statSync(abs); } catch { st = null; }
+  if (st && st.isFile()) {
+    if (st.size > MAX_AUDIT_BYTES) return [];
+    let buf;
+    try { buf = fs.readFileSync(abs); } catch { return []; }
+    if (buf.includes(0)) return [];
+    const diskText = buf.toString('utf8');
+    if (baselineDir && baseVal !== 'HEAD') {
+      const baseAbs = path.resolve(baselineDir, rel);
+      if (insideDir(baselineDir, baseAbs)) {
+        try {
+          const bst = fs.statSync(baseAbs);
+          if (bst.isFile() && bst.size <= MAX_AUDIT_BYTES) {
+            const oldBuf = fs.readFileSync(baseAbs);
+            if (!oldBuf.includes(0)) return diffAddedHunks(oldBuf.toString('utf8'), diskText);
+          }
+        } catch {
+          // Only fall through to git HEAD if inside a git repo; otherwise treat as a new file below.
+        }
+      }
+    }
+    if (hasGitHead()) {
+      const ref = baseRef || 'HEAD';
+      if (ref === 'HEAD') {
+        const stOut = spawnSync('git', ['status', '--porcelain', '--', rel], { cwd: root, encoding: 'utf8', timeout: 5000 });
+        if (stOut.status === 0 && /^\?\?/.test(stOut.stdout || '')) {
+          return [diskText.split(/\r?\n/)];
+        }
+      }
+      const inBase = spawnSync('git', ['cat-file', '-e', `${ref}:${rel}`], { cwd: root, stdio: 'ignore', timeout: 5000 }).status === 0;
+      if (inBase) {
+        const diffArgs = ref === 'HEAD' ? ['diff', '-U0', 'HEAD', '--', rel] : ['diff', '-U0', ref, 'HEAD', '--', rel];
+        const dr = spawnSync('git', ['--no-pager', ...diffArgs], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, timeout: 5000 });
+        if (dr.status === 0) return parseUnifiedDiffAddedHunks(dr.stdout || '');
+      }
+    }
+    return [diskText.split(/\r?\n/)];
+  }
+  if (!isHashOrFlag(curVal)) {
+    if (curVal.length > MAX_AUDIT_BYTES || curVal.includes('\0')) return [];
+    return !isHashOrFlag(baseVal) ? diffAddedHunks(baseVal, curVal) : [curVal.split(/\r?\n/)];
+  }
+  return [];
+}
+
+/**
+ * Deterministic zero-dependency scanner for anti-cheat and root-cause signals on newly added lines:
+ *  - test bypasses (.skip, .only, .todo, xit, xtest, describe/it/test.skip|.todo) in test files
+ *  - silent error-swallowing empty/comment-only catch blocks or .catch(() => {} / null) in non-test code files
+ *  - missing root-cause explanation in dev/worker reports on retries (cycle > 1) or bug-fix runs
+ */
+export function auditPatchSignals({ baseFiles = {}, curFiles = {}, root = ROOT, testsChangedAfterFail = [], reports = {}, cycle = 1, isBugFix = false, baselineDir = null, baseRef = 'HEAD', devIds = null, changedCodeFiles = null } = {}) {
+  const signals = [];
+  const skippedTests = [];
+  const emptyCatches = [];
+  const detectedCodeFiles = [];
+  const candidateSet = new Set();
+  for (const f of Object.keys(curFiles || {})) {
+    if (!(f in (baseFiles || {})) || baseFiles[f] !== curFiles[f]) candidateSet.add(f);
+  }
+  for (const f of testsChangedAfterFail || []) if (f) candidateSet.add(f);
+
+  let gitHeadChecked = null;
+  const hasGitHead = () => {
+    if (gitHeadChecked !== null) return gitHeadChecked;
+    try {
+      gitHeadChecked = spawnSync('git', ['rev-parse', '--verify', '-q', baseRef || 'HEAD'], { cwd: root, stdio: 'ignore', timeout: 5000 }).status === 0;
+    } catch { gitHeadChecked = false; }
+    return gitHeadChecked;
+  };
+
+  const seenRel = new Set();
+  for (const rawPath of candidateSet) {
+    const rel = String(rawPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || seenRel.has(rel)) continue;
+    seenRel.add(rel);
+    if (NON_CODE_FILE_RE.test(rel)) continue;
+    if (!isTestFilePath(rel) && !/^docs\//i.test(rel)) detectedCodeFiles.push(rel);
+    try {
+      const baseVal = baseFiles?.[rawPath] ?? baseFiles?.[rel];
+      const curVal = curFiles?.[rawPath] ?? curFiles?.[rel];
+      const hunks = extractAddedHunks({ rel, root, baseVal, curVal, baselineDir, baseRef, hasGitHead });
+      if (!hunks.length) continue;
+
+      if (isTestFilePath(rel)) {
+        const matched = new Set();
+        for (const hunk of hunks) {
+          for (const line of hunk) {
+            if (/^\s*\/\//.test(line)) continue;
+            const m = line.match(TEST_BYPASS_RE);
+            if (m) matched.add(m[0].trim());
+          }
+        }
+        if (matched.size) {
+          skippedTests.push(rel);
+          signals.push(`test bypass/skip detected in ${rel} (${[...matched].join(', ')})`);
+        }
+      } else {
+        let foundCatch = false;
+        for (const hunk of hunks) {
+          const cleaned = hunk.map((l) => (/^[ \t]*\/\//.test(l) ? '' : l)).join('\n');
+          if (EMPTY_CATCH_RE.test(cleaned) || EMPTY_PROMISE_CATCH_RE.test(cleaned)) { foundCatch = true; break; }
+        }
+        if (foundCatch) {
+          emptyCatches.push(rel);
+          signals.push(`silent error-swallowing catch block added in ${rel}`);
+        }
+      }
+    } catch { /* never crash on unreadable or transient files */ }
+  }
+
+  let missingRootCause = false;
+  const codeFiles = Array.isArray(changedCodeFiles) ? changedCodeFiles : detectedCodeFiles;
+  const explicitDevIds = Array.isArray(devIds) ? devIds : null;
+  let devText = '';
+  if (typeof reports === 'string') {
+    devText = reports.trim();
+  } else if (reports && typeof reports === 'object') {
+    if (explicitDevIds) {
+      devText = explicitDevIds.map((id) => String(reports[id] || '').trim()).filter(Boolean).join('\n');
+    } else if ('lead-dev' in reports) {
+      devText = String(reports['lead-dev'] || '').trim();
+    } else {
+      devText = Object.entries(reports)
+        .filter(([k]) => !NON_DEV_REPORT_KEY_RE.test(k))
+        .map(([, v]) => String(v || '').trim())
+        .filter(Boolean)
+        .join('\n');
+    }
+  }
+  const devRan = explicitDevIds ? explicitDevIds.length > 0 : Boolean(devText);
+  if ((cycle > 1 || isBugFix) && (codeFiles.length > 0 || devRan)) {
+    if (!devText || !ROOT_CAUSE_RE.test(devText)) {
+      missingRootCause = true;
+      signals.push('dev report on retry/bug-fix omits root cause (expected Symptom, Root Cause, or Blast Radius)');
+    }
+  }
+  return { signals, skippedTests, emptyCatches, missingRootCause };
 }
 
 export { ROOT };

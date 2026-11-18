@@ -4154,5 +4154,307 @@ await test('Skill Foundry audit B1–B11: missing memory files, SessionStart hoo
   assert(lastV.status === 1 && /Files were restored to how they were before the run/.test(lastV.stdout) && !/To undo by hand: node \.harness\/visible\.mjs rollback/.test(lastV.stdout), lastV.stdout);
 });
 
+// ───────────── v1.0.19: test isolation, anti-cheat patch audit, bugfix visible workflow, two-phase root-cause retry ─────────────
+
+await test('v1.0.19 test isolation: validateDelegation rejects assigning test files (tests/, __tests__/, *.test.js, *.spec.js) to lead-dev when lead-qa exists', () => {
+  const realTeam = json(path.join(REPO, '.harness', 'team.json'));
+  const realLeads = realTeam.members.filter((m) => m.level === 'lead');
+  const realDelegable = new Set(realLeads.map((l) => l.id));
+
+  for (const p of ['tests', 'tests/', 'tests/a.js', 'test/a.js', '__tests__', '__tests__/', '__tests__/a.js', 'src/__tests__/a.js', 'src/a.test.js', 'src/a.spec.js', 'src/**/*.test.*', 'src/**/*.spec.*']) {
+    assert(gov.isTestFilePath(p) === true, `expected isTestFilePath("${p}") === true`);
+  }
+  for (const p of ['src/a.js', 'src/testing.js', 'docs/test-plan.md', 'docs/specs/auth.md']) {
+    assert(gov.isTestFilePath(p) === false, `expected isTestFilePath("${p}") === false`);
+  }
+
+  const testTargets = ['tests', 'tests/', 'tests/foo.js', '__tests__', '__tests__/', '__tests__/foo.js', 'src/__tests__/foo.js', 'src/foo.test.js', 'src/foo.spec.js'];
+  for (const tf of testTargets) {
+    let err = '';
+    try { gov.validateDelegation({ assignments: [{ lead: 'lead-dev', goal: 'write tests', files: [tf] }] }, { leads: realLeads, delegable: realDelegable }); } catch (e) { err = e.message; }
+    assert(/may not own test file.*only lead-qa owns test files/.test(err), `real team should reject ${tf} for lead-dev, got: ${err}`);
+  }
+
+  // Even when lead-dev has a permissive scope (**), QA_AUDITOR presence still enforces test-file isolation.
+  const wideLeads = [
+    { id: 'lead-dev', role: 'DEV_ENGINEER', scope: ['**'] },
+    { id: 'lead-qa', role: 'QA_AUDITOR', scope: ['tests/**', '__tests__/**', 'src/**/*.test.*', 'src/**/*.spec.*'] }
+  ];
+  const wideDelegable = new Set(['lead-dev', 'lead-qa']);
+  for (const tf of testTargets) {
+    let err = '';
+    try { gov.validateDelegation({ assignments: [{ lead: 'lead-dev', goal: 'write tests', files: [tf] }] }, { leads: wideLeads, delegable: wideDelegable }); } catch (e) { err = e.message; }
+    assert(/may not own test file.*only lead-qa owns test files/.test(err), `wide-scope lead-dev should still reject ${tf}, got: ${err}`);
+  }
+
+  // Assigning test files to lead-qa alongside production code to lead-dev and docs/specs/auth.md to lead-ba succeeds cleanly.
+  const okPlan = gov.validateDelegation({
+    assignments: [
+      { lead: 'lead-ba', goal: 'write auth spec', files: ['docs/specs/auth.md'] },
+      { lead: 'lead-dev', goal: 'implement', files: ['src/foo.js'] },
+      { lead: 'lead-qa', goal: 'verify', files: ['tests/foo.js', '__tests__/bar.js', 'src/foo.test.js', 'src/foo.spec.js'] }
+    ]
+  }, { leads: realLeads, delegable: realDelegable });
+  assert(okPlan.assignments.length === 3, 'valid ba + dev + qa split should pass');
+
+  // When no QA_AUDITOR lead exists on the team, lead-dev may own test files inside its scope.
+  const noQaOk = gov.validateDelegation(
+    { assignments: [{ lead: 'lead-dev', goal: 'write test', files: ['tests/foo.test.js'] }] },
+    { leads: [{ id: 'lead-dev', role: 'DEV_ENGINEER', scope: ['**'] }], delegable: new Set(['lead-dev']) }
+  );
+  assert(noQaOk.assignments.length === 1, 'team without QA_AUDITOR should allow test files for lead-dev');
+
+  // End-to-end via visible.mjs assign
+  const d = sandbox();
+  const id = runIdOf(vis(d, 'brief', '--goal', 'Test isolation CLI', '--check', PASS));
+  const bad = vis(d, 'assign', id, deleg([{ lead: 'lead-dev', goal: 'write test', files: ['src/foo.test.js'] }]));
+  assert(bad.status === 1 && /may not own test file/.test(bad.stderr) && /Nothing was started/.test(bad.stderr), bad.stderr);
+  assert(vis(d, 'rollback', id).status === 0, 'cleanup visible run');
+});
+
+await test('v1.0.19 F1 runtime test isolation: visible.mjs verify reverts src/__tests__/rogue.js from lead-dev; daemon.mjs hierarchy/uat discards src/__tests__/rogue.js from lead-dev', () => {
+  // 1. visible.mjs verify reverts test file created under src/ by lead-dev
+  const d = sandbox();
+  const id = runIdOf(vis(d, 'brief', '--goal', 'Runtime test isolation', '--check', existsCheck('src/app.js')));
+  assert(vis(d, 'assign', id, deleg([{ lead: 'lead-dev', goal: 'implement', files: ['src/'] }])).status === 0, 'assign failed');
+  agentsWrite(d, [['src/app.js', 'export const ok = 1;\n'], ['src/__tests__/rogue.js', 'test("rogue", () => {});\n']]);
+  const v1 = vis(d, 'verify', id);
+  assert(v1.status === 1 && /src\/__tests__\/rogue\.js: test file may only be owned by lead-qa/.test(v1.stdout), v1.stdout);
+  assert(/The controller reverted 1 out-of-scope change\(s\): src\/__tests__\/rogue\.js/.test(v1.stdout), v1.stdout);
+  assert(!fs.existsSync(path.join(d, 'src', '__tests__', 'rogue.js')) && read(d, 'src/app.js') === 'export const ok = 1;\n', 'rogue test file not reverted or legitimate code lost');
+  const v2 = vis(d, 'verify', id);
+  assert(v2.status === 0 && /PASSED ✔/.test(v2.stdout), v2.stdout);
+
+  // 2. daemon.mjs hierarchy/uat discards src/__tests__/rogue.js from lead-dev
+  const { d: dg, g } = gitSandbox();
+  const plan = {
+    assignments: [{
+      lead: 'lead-dev',
+      files: ['src/'],
+      goal: leadJson([{ id: 'impl', targetFiles: ['src/'], prompt: 'WRITE src/app.js ok\nWRITE src/__tests__/rogue.js rogue' }])
+    }]
+  };
+  setBacklog(dg, [{
+    id: 'F1H', title: 'hierarchy isolation', priority: 1, status: 'READY',
+    hierarchy: true, costApproved: true, maxCostUsd: 1,
+    goal: hierGoal(plan), verifyCmd: existsCheck('src/app.js')
+  }]);
+  tick(dg);
+  assert(byId(dg, 'F1H').status === 'DONE', `${byId(dg, 'F1H').status} ${byId(dg, 'F1H').blockedReason || ''}`);
+  assert(onBranch(g, 'uat', 'src/app.js') === 'ok', 'legitimate code did not reach uat');
+  assert(onBranch(g, 'uat', 'src/__tests__/rogue.js') === null, 'rogue test file from lead-dev leaked onto uat');
+  assert(log(dg).some((e) => e.phase === '2_SCOPE_VIOLATION' && Array.isArray(e.blocked) && e.blocked.includes('src/__tests__/rogue.js')), 'missing 2_SCOPE_VIOLATION for src/__tests__/rogue.js');
+});
+
+await test('v1.0.19 auditPatchSignals: detects added .skip/.only/it.todo/test.todo, empty catch / .catch(() => {}), missing root cause, skips .md/.json, and passes cleanly on valid fixes and QA-only runs', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-audit-cur-'));
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-audit-base-'));
+  const writePair = (rel, baseText, curText) => {
+    if (baseText !== null) {
+      const bf = path.join(baseDir, rel);
+      fs.mkdirSync(path.dirname(bf), { recursive: true });
+      fs.writeFileSync(bf, baseText);
+    }
+    const cf = path.join(root, rel);
+    fs.mkdirSync(path.dirname(cf), { recursive: true });
+    fs.writeFileSync(cf, curText);
+  };
+
+  // 1. Detects added .skip, .only, it.todo, and test.todo in test files (F6)
+  writePair('tests/a.test.js', 'test("ok", () => {});\n', 'test("ok", () => {});\ntest.skip("bypass", () => {});\ntest.todo("later");\n');
+  writePair('src/b.spec.js', null, 'describe.only("focused", () => {});\nit.todo("pending");\n');
+  const skipAudit = gov.auditPatchSignals({
+    baseFiles: { 'tests/a.test.js': 'b1' },
+    curFiles: { 'tests/a.test.js': 'c1', 'src/b.spec.js': 'c2' },
+    root, baselineDir: baseDir, cycle: 1, isBugFix: false
+  });
+  assert(skipAudit.skippedTests.includes('tests/a.test.js') && skipAudit.skippedTests.includes('src/b.spec.js'), JSON.stringify(skipAudit));
+  assert(skipAudit.emptyCatches.length === 0 && skipAudit.missingRootCause === false, JSON.stringify(skipAudit));
+  assert(skipAudit.signals.some((s) => /test bypass\/skip detected in tests\/a\.test\.js.*test\.skip.*test\.todo/.test(s)), JSON.stringify(skipAudit.signals));
+  assert(skipAudit.signals.some((s) => /test bypass\/skip detected in src\/b\.spec\.js.*\.only.*it\.todo/.test(s)), JSON.stringify(skipAudit.signals));
+
+  // 2. Detects added empty catch {} and .catch(() => {}) in production files
+  writePair('src/sync.js', 'export function load() { return 1; }\n', 'export function load() { try { return 1; } catch (e) {} }\n');
+  writePair('src/async.js', null, 'export const run = () => Promise.reject(new Error("x")).catch(() => {});\n');
+  const catchAudit = gov.auditPatchSignals({
+    baseFiles: { 'src/sync.js': 'b1' },
+    curFiles: { 'src/sync.js': 'c1', 'src/async.js': 'c2' },
+    root, baselineDir: baseDir, cycle: 1, isBugFix: false
+  });
+  assert(catchAudit.emptyCatches.includes('src/sync.js') && catchAudit.emptyCatches.includes('src/async.js'), JSON.stringify(catchAudit));
+  assert(catchAudit.skippedTests.length === 0 && catchAudit.missingRootCause === false, JSON.stringify(catchAudit));
+  assert(catchAudit.signals.some((s) => /silent error-swallowing catch block added in src\/sync\.js/.test(s)) && catchAudit.signals.some((s) => /silent error-swallowing catch block added in src\/async\.js/.test(s)), JSON.stringify(catchAudit.signals));
+
+  // 3. Detects missing root-cause explanation on retries (cycle > 1) and bugfix reports (isBugFix: true)
+  writePair('src/clean.js', 'export const x = 1;\n', 'export const x = 2;\n');
+  const retryMissing = gov.auditPatchSignals({
+    baseFiles: { 'src/clean.js': 'b1' }, curFiles: { 'src/clean.js': 'c1' },
+    root, baselineDir: baseDir, reports: { 'lead-dev': 'updated value to 2' }, cycle: 2, isBugFix: false
+  });
+  assert(retryMissing.missingRootCause === true && retryMissing.signals.some((s) => /omits root cause/.test(s)), JSON.stringify(retryMissing));
+
+  const bugfixMissing = gov.auditPatchSignals({
+    baseFiles: { 'src/clean.js': 'b1' }, curFiles: { 'src/clean.js': 'c1' },
+    root, baselineDir: baseDir, reports: { 'lead-dev': 'updated value to 2' }, cycle: 1, isBugFix: true
+  });
+  assert(bugfixMissing.missingRootCause === true && bugfixMissing.signals.some((s) => /omits root cause/.test(s)), JSON.stringify(bugfixMissing));
+
+  // 4. F5: QA-only run (devIds: [], only test files) -> missingRootCause: false; code changed with only lead-qa report -> missingRootCause: true
+  writePair('tests/qa-only.test.js', null, 'test("repro", () => { throw new Error("boom"); });\n');
+  const qaOnlyAudit = gov.auditPatchSignals({
+    baseFiles: {}, curFiles: { 'tests/qa-only.test.js': 'c1' },
+    root, baselineDir: baseDir, reports: { 'lead-qa': 'wrote failing repro test' },
+    devIds: [], cycle: 2, isBugFix: true
+  });
+  assert(qaOnlyAudit.missingRootCause === false && qaOnlyAudit.signals.length === 0, JSON.stringify(qaOnlyAudit));
+
+  const codeWithQaOnlyReport = gov.auditPatchSignals({
+    baseFiles: { 'src/clean.js': 'b1' }, curFiles: { 'src/clean.js': 'c1' },
+    root, baselineDir: baseDir, reports: { 'lead-qa': 'verified test' },
+    cycle: 2, isBugFix: true
+  });
+  assert(codeWithQaOnlyReport.missingRootCause === true && codeWithQaOnlyReport.signals.some((s) => /omits root cause/.test(s)), JSON.stringify(codeWithQaOnlyReport));
+
+  // 5. F6: Skips .md and .json files even if they contain catch {} or it.todo()
+  writePair('docs/guide.md', null, '```js\ntry { go(); } catch (e) {}\nit.todo("sample");\n```\n');
+  writePair('src/fixture.json', null, JSON.stringify({ sample: 'try { go(); } catch {}', todo: 'test.todo("x")' }));
+  writePair('tests/data.json', null, JSON.stringify({ snippet: 'it.skip("x", () => {})' }));
+  const nonCodeAudit = gov.auditPatchSignals({
+    baseFiles: {}, curFiles: { 'docs/guide.md': 'c1', 'src/fixture.json': 'c2', 'tests/data.json': 'c3' },
+    root, baselineDir: baseDir, reports: {}, cycle: 2, isBugFix: true
+  });
+  assert(nonCodeAudit.signals.length === 0 && nonCodeAudit.skippedTests.length === 0 && nonCodeAudit.emptyCatches.length === 0 && nonCodeAudit.missingRootCause === false, JSON.stringify(nonCodeAudit));
+
+  // 6. Passes cleanly with 0 signals on valid fixes with root-cause notes (unchanged baseline bypass/catch does not trigger)
+  writePair('src/valid.js', '// pre-existing\ntry { a(); } catch {}\n', '// pre-existing\ntry { a(); } catch {}\nexport function parse(v) { try { return JSON.parse(v); } catch (err) { throw new Error(err.message); } }\n');
+  writePair('tests/valid.test.js', 'it.skip("unrelated pre-existing", () => {});\n', 'it.skip("unrelated pre-existing", () => {});\nit("parses valid input", () => {});\n');
+  const validAudit = gov.auditPatchSignals({
+    baseFiles: { 'src/valid.js': 'b1', 'tests/valid.test.js': 'b2' },
+    curFiles: { 'src/valid.js': 'c1', 'tests/valid.test.js': 'c2' },
+    root, baselineDir: baseDir,
+    reports: { 'lead-dev': 'Symptom: invalid JSON threw uncaught TypeError. Root Cause: missing try/catch wrap. Blast Radius: src/valid.js only.' },
+    cycle: 2, isBugFix: true
+  });
+  assert(validAudit.signals.length === 0 && validAudit.skippedTests.length === 0 && validAudit.emptyCatches.length === 0 && validAudit.missingRootCause === false, JSON.stringify(validAudit));
+
+  // 7. F2: Falls back to git diff when baselineDir lacks a tracked file (ignores untouched legacy catches, flags newly added ones)
+  const gitRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-audit-git-'));
+  const emptyBase = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-audit-emptybase-'));
+  const git = (...a) => execFileSync('git', a, { cwd: gitRoot, stdio: 'pipe' });
+  fs.mkdirSync(path.join(gitRoot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(gitRoot, 'src', 'legacy.js'), 'export function legacy() { try { a(); } catch (e) {} }\n');
+  fs.writeFileSync(path.join(gitRoot, 'src', 'clean.js'), 'export const v = 1;\n');
+  git('init', '-q');
+  git('-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '-A');
+  git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+  fs.writeFileSync(path.join(gitRoot, 'src', 'legacy.js'), 'export function legacy() { try { a(); } catch (e) {} }\nexport const ok = 2;\n');
+  fs.writeFileSync(path.join(gitRoot, 'src', 'clean.js'), 'export const v = 1;\nexport function bad() { try { b(); } catch {} }\n');
+  const legacyGitAudit = gov.auditPatchSignals({ curFiles: { 'src/legacy.js': 'CHANGED' }, root: gitRoot, baselineDir: emptyBase, baseRef: 'HEAD' });
+  assert(legacyGitAudit.signals.length === 0 && legacyGitAudit.emptyCatches.length === 0, JSON.stringify(legacyGitAudit));
+  const mixedGitAudit = gov.auditPatchSignals({ curFiles: { 'src/legacy.js': 'CHANGED', 'src/clean.js': 'CHANGED' }, root: gitRoot, baselineDir: emptyBase, baseRef: 'HEAD' });
+  assert(mixedGitAudit.emptyCatches.join() === 'src/clean.js' && mixedGitAudit.signals.length === 1, JSON.stringify(mixedGitAudit));
+});
+
+await test('v1.0.19 visible.mjs brief --bugfix + verify surfaces Anti-cheat & root-cause signals and Phase 1 Root-Cause reminder on FAILED, then clears on valid fix', () => {
+  const d = sandbox();
+  agentsWrite(d, [['src/calc.js', 'export function calc() { return 0; }\n']]);
+  const b = vis(d, 'brief', '--bugfix', '--goal', 'Fix calc return value', '--check', 'node -e "process.exit(require(\'fs\').readFileSync(\'src/calc.js\',\'utf8\').includes(\'return 42\')?0:1)"');
+  const id = runIdOf(b);
+  assert(b.status === 0 && id && /\(bugfix\)/.test(b.stdout) && /assign lead-qa and lead-dev in ONE assign call/.test(b.stdout), b.stdout + b.stderr);
+  assert(runJson(d, id).bugfix === true, 'run.json missing bugfix: true');
+
+  const a = vis(d, 'assign', id, deleg([
+    { lead: 'lead-dev', goal: 'fix calc', files: ['src/calc.js'] },
+    { lead: 'lead-qa', goal: 'add test', files: ['tests/calc.test.js'] }
+  ]));
+  assert(a.status === 0, a.stdout + a.stderr);
+
+  // Cycle 1: fails check while introducing empty catch, .skip, and a report without root cause
+  agentsWrite(d, [
+    ['src/calc.js', 'export function calc() { try { return 0; } catch (e) {} }\n'],
+    ['tests/calc.test.js', 'it.skip("repro", () => {});\n']
+  ]);
+  const v1 = vis(d, 'verify', id, '--reports', JSON.stringify({ 'lead-dev': 'edited src/calc.js', 'lead-qa': 'added test' }));
+  assert(v1.status === 1 && /NOT PASSED YET/.test(v1.stdout), v1.stdout);
+  assert(/Anti-cheat & root-cause signals:/.test(v1.stdout), `missing Anti-cheat & root-cause signals header:\n${v1.stdout}`);
+  assert(/silent error-swallowing catch block added in src\/calc\.js/.test(v1.stdout) && /test bypass\/skip detected in tests\/calc\.test\.js/.test(v1.stdout) && /omits root cause/.test(v1.stdout), v1.stdout);
+  assert(/Phase 1 Root-Cause Analysis \(Symptom, Root Cause, Blast Radius\)/.test(v1.stdout), `missing Phase 1 Root-Cause reminder:\n${v1.stdout}`);
+  assert(runJson(d, id).status === 'FAILED' && (runJson(d, id).lastVerify?.antiCheatSignals || []).length === 3, JSON.stringify(runJson(d, id).lastVerify));
+
+  // Cycle 2: clean root-cause fix passes and emits no anti-cheat signals or retry reminder
+  agentsWrite(d, [
+    ['src/calc.js', 'export function calc() { return 42; }\n'],
+    ['tests/calc.test.js', 'it("repro", () => { if (42 !== 42) throw new Error("mismatch"); });\n']
+  ]);
+  const v2 = vis(d, 'verify', id, '--reports', JSON.stringify({ 'lead-dev': 'Symptom: returned 0. Root Cause: placeholder stub. Blast Radius: src/calc.js.', 'lead-qa': 'enabled repro test' }));
+  assert(v2.status === 0 && /PASSED ✔/.test(v2.stdout), v2.stdout);
+  assert(!/Anti-cheat & root-cause signals:/.test(v2.stdout) && !/Phase 1 Root-Cause Analysis/.test(v2.stdout), v2.stdout);
+  assert(runJson(d, id).status === 'PASSED', runJson(d, id).status);
+});
+
+await test('v1.0.19 daemon.mjs + dispatch.mjs: injects [TWO-PHASE ROOT-CAUSE DIRECTIVE] on cycle 2 retry, logs ANTI_CHEAT_SIGNAL, skips untouched legacy catches with rollbackOnFailure:false, and --resume-visible preserves bugfix:true', () => {
+  // 1. Cycle 1 clean pass: no TWO-PHASE directive and no ANTI_CHEAT_SIGNAL
+  const d1 = sandbox();
+  drop(d1, { id: 'c1', title: 'feature one', verifyCmd: existsCheck('src/c1.js'), subtasks: [{ id: 'w1', targetFiles: ['src/c1.js'], prompt: 'WRITE src/c1.js export const ok = 1;' }] });
+  runOnce(d1);
+  assert(stateOf(d1).phase === '4_COMMITTED' && stateOf(d1).cycle === 1, JSON.stringify(stateOf(d1)));
+  assert(!promptOf(d1, 'w1').includes('[TWO-PHASE ROOT-CAUSE DIRECTIVE'), 'cycle 1 must not inject TWO-PHASE ROOT-CAUSE DIRECTIVE');
+  assert(!log(d1).some((e) => e.phase === 'ANTI_CHEAT_SIGNAL'), 'clean cycle 1 should not log ANTI_CHEAT_SIGNAL');
+
+  // 2. Cycle 2 retry: injects [TWO-PHASE ROOT-CAUSE DIRECTIVE — cycle 2]
+  const d2 = sandbox();
+  drop(d2, { id: 'c2', title: 'retry feature', verifyCmd: existsCheck('src/c2.js'), subtasks: [{ id: 'w2', targetFiles: ['src/c2.js'], prompt: 'FIX src/c2.js export const fixed = true;' }] });
+  runOnce(d2);
+  assert(stateOf(d2).phase === '4_COMMITTED' && stateOf(d2).cycle === 2, JSON.stringify(stateOf(d2)));
+  const p2 = promptOf(d2, 'w2');
+  assert(p2.includes('[TWO-PHASE ROOT-CAUSE DIRECTIVE — cycle 2]:') && p2.includes('Symptom, Root Cause, and Blast Radius'), `missing cycle 2 directive:\n${p2}`);
+
+  // 3. Anti-cheat patch signals logged as ANTI_CHEAT_SIGNAL in telemetry.log
+  const d3 = sandbox();
+  fs.mkdirSync(path.join(d3, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(d3, 'src', 'existing.js'), 'export const v = 1;\n');
+  drop(d3, {
+    id: 'ac1', title: 'feature audit', verifyCmd: PASS,
+    subtasks: [
+      { id: 'dev', role: 'DEV_ENGINEER', targetFiles: ['src/bad.js', 'src/existing.js'], prompt: 'WRITE src/bad.js try { go(); } catch (e) {}\nWRITE src/existing.js Promise.reject(1).catch(() => {})' },
+      { id: 'qa', role: 'QA_AUDITOR', targetFiles: ['tests/bad.test.js'], prompt: 'WRITE tests/bad.test.js it.skip("bypassed", () => {})' }
+    ]
+  });
+  runOnce(d3);
+  assert(stateOf(d3).phase === '4_COMMITTED', JSON.stringify(stateOf(d3)));
+  const acEvents = log(d3).filter((e) => e.phase === 'ANTI_CHEAT_SIGNAL');
+  assert(acEvents.length === 1 && Array.isArray(acEvents[0].signals), JSON.stringify(acEvents));
+  assert(acEvents[0].signals.some((s) => /silent error-swallowing catch block added in src\/bad\.js/.test(s)), JSON.stringify(acEvents[0].signals));
+  assert(acEvents[0].signals.some((s) => /silent error-swallowing catch block added in src\/existing\.js/.test(s)), JSON.stringify(acEvents[0].signals));
+  assert(acEvents[0].signals.some((s) => /test bypass\/skip detected in tests\/bad\.test\.js/.test(s)), JSON.stringify(acEvents[0].signals));
+
+  // 4. F2: non-git sandbox with rollbackOnFailure:false skips untouched legacy catches
+  const d4 = sandbox();
+  { const cf = path.join(d4, '.harness', 'config.json'); const c = json(cf); c.rollbackOnFailure = false; fs.writeFileSync(cf, JSON.stringify(c, null, 2)); }
+  fs.mkdirSync(path.join(d4, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(d4, 'src', 'legacy.js'), 'export function legacy() { try { a(); } catch (e) {} }\n');
+  drop(d4, { id: 'f2-legacy', title: 'feature clean', verifyCmd: existsCheck('src/added.js'), subtasks: [{ id: 'dev', role: 'DEV_ENGINEER', targetFiles: ['src/'], prompt: 'WRITE src/added.js export const added = 1;' }] });
+  runOnce(d4);
+  assert(stateOf(d4).phase === '4_COMMITTED', JSON.stringify(stateOf(d4)));
+  assert(!log(d4).some((e) => e.phase === 'ANTI_CHEAT_SIGNAL'), `untouched legacy catch triggered ANTI_CHEAT_SIGNAL: ${JSON.stringify(log(d4).filter((e) => e.phase === 'ANTI_CHEAT_SIGNAL'))}`);
+
+  // 5. F7: dispatch.mjs --resume-visible keeps bugfix:true on inbox job (and omits it when not a bugfix)
+  const d5 = sandbox();
+  const bugId = runIdOf(vis(d5, 'brief', '--bugfix', '--goal', 'Resume bugfix', '--check', existsCheck('src/fixed.js')));
+  assert(vis(d5, 'assign', bugId, deleg([{ lead: 'lead-dev', goal: 'WRITE src/fixed.js fixed', files: ['src/fixed.js'] }])).status === 0);
+  const resBug = node(d5, ['.harness/dispatch.mjs', '--resume-visible', bugId]);
+  assert(resBug.status === 0, resBug.stdout + resBug.stderr);
+  const bugJob = json(path.join(d5, '.harness', 'inbox', ls(d5, 'inbox')[0]));
+  assert(bugJob.visibleRunId === bugId && bugJob.bugfix === true, `expected bugfix:true on resumed inbox job: ${JSON.stringify(bugJob)}`);
+
+  const d6 = sandbox();
+  const normId = runIdOf(vis(d6, 'brief', '--goal', 'Resume normal', '--check', PASS));
+  assert(vis(d6, 'assign', normId, deleg([{ lead: 'lead-dev', goal: 'WRITE src/ok.js ok', files: ['src/ok.js'] }])).status === 0);
+  const resNorm = node(d6, ['.harness/dispatch.mjs', '--resume-visible', normId]);
+  assert(resNorm.status === 0, resNorm.stdout + resNorm.stderr);
+  const normJob = json(path.join(d6, '.harness', 'inbox', ls(d6, 'inbox')[0]));
+  assert(normJob.visibleRunId === normId && normJob.bugfix === undefined, `unexpected bugfix flag on non-bugfix job: ${JSON.stringify(normJob)}`);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

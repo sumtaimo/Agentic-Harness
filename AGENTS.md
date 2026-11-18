@@ -37,16 +37,16 @@ only point here.
 ---
 
 ### 1. ADAPTIVE GOVERNANCE (SOLO & TEAM RESPONSIVE)
-- **Charter & Memory Compliance:** Strictly obey `.harness/charter.md` (auto-agents may only modify `src/**`, `docs/**`, `tests/**`, `test/**`; `.harness/**` is locked unless explicitly approved by the Product Owner) and always read `.harness/memory/profile.md` and `.harness/memory/lessons.md`.
+- **Charter & Memory Compliance:** Strictly obey `.harness/charter.md` (auto-agents may only modify `src/**`, `docs/**`, `tests/**`, `test/**`, `__tests__/**`; `.harness/**` is locked unless explicitly approved by the Product Owner) and always read `.harness/memory/profile.md` and `.harness/memory/lessons.md`.
 - **Mode-Responsive Execution (`Normal` | `Parallel` | `Team` | `Autopilot`):**
   - **Solo Mode (`npm run run` / `--mode parallel`):** Single user acts as PO/Architect/QA Lead; orchestrator delegates disjoint file ownership to workers so parallel edits never collide.
   - **Team Mode (`--mode team`):** Orchestrator assigns scoped charters to leads (`lead-ba`, `lead-dev`, `lead-qa`):
     - `lead-ba`: specs and acceptance criteria; writes only `docs/**`.
-    - `lead-qa`: tests and verification; writes only `tests/**`, `test/**` and test files next to the code (`src/**/*.test.*`, `*.spec.*`).
+    - `lead-qa`: tests and verification; writes only `tests/**`, `test/**`, `__tests__/**` and test files next to the code (`src/**/*.test.*`, `*.spec.*`).
     - `lead-ux`: UX/UI; writes only style files (`src/**/*.css`, `*.scss`, `*.less`), with the `ui-craft` rules.
     - `reviewer` and `security`: read-only check agents the orchestrator starts after the controller says PASSED (code changes only); they report findings, never edit.
     - Read-only investigation and QA reports (`.agent-state/`) are written by the orchestrator, not by the leads.
-    - `lead-dev` / workers: Scoped implementation strictly inside assigned file paths.
+    - `lead-dev` / workers: Scoped implementation strictly inside assigned file paths; in team/hierarchy/visible runs, never create, edit, or delete test files (`tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*`).
   - **Autopilot Mode (`npm run auto`):** Executes backlog tasks autonomously onto branch `uat` ONLY—never `main` or `prod`.
 - **Per-Person State Isolation:** Keep `.agent-state/`, `.env`, and active local run artifacts in `.gitignore` so teammates never collide in Git.
 - **Hard Governance Gate:** NEVER push to `origin/uat`, `main`, or `prod`, run `git reset --hard`, or deploy without explicit in-chat Product Owner confirmation.
@@ -57,6 +57,7 @@ only point here.
 - **Evidence-First:** Never invent business rules, API payloads, permissions, database schemas, or implementation status. Cite exact `file:line` references from the repository.
 - **Learn Existing Patterns First:** Inspect neighboring components, hooks, state management, and styling patterns before proposing or writing code.
 - **Minimal Blast Radius:** Solve the exact requirement or bug with the smallest safe change within assigned file boundaries.
+- **Two-Phase Root-Cause & Anti-Cheating (Bug Fixes):** Investigate read-only first and document `Symptom / Root Cause / Blast Radius` before editing; fix the root cause cleanly. Hardcoding returns, special-case test `if` hacks, disabling validation, weakening/skipping tests, or swallowing errors (`catch` ignore) to force exit `0` are strictly prohibited.
 - **Think Beyond Visible UI:** Evaluate Validation states, Lifecycle/State transitions (loading, cancel, reset, re-open), Reload/Refresh persistence, Permissions, Related Modules, and Regression risks. Include clear Layout/Visual AC for UI changes.
 - **Ask Only Business Decisions:** Investigate technical facts from the codebase yourself. Only stop to ask the Product Owner for genuine business-rule ambiguities or scope trade-offs.
 
@@ -66,10 +67,10 @@ only point here.
 - **Core Controller Lifecycle:**
   `1_PLANNER` -> `2_EXECUTOR_SWARM` -> `3_VERIFIER` -> `4_COMMITTED` (max 3 retry cycles on check failure, otherwise automatic rollback + `HALTED_HITL_REQUIRED`).
 - **Orchestrator & Lead Workflow (`brief` -> `assign` -> `work` -> `verify` -> `report`):**
-  1. **Brief & Assign:** Define exact task scope, allowed file paths, and deterministic verification command (`npm test`, typecheck, lint) before any worker edits code.
+  1. **Brief & Assign:** Define exact task scope, allowed file paths, and deterministic verification command (`npm test`, typecheck, lint) before any worker edits code. On bug fixes, keep test files isolated to `lead-qa` and either run Red-Green sequencing — assign `lead-qa` and `lead-dev` in one `assign` call (run `lead-qa` first [Red] to confirm the bug test fails before running `lead-dev` [Green], then run `visible.mjs verify`), or run two separate `brief` runs (a Red reproduction run first, then a Green fix run), because `visible.mjs verify` transitions the run to `FAILED` which blocks calling `assign` again on the same `RUN_ID` — or require `lead-dev` to report `Symptom / Root Cause / Blast Radius`.
   2. **Audit / Investigation Output (`.agent-state/01-audit-and-plan.md`):** Document *Where (`file:line`) -> Current vs. Expected -> Rule & Permissions -> Gap/Root Cause -> System & Beyond-UI Impact -> Smallest Safe Fix Plan -> Validation Checklist*.
   3. **Deterministic Verification:** Never claim `"PASSED"` based on LLM self-assessment—only report `"PASSED"` after the real controller check (`npm test` / linter / typecheck) succeeds and out-of-scope edits are reverted.
-  4. **QA & Agent Report Audit (`.agent-state/02-qa-verdict.md`):** Verify `git diff` against acceptance criteria for missing requirements, scope creep, state/reload bugs, and regression risks.
+  4. **QA & Agent Report Audit (`.agent-state/02-qa-verdict.md`):** Verify `git diff` against acceptance criteria for missing requirements, scope creep, state/reload bugs, and regression risks; for bug fixes, enforce Adversarial Fail-First QA and a Root-Cause & Anti-Cheating Diff Audit (`reviewer` rejects fixes lacking a clear Root-Cause explanation or relying on hacks/weakened tests).
 
 ---
 
@@ -140,10 +141,11 @@ Workflow: **human → controller → you (orchestrator) → named agents → con
 The user types `/harness:run <goal>` (or `/harness:auto` for the READY backlog); those commands contain the exact steps.
 The rules, in short (the controller enforces them; do not try to get around them):
 1. `node .harness/visible.mjs brief …` first: it gives you the task, the check, the team and each lead's scope.
-2. You only **plan and delegate**: give every file to exactly one lead, inside that lead's scope, and put the exact shared names/formats in
+2. You only **plan and delegate**: give every file to exactly one lead, inside that lead's scope (test files `tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*` belong strictly to `lead-qa`, never `lead-dev`), and put the exact shared names/formats in
    the interface contract. `visible.mjs assign <run> '<json>'` validates it before anything starts (3 bad tries escalate to the user).
 3. Start **all** assigned named agents (`lead-ba`, `lead-dev`, `lead-qa`, `lead-ux`; subagent_type = the lead's id) **in one message** so they run in
    parallel and the user sees them work. Use the prompts `assign` prints. **Never do their work or edit project files yourself.**
+   On bug fixes, you may run Red-Green sequencing — either assign `lead-qa` and `lead-dev` in one `assign` call (run `lead-qa` first [Red] to confirm the bug test fails before running `lead-dev` [Green], then run `visible.mjs verify`) or run two separate `brief` runs (a Red reproduction run first, then a Green fix run), because `visible.mjs verify` transitions the run to `FAILED` which blocks calling `assign` again on the same `RUN_ID` — or require `lead-dev` to include `Symptom / Root Cause / Blast Radius` in its report (audited by `reviewer` after PASSED in `/harness:run`).
 4. When they report, run `visible.mjs verify <run> --reports '{…}'`. The controller reverts every change outside the assignments, runs the
    real check and writes the report. Send failures back to the responsible lead (3 cycles at most).
 5. **Report to the human in plain words**: which named agent did what, whether the controller said PASSED, what needs their decision.

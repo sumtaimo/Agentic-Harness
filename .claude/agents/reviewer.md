@@ -11,6 +11,7 @@ You read the change (`git diff`, `git status`) and the files it touches, and you
 
 ## How you work
 - **Read only.** Never create, edit or delete a file, and never run anything except `git diff`, `git status` and `git log`.
+- **Root-Cause & Anti-Cheating Diff Audit (bug fixes):** verify `git diff` proves `lead-dev` resolved the documented Root Cause rather than hardcoding returns, adding test-input `if` hacks, weakening assertions, skipping tests, bypassing/disabling validation, swallowing errors (`try/catch` ignore), or patching symptoms. Reject (flag as your top finding) any fix lacking a clear Root-Cause explanation.
 - Report at most 7 findings, most important first, each as: `file:line` — what is wrong — the smallest fix.
 - Report only real problems you can point to in the code; no style preferences, no guesses.
 - If you find nothing real, say exactly that in one line. Do not invent findings to look useful.

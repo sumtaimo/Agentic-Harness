@@ -43,7 +43,7 @@ const highAlwaysAllowed = () => (loadApprovals().alwaysAllow || []).includes('hi
 import {
   readCharter, loadRoles, loadSkills, matchSkills, computeAllowedTools, computeDisallowedTools,
   matchesAny, withinAll, skillRulesNotGranted, readBacklog, writeBacklog, updateBacklogItem, nextReady, backlogCounts, itemToJob,
-  loadTeam, validateTeam, leadOwns, validateDelegation
+  loadTeam, validateTeam, leadOwns, validateDelegation, isTestFilePath, auditPatchSignals
 } from './lib/governance.mjs';
 import {
   isRepoWithCommits, branchSha, ensureBranch, protectedShas, ensureWorkerWorktree, commitScoped,
@@ -485,7 +485,7 @@ function autoLoadedMemory(profile, cwd) {
   return skip;
 }
 
-function buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov = {}) {
+function buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov = {}, cycle = 1) {
   let skip = [];
   try { skip = autoLoadedMemory(config.profiles[profileName] || {}, cwd); } catch { /* inject everything */ }
   const memory = memoryContext(config, { skip });
@@ -505,6 +505,7 @@ function buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov = {}) {
     subtask.interfaceContract ? `[SHARED INTERFACE CONTRACT — other workers build against exactly this; do not deviate]:\n${subtask.interfaceContract}` : '',
     Array.isArray(ac) && ac.length ? `[ACCEPTANCE CRITERIA]:\n${ac.map((c) => `- ${c}`).join('\n')}` : '',
     errorContext ? `[PREVIOUS VERIFIER ERROR TO FIX]:\n${String(errorContext).slice(0, 6000)}` : '',
+    cycle > 1 ? `[TWO-PHASE ROOT-CAUSE DIRECTIVE — cycle ${cycle}]:\nPhase 1 (read-only): state Symptom, Root Cause, and Blast Radius from the failure trace. Phase 2: apply the minimal root-cause fix — never hardcode returns, add test-input special cases, weaken assertions, disable validation, or swallow errors.` : '',
     `[TASK INSTRUCTIONS]:\n${subtask.prompt}`
   ].filter(Boolean).join('\n\n');
 }
@@ -551,7 +552,7 @@ function runWorker(subtask, cwd, errorContext, { cycle = 1, model = null } = {})
     role: subtask.resolvedRole ? roles[subtask.resolvedRole] : null,
     skills: (subtask.resolvedSkills || []).map((n) => skills[n]).filter(Boolean)
   };
-  const prompt = buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov);
+  const prompt = buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov, cycle);
   return spawnEngine({
     id: subtask.id, engine: subtask.engine, prompt, cwd, timeoutMs,
     allowedTools: subtask.resolvedTools || subtask.allowedTools, disallowedTools: subtask.deniedTools,
@@ -578,7 +579,7 @@ const inScope = (file, targets) => {
 };
 
 /** Copy the worker's changes from its worktree back to the target folder — only files in scope. */
-async function syncWorktree(wtPath, sub, destRoot = ROOT) {
+async function syncWorktree(wtPath, sub, destRoot = ROOT, scopeFn = inScope) {
   const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-uall', '-z'], { cwd: wtPath });
   const entries = stdout.split('\0').filter(Boolean);
   const copied = []; const blocked = [];
@@ -587,7 +588,7 @@ async function syncWorktree(wtPath, sub, destRoot = ROOT) {
     const file = entries[i].slice(3);
     if (status.startsWith('R')) i++; // rename: next entry is the old path
     if (file.startsWith('.harness/')) continue;
-    if (!inScope(file, sub.targetFiles)) { blocked.push(file); continue; }
+    if (!scopeFn(file, sub.targetFiles)) { blocked.push(file); continue; }
     const src = path.join(wtPath, file); const dest = path.join(destRoot, file);
     if (fs.existsSync(src)) { fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.copyFileSync(src, dest); } else if (fs.existsSync(dest)) fs.rmSync(dest);
     copied.push(file);
@@ -700,9 +701,10 @@ async function finishIntegration(ctx, ok) {
  * Validate subtasks: safe paths, unique ids, and the Swarm Conflict Invariant
  *   LockedFiles(A) ∩ LockedFiles(B) = ∅  (a folder also conflicts with any file inside it).
  */
-function validateSubtasks(subtasks, { source = 'task', allowed = [], requireScope = false, gov = null, autonomous = false } = {}) {
+function validateSubtasks(subtasks, { source = 'task', allowed = [], requireScope = false, gov = null, autonomous = false, hasQaLead = false } = {}) {
   const owner = new Map();
   const ids = new Set();
+  const teamHasQa = hasQaLead || subtasks.some((s) => String(s.role || '').toUpperCase() === 'QA_AUDITOR');
   for (const sub of subtasks) {
     sub.id = String(sub.id || `worker-${subtasks.indexOf(sub) + 1}`).replace(/[^\w.-]/g, '-').slice(0, 40);
     if (ids.has(sub.id)) sub.id = `${sub.id}-${subtasks.indexOf(sub) + 1}`;
@@ -717,6 +719,12 @@ function validateSubtasks(subtasks, { source = 'task', allowed = [], requireScop
     if (!sub.prompt && !sub.cliCommand) throw fatal(`${source}: worker '${sub.id}' has neither a prompt nor a cliCommand.`);
     if ((requireScope || subtasks.length > 1) && sub.targetFiles.length === 0) {
       throw fatal(`Swarm Lock Collision: ${source} worker '${sub.id}' has no targetFiles, so it could touch any file. In a swarm every worker must own explicit files.`);
+    }
+    if (teamHasQa && String(sub.role || '').toUpperCase() !== 'QA_AUDITOR') {
+      const testTargets = sub.targetFiles.filter((f) => isTestFilePath(f));
+      if (testTargets.length) {
+        throw fatal(`${source}: worker '${sub.id}' (${sub.role || 'non-QA'}) may not own test file(s) ${testTargets.join(', ')} — only QA_AUDITOR owns test files.`);
+      }
     }
     if (allowed.length) {
       const outside = sub.targetFiles.filter((f) => !inScope(f.replace(/\/$/, '').replace(/\/\*\*$/, ''), allowed));
@@ -913,6 +921,7 @@ async function hierDecompose(task, gov, workRoot = ROOT) {
   logTelemetry('1_ORCHESTRATED', `${orch.id} delegated to ${plan.assignments.length} lead(s)`, { assignments: plan.assignments.map((a) => ({ lead: a.lead, files: a.files })) });
 
   // ── level 2: every lead splits its slice into workers (in parallel)
+  const hasQaLead = leads.some((l) => String(l.role).toUpperCase() === 'QA_AUDITOR');
   const planLead = async (a) => {
     const lead = leads.find((l) => l.id === a.lead);
     const maxW = lead.maxWorkers ?? 3;
@@ -948,6 +957,7 @@ async function hierDecompose(task, gov, workRoot = ROOT) {
           for (const f of s.targetFiles) {
             const safe = safeTarget(f);
             if (!safe) throw new Error(`worker "${s.id}" has an unsafe path "${f}".`);
+            if (hasQaLead && String(lead.role).toUpperCase() !== 'QA_AUDITOR' && isTestFilePath(safe)) throw new Error(`worker "${s.id}" targets test file "${f}", which may only be owned by QA_AUDITOR.`);
             if (!a.files.some((af) => inScope(stripSlash(safe), [stripSlash(af)]))) throw new Error(`worker "${s.id}" targets "${f}", outside your assigned files (${a.files.join(', ')}).`);
             if (!leadOwns(lead, safe, leads)) throw new Error(`worker "${s.id}" targets "${f}", which belongs to another lead's scope.`);
           }
@@ -964,7 +974,7 @@ async function hierDecompose(task, gov, workRoot = ROOT) {
 
   // ── level 3: workers (created from the lead plans), checked once more as one swarm
   const subtasks = [];
-  const teamPlan = { orchestrator: orch.id, assignments: [] };
+  const teamPlan = { orchestrator: orch.id, hasQaLead, assignments: [] };
   plan.assignments.forEach((a, i) => {
     const lead = leads.find((l) => l.id === a.lead);
     const mine = settled[i].value.map((s) => ({
@@ -975,7 +985,7 @@ async function hierDecompose(task, gov, workRoot = ROOT) {
     subtasks.push(...mine);
     teamPlan.assignments.push({ lead: lead.id, goal: a.goal.slice(0, 300), files: a.files, workers: [] });
   });
-  validateSubtasks(subtasks, { source: 'hierarchy', allowed: userAllowed, requireScope: true, gov, autonomous: !!task.autonomous });
+  validateSubtasks(subtasks, { source: 'hierarchy', allowed: userAllowed, requireScope: true, gov, autonomous: !!task.autonomous, hasQaLead });
   subtasks.forEach((sub) => resolveGovernance(sub, gov));
   for (const sub of subtasks) teamPlan.assignments.find((x) => x.lead === sub.lead).workers.push({ id: sub.id, files: sub.targetFiles });
   logTelemetry('1_HIERARCHY_PLANNED', `${orch.id} → ${plan.assignments.length} lead(s) → ${subtasks.length} worker(s)`, { team: teamPlan });
@@ -1041,6 +1051,7 @@ async function runPlanner(task, errorTrace = null, previous = null, workRoot = R
   return {
     taskId: task.id || `job-${Date.now()}`,
     title: task.title || 'Unnamed Harness Task',
+    goal: task.goal || task.prompt || task.title || '',
     engine: engineLabel(subtasks), mode, subtasks, verifyCmd, verifySource, verifySuggestion, planSummary, interfaceContract, team: teamPlan,
     workRoot,
     errorContext: errorTrace
@@ -1057,6 +1068,7 @@ async function runExecutorSwarm(plan, gitCtx = null) {
   const useWorktrees = !gitCtx && config.useGitWorktrees && plan.subtasks.some((s) => s.prompt);
   if (useWorktrees && !(await isGitRepo(workRoot))) throw fatal('useGitWorktrees is on, but this folder is not a git repository with at least one commit.');
 
+  const teamHasQa = Boolean(plan.team?.hasQaLead) || plan.subtasks.some((s) => String(s.resolvedRole || s.role || '').toUpperCase() === 'QA_AUDITOR');
   let finished = 0;
   const workerPromises = plan.subtasks.map(async (sub) => {
     for (const f of sub.targetFiles) activeFileLocks.add(f);
@@ -1083,10 +1095,12 @@ async function runExecutorSwarm(plan, gitCtx = null) {
         logTelemetry('BUDGET_AGENT_EXCEEDED', `${sub.id} cost $${(taskCost.agents[sub.id] || 0).toFixed(4)} > its cap $${sub.maxCostUsd}`, { agent: sub.id });
         throw fatal(`BUDGET_AGENT_EXCEEDED: worker ${sub.id} cost $${(taskCost.agents[sub.id] || 0).toFixed(3)}, over its cap of $${sub.maxCostUsd}.`);
       }
-      if (useWorktrees) result.sync = await syncWorktree(wtPath, sub, workRoot);
+      const subRole = String(sub.resolvedRole || sub.role || '').toUpperCase();
+      const scopeCheck = teamHasQa && subRole !== 'QA_AUDITOR' ? (file, targets) => inScope(file, targets) && !isTestFilePath(file) : inScope;
+      if (useWorktrees) result.sync = await syncWorktree(wtPath, sub, workRoot, scopeCheck);
       if (gitCtx && sub.prompt) {
         const c = await commitScoped({
-          wtPath: workerCwd, targets: sub.targetFiles, inScope, root: ROOT, ignore: gitCtx.link,
+          wtPath: workerCwd, targets: sub.targetFiles, inScope: scopeCheck, root: ROOT, ignore: gitCtx.link,
           message: `harness(${plan.taskId}): ${sub.resolvedRole ? `${sub.resolvedRole} ` : ''}${sub.id}\n\n${String(sub.prompt).slice(0, 400)}`
         });
         if (c.discarded.length) logTelemetry('2_SCOPE_VIOLATION', `Worker ${sub.id} changed files outside its scope; discarded before commit`, { worker: sub.id, blocked: c.discarded });
@@ -1150,6 +1164,91 @@ async function runVerifier(plan) {
   }
 }
 
+function snapshotScopeHashes(plan, workRoot) {
+  const allTargets = [...new Set((plan.subtasks || []).flatMap((s) => s.targetFiles || []))];
+  let candidates = [];
+  if (allTargets.length) {
+    const projectFiles = listProjectFiles(workRoot, 2000).files.filter((f) => inScope(f, allTargets));
+    const explicit = allTargets.filter((t) => !t.endsWith('/') && !t.includes('*') && fs.existsSync(path.join(workRoot, t)));
+    candidates = [...new Set([...projectFiles, ...explicit])];
+  } else {
+    candidates = listProjectFiles(workRoot, 2000).files;
+  }
+  const map = {};
+  for (const f of candidates) {
+    if (f.startsWith('.harness/')) continue;
+    const abs = path.join(workRoot, f);
+    try {
+      const st = fs.statSync(abs);
+      if (!st.isFile() || st.size > 256 * 1024) continue;
+      map[f] = crypto.createHash('sha1').update(fs.readFileSync(abs)).digest('hex');
+    } catch { /* vanished */ }
+  }
+  return map;
+}
+
+async function auditDaemonPatch(plan, task, outputs, cycle, backup, gitCtx, preRunFiles = {}) {
+  try {
+    const auditRoot = plan.verifyCwd || plan.workRoot || ROOT;
+    const allTargets = [...new Set((plan.subtasks || []).flatMap((s) => s.targetFiles || []))];
+    let baseFiles = preRunFiles || {};
+    let curFiles = {};
+    let baseRef = 'HEAD';
+    if (gitCtx) {
+      baseRef = gitCtx.baseSha;
+      baseFiles = {};
+      const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=ACMRT', '-z', gitCtx.baseSha, 'HEAD'], { cwd: auditRoot });
+      const changedFiles = (stdout || '').split('\0').filter((f) => f && !f.startsWith('.harness/'));
+      curFiles = Object.fromEntries(changedFiles.map((f) => [f, 'CHANGED']));
+    } else if (await isGitRepo(auditRoot)) {
+      const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-uall', '-z'], { cwd: auditRoot });
+      const entries = (stdout || '').split('\0').filter(Boolean);
+      for (let i = 0; i < entries.length; i++) {
+        const st = entries[i].slice(0, 2);
+        const file = entries[i].slice(3);
+        if (st.startsWith('R') || st.startsWith('C')) i++;
+        if (!file || file.startsWith('.harness/') || st[0] === 'D' || st[1] === 'D') continue;
+        if (allTargets.length && !inScope(file, allTargets)) continue;
+        const abs = path.join(auditRoot, file);
+        try {
+          const fst = fs.statSync(abs);
+          if (!fst.isFile() || fst.size > 256 * 1024) continue;
+          curFiles[file] = crypto.createHash('sha1').update(fs.readFileSync(abs)).digest('hex');
+        } catch { /* vanished */ }
+      }
+    } else {
+      curFiles = snapshotScopeHashes(plan, auditRoot);
+    }
+    const isNonDevRole = (r) => ['QA_AUDITOR', 'BA_ANALYST'].includes(String(r || '').toUpperCase());
+    const hasAiWorker = (plan.subtasks || []).some((s) => Boolean(s.prompt));
+    const devReports = Object.fromEntries(
+      (outputs || [])
+        .filter((o) => o && o.engine !== 'shell' && o.output && !isNonDevRole(o.role))
+        .map((o) => [o.id, o.output])
+    );
+    const devIds = hasAiWorker
+      ? (plan.subtasks || []).filter((s) => s.prompt && !isNonDevRole(s.resolvedRole || s.role)).map((s) => s.id)
+      : [];
+    const isBugFix = Boolean(task?.bugfix || /\b(fix|bug|broken|regress|error|crash|fail)\b/i.test(`${plan.title || ''} ${plan.goal || task?.goal || ''}`));
+    const baselineDir = !gitCtx && backup?.dir ? path.join(backup.dir, 'files') : null;
+    const audit = auditPatchSignals({
+      baseFiles,
+      curFiles,
+      root: auditRoot,
+      baselineDir,
+      baseRef,
+      reports: devReports,
+      devIds,
+      ...(hasAiWorker ? {} : { changedCodeFiles: [] }),
+      cycle,
+      isBugFix
+    });
+    if (audit.signals.length > 0) {
+      logTelemetry('ANTI_CHEAT_SIGNAL', audit.signals.join('; '), { taskId: plan.taskId, signals: audit.signals });
+    }
+  } catch { /* non-blocking audit telemetry */ }
+}
+
 // ───────────────────────────── Node 4: committer ─────────────────────────────
 
 async function runCommitter(plan, task, taskFile, gitCtx = null, { archive = true } = {}) {
@@ -1166,11 +1265,17 @@ async function runCommitter(plan, task, taskFile, gitCtx = null, { archive = tru
     try {
       await execFileAsync('git', ['add', '-A', '--', ...(scope.length ? scope : ['.']), ':(exclude).harness'], { cwd: workRoot });
       const { stdout: stagedZ } = await execFileAsync('git', ['diff', '--cached', '--name-only', '-z'], { cwd: workRoot });
-      const heldBack = (stagedZ || '').split('\0').filter((f) => f && isSecretFile(f));
-      if (heldBack.length) {
+      const stagedFiles = (stagedZ || '').split('\0').filter(Boolean);
+      const heldBack = stagedFiles.filter((f) => isSecretFile(f));
+      const teamHasQa = Boolean(plan.team?.hasQaLead) || plan.subtasks.some((s) => String(s.resolvedRole || s.role || '').toUpperCase() === 'QA_AUDITOR');
+      const qaTargets = teamHasQa ? plan.subtasks.filter((s) => String(s.resolvedRole || s.role || '').toUpperCase() === 'QA_AUDITOR').flatMap((s) => s.targetFiles || []) : [];
+      const rogueTests = teamHasQa ? stagedFiles.filter((f) => !isSecretFile(f) && isTestFilePath(f) && (!qaTargets.length || !inScope(f, qaTargets))) : [];
+      const unstage = [...new Set([...heldBack, ...rogueTests])];
+      if (unstage.length) {
         const hasHead = await execFileAsync('git', ['rev-parse', '--verify', '-q', 'HEAD'], { cwd: workRoot }).then(() => true, () => false);
-        await execFileAsync('git', hasHead ? ['reset', '-q', 'HEAD', '--', ...heldBack] : ['rm', '-r', '--cached', '-q', '--ignore-unmatch', '--', ...heldBack], { cwd: workRoot });
-        logTelemetry('4_GIT_HELD_BACK_SECRETS', `Held back secret-like file(s) from auto-commit: ${heldBack.join(', ')}`, { files: heldBack });
+        await execFileAsync('git', hasHead ? ['reset', '-q', 'HEAD', '--', ...unstage] : ['rm', '-r', '--cached', '-q', '--ignore-unmatch', '--', ...unstage], { cwd: workRoot });
+        if (heldBack.length) logTelemetry('4_GIT_HELD_BACK_SECRETS', `Held back secret-like file(s) from auto-commit: ${heldBack.join(', ')}`, { files: heldBack });
+        if (rogueTests.length) logTelemetry('2_SCOPE_VIOLATION', `Held back out-of-role test file(s) from auto-commit: ${rogueTests.join(', ')}`, { files: rogueTests });
       }
       const { stdout } = await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd: workRoot });
       if (stdout.trim()) {
@@ -1231,7 +1336,7 @@ async function executeSquareCycle(taskFile) {
   }
 
   const errors = [];
-  let plan = null; let outputs = []; let cycle = 1; let lastErrorTrace = task.initialError || null; let haltReason = null; let backup = null;
+  let plan = null; let outputs = []; let cycle = 1; let lastErrorTrace = task.initialError || null; let haltReason = null; let backup = null; let preRunFiles = null;
   const integration = integrationFor(task); let gitCtx = null; let gitResult = null;
   let workRoot = ROOT;
   const title = task.title || path.basename(taskFile);
@@ -1261,10 +1366,12 @@ async function executeSquareCycle(taskFile) {
       plan.cycle = cycle; plan.model = task.model || null; // model tier: retries escalate; --model on the task overrides
       if (integration && !gitCtx) gitCtx = await startIntegration(task, integration);
       if (cycle === 1 && !backup && !gitCtx) backup = backupScope(plan, workRoot);
+      if (cycle === 1 && !gitCtx && preRunFiles === null) preRunFiles = snapshotScopeHashes(plan, workRoot);
       if (cycle > 1) enforceBudget(task, `cycle ${cycle - 1}`); // never start another cycle once over budget
       outputs = await runExecutorSwarm(plan, gitCtx);
       enforceBudget(task, `cycle ${cycle} workers`);
       const verification = await runVerifier(plan);
+      await auditDaemonPatch(plan, task, outputs, cycle, backup, gitCtx, preRunFiles);
       if (verification.passed) {
         const archiveExtra = await runCommitter(plan, task, taskFile, gitCtx, { archive: false });
         gitResult = await finishIntegration(gitCtx, true);
