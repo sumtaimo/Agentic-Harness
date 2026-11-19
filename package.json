@@ -1,6 +1,6 @@
 {
   "name": "agentic-harness",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "private": true,
   "description": "Zero-dependency agentic workflow harness template (no packages to install)",
   "bin": {
