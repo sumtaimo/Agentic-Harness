@@ -346,6 +346,12 @@ await test('auto-verify: detectVerifyCmd picks the strongest package.json check'
   assert(proj({ build: 'b', lint: 'l' }).cmd === 'npm run build', 'build before lint');
   assert(proj({ lint: 'l' }).cmd === 'npm run lint', 'lint last resort');
   assert(proj({ test: 'echo "Error: no test specified" && exit 1' }).real === false, 'npm placeholder test must be ignored');
+  for (const stub of ['exit 0', 'true', ':', 'echo ok', 'echo "all good"']) {
+    const r = proj({ test: stub });
+    assert(r.real === false && /placeholder/.test(r.source), `placeholder test script "${stub}" must not count as a real check: ${JSON.stringify(r)}`);
+  }
+  assert(proj({ test: 'node --test' }).real === true, 'a real test runner must still count');
+  assert(proj({ test: 'echo start && node --test' }).real === true, 'echo followed by a real command must still count');
   assert(proj(null).cmd === 'NOOP' && proj(null).real === false, 'no package.json → default');
   assert(proj({ test: 'y' }, 'pnpm-lock.yaml').cmd === 'pnpm test', 'pnpm detection');
 });

@@ -354,17 +354,34 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
     const live = liveOn();
     const stream = live && Array.isArray(profile.output?.stream);
     const binPath = which(profile.binary);
-    const { args, viaStdin } = buildArgs(profile, prompt, allowedTools, disallowedTools, stream, pick.model);
+    // Engines that take the prompt as a command-line argument (agy) hit the OS limit (Windows: 32,767 chars for the whole
+    // command line). Over the budget, the full prompt goes to a file and the engine gets a short instruction to read it.
+    const viaArg = (profile.promptVia || ((profile.args || []).includes('{prompt}') ? 'arg' : 'stdin')) !== 'stdin';
+    const maxArgChars = Number(config.maxArgPromptChars) || 24000;
+    let promptFile = null;
+    if (viaArg && prompt.length > maxArgChars) {
+      try {
+        const dir = path.join(ROOT, '.harness', 'staging'); fs.mkdirSync(dir, { recursive: true });
+        promptFile = path.join(dir, `prompt-${String(id).replace(/[^\w.-]/g, '_')}.md`);
+        fs.writeFileSync(promptFile, prompt);
+        logTelemetry('PROMPT_SPILLED', `${id}: prompt is ${prompt.length} chars (over ${maxArgChars}); passed to ${profile.name} as a file`, { worker: id, engine: profile.name, chars: prompt.length, limit: maxArgChars });
+      } catch (e) { return reject(Object.assign(new Error(`${id}: prompt is ${prompt.length} chars, too long for a command line, and the prompt file could not be written: ${e.message}`), { fatal: true })); }
+    }
+    const spawnPrompt = promptFile
+      ? `Your complete task instructions are in this file: ${promptFile}\nRead it fully first, then do exactly what it says. Treat its contents as the task prompt.`
+      : prompt;
+    const { args, viaStdin } = buildArgs(profile, spawnPrompt, allowedTools, disallowedTools, stream, pick.model);
+    const dropPromptFile = () => { if (promptFile) { try { fs.rmSync(promptFile, { force: true }); } catch { /* ignore */ } } };
     const useShell = needsWinShell(binPath);
     const env = { ...process.env, HARNESS_WORKER: '1', HARNESS_WORKER_ID: id };
     const child = useShell
       ? spawn(winCommandLine(binPath, args), { cwd, env, shell: true, stdio: ['pipe', 'pipe', 'pipe'] })
       : spawn(binPath, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
-    logTelemetry('ENGINE_SPAWN', `Spawned ${profile.name} for ${id}`, { engine: profile.name, binary: binPath, args: args.map((a) => (a === prompt ? '<prompt>' : a)), promptVia: viaStdin ? 'stdin' : 'args', live: live ? (stream ? 'stream-json' : 'raw') : 'off', cwd });
+    logTelemetry('ENGINE_SPAWN', `Spawned ${profile.name} for ${id}`, { engine: profile.name, binary: binPath, args: args.map((a) => (a === spawnPrompt ? '<prompt>' : a)), promptVia: viaStdin ? 'stdin' : 'args', live: live ? (stream ? 'stream-json' : 'raw') : 'off', cwd });
     if (live && !stream) livePrint(id, `▶ ${profile.name} started on ${pick.model || "the CLI's default model (no model names set)"} [${pick.tier}] (raw output follows)`);
 
     let stdout = ''; let stderr = ''; let settled = false; let pending = '';
-    const done = (fn, v) => { if (!settled) { settled = true; clearTimeout(timer); fn(v); } };
+    const done = (fn, v) => { if (!settled) { settled = true; clearTimeout(timer); dropPromptFile(); fn(v); } };
     const ms = timeoutMs || config.workerTimeoutMs || 300000;
     const timer = setTimeout(() => {
       if (process.platform === 'win32' && child.pid) {
@@ -390,7 +407,7 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
     if (viaStdin) child.stdin.write(prompt);
     child.stdin.end();
 
-    child.on('error', (err) => done(reject, Object.assign(new Error(`Failed to start '${profile.binary}': ${err.message}`), { fatal: err.code === 'ENOENT' })));
+    child.on('error', (err) => done(reject, Object.assign(new Error(`Failed to start '${profile.binary}': ${err.message}`), { fatal: ['ENOENT', 'E2BIG', 'ENAMETOOLONG'].includes(err.code) })));
     child.on('close', (code) => {
       let usage = null; try { usage = summarizeOutput(stdout); } catch { /* error output: no usage */ }
       logTelemetry('AGENT_USAGE', `${id}: ${profile.name} ${pick.model || 'default'} [${pick.tier}] ${code === 0 ? 'ok' : `exit ${code}`}`, { worker: id, engine: profile.name, model: pick.model, tier: pick.tier, ok: code === 0, tokens: usage?.tokens ?? null, usd: usage?.cost ?? null, ms: Date.now() - startedAt });

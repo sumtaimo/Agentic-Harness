@@ -115,8 +115,9 @@ function reportText(run, v) {
   const L = [];
   const head = { PASSED: 'PASSED ✔', FAILED: 'NOT PASSED YET ✖ (can be fixed and re-verified)', HALTED_HITL_REQUIRED: 'STOPPED ✖ — a human decision is needed', ROLLED_BACK: 'ROLLED BACK', ESCALATED: 'ESCALATED — a human decision is needed' }[v.status] || v.status;
   const visual = v.status === 'PASSED' && v.uiFiles?.length;
+  const noSignal = v.status === 'PASSED' && run.check?.real === false;
   const sessionLabel = run.editor && run.editor !== 'claude-code' ? `${editorDisplayName(run.editor)} editor session` : 'editor session';
-  L.push(`HARNESS REPORT — run ${run.id} — ${head}${visual ? ' — NEEDS A VISUAL REVIEW' : ''}`, '', `Task:    ${run.title}`, `Source:  ${run.source === 'backlog' ? `backlog item ${run.backlogId}` : 'goal given by the human'}${run.autonomous ? ' (autonomous mode)' : ''}`,
+  L.push(`HARNESS REPORT — run ${run.id} — ${head}${noSignal ? ' (NO REAL TEST SIGNAL: the check cannot fail)' : ''}${visual ? ' — NEEDS A VISUAL REVIEW' : ''}`, '', `Task:    ${run.title}`, `Source:  ${run.source === 'backlog' ? `backlog item ${run.backlogId}` : 'goal given by the human'}${run.autonomous ? ' (autonomous mode)' : ''}`,
     `Flow:    controller → orchestrator (${sessionLabel}) → ${run.assignments.map((a) => a.lead).join(', ')} → controller verify → this report`, '');
   L.push('What each agent did:');
   const leads = run.leads || [];

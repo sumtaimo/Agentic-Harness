@@ -47,6 +47,9 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 
 ## ៦. ច្បាប់សុវត្ថិភាព
 
+- **ពិនិត្យដែលមិនអាចបរាជ័យ មិនរាប់ជា check ពិតទេ**៖ គ្មាន test script, stub របស់ `npm init`, ឬ placeholder ដូចជា `exit 0`, `true`, `echo` ទទេ។ ការរត់ស្វ័យប្រវត្តិបដិសេធវា ហើយរបាយការណ៍ manual សរសេរថា `PASSED (NO REAL TEST SIGNAL)` ដើម្បីកុំច្រលំថាជាភស្តុតាង។
+- **គ្មាន lock រវាងម៉ាស៊ីន**៖ មានតែ daemon មួយក្នុងមួយ folder លើម៉ាស៊ីនមួយ។ ច្បាប់ក្រុម៖ មនុស្ស ឬម៉ាស៊ីនតែមួយរត់ `/harness:auto` ក្នុងមួយ repo ហើយអ្នកផ្សេង claim backlog item ដោយ commit ការប្តូរ status មុន។
+
 - **Charter** (`.harness/charter.md`)៖ កំណត់ថា agent ស្វ័យប្រវត្តិអាចកែបានតែ `src/**`, `docs/**`, `tests/**`, `test/**`, `__tests__/**` ប៉ុណ្ណោះ ហើយហាមកែ `.harness/**`។
 - **ការបែងចែកឯកសារតេស្ត និង Root-Cause / Anti-Cheating**៖ `lead-qa` តែមួយគត់ជាម្ចាស់ឯកសារតេស្ត (`tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*`) — controller (`validateDelegation` និង `verify`) រារាំង ឬស្តារភ្លាមបើ `lead-dev` ប៉ះឯកសារតេស្ត។ លើការជួសជុល bug (`visible.mjs brief --bugfix`) ប្រព័ន្ធស្កេន `auditPatchSignals` រក `.skip`/`.todo` ក្នុងតេស្ត, `catch {}` ទទេលាក់ error និងទាមទារការពន្យល់ `Symptom / Root Cause / Blast Radius` (ហើយ `daemon.mjs` បញ្ចូល `[TWO-PHASE ROOT-CAUSE DIRECTIVE]` ពេល retry) មុននឹង `reviewer` អានពិនិត្យ diff។<!-- docs-drift:ignore -->
 - **ច្រកសុវត្ថិភាពមុន Commit (Pre-commit Patch Safety Gate)**៖ ទាំង `visible.mjs verify` និង `daemon.mjs` រត់ `scanPatchSafety` លើកូដដែលទើបបន្ថែម ដើម្បីរារាំង secret/API key/private key ឬ URL ដែលមានពាក្យសម្ងាត់ (ដោយបង្ហាញតែ `(redacted)` មិនដែលបោះពុម្ពតម្លៃសម្ងាត់ទេ) និង conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) មុននឹងអាចជាប់ឬបញ្ចូលទៅ `uat` ព្រមទាំងព្រមាន (មិនរារាំង) បើមាន `debugger`។

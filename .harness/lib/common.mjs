@@ -610,7 +610,15 @@ function collectWorkspacePackageDirs(root, globs) {
 export function detectVerifyCmd(root, config = {}) {
   const pkg = readJsonSafe(path.join(root, 'package.json'), null);
   const scripts = pkg?.scripts || {};
-  const hasScript = (s, n) => typeof s?.[n] === 'string' && s[n].trim() && !/no test specified/.test(s[n]);
+  // A script that can never fail is no check: the npm-init stub and obvious placeholders ("exit 0", "true", a bare echo).
+  const PLACEHOLDER_SCRIPT = /^\s*(?:exit\s+0|true|:|echo\b[^&|;<>]*)\s*;?\s*$/i;
+  let placeholderSeen = false;
+  const hasScript = (s, n) => {
+    const v = s?.[n];
+    if (typeof v !== 'string' || !v.trim() || /no test specified/.test(v)) return false;
+    if (PLACEHOLDER_SCRIPT.test(v)) { placeholderSeen = true; return false; }
+    return true;
+  };
   const has = (n) => hasScript(scripts, n);
   const exists = (f) => fs.existsSync(path.join(root, f));
   const pm = (exists('pnpm-lock.yaml') || exists('pnpm-workspace.yaml')) ? 'pnpm'
@@ -725,7 +733,7 @@ export function detectVerifyCmd(root, config = {}) {
     if (/^[ \t]*test[ \t]*:(?!=)/m.test(mk)) return { cmd: 'make test', source: `auto-detected from ${makeFile} target: test`, real: true };
   }
 
-  return { cmd: config.defaultVerifyCmd, source: 'default — NO real check (always passes)', real: false };
+  return { cmd: config.defaultVerifyCmd, source: placeholderSeen ? 'default — NO real check (a placeholder test script that cannot fail was ignored)' : 'default — NO real check (always passes)', real: false };
 }
 
 // ───────────────────────────── project file listing ─────────────────────────────
