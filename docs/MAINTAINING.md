@@ -55,7 +55,9 @@ Run these in the template repository, in order. Nothing goes to `lab` until all 
    references, docs-vs-source-of-truth drift (`test/lib/docs-drift.mjs`), the owner's rules and the website build. Free; it never calls an AI tool.
 4. A real run, only when an engine's command line or models changed, and only with the owner's OK (it spends quota):
    one tiny task in a scratch project (`npm run demo`, then the `hello.txt` task in `docs/ENGINES.md`).
-5. Bump `"version"` in `package.json` when the core changed (every install records it).
+5. Bump `"version"` in `package.json` when the core changed (every install records it), and add its entry to
+   `CHANGELOG.md`: what changed, who is affected, any config / permission / hook / rule-file change, and migration
+   steps. `npm test` fails when the current version has no entry; the installer prints the headlines on upgrade.
 6. Commit on `lab`, then ask the owner before pushing. A normal push only. Pushed from a session worktree? Also update
    the main folder (`git pull --ff-only` there): new sessions start from it. The session hook warns when it is behind.
 7. **Release**: when the lab version has been used for real and the owner says "release", copy it to the template:

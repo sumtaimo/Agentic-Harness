@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, which, helpIfAsked } from './lib/common.mjs';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, which, helpIfAsked, REMOVED_ENGINES } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { SKILL_MATCH, SKILL_SCHEMA_MAX, unsupportedSkillPointers, readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents, planScopeAdaptation } from './lib/governance.mjs';
 
@@ -37,6 +37,8 @@ try {
 
 console.log('\nAI engines — installed? and does "<engine> --help" list every flag in config.json?');
 for (const [name, p] of Object.entries(config.profiles)) {
+  // An engine the harness dropped (kept only because an older config.json still lists it): never probed, never used.
+  if (REMOVED_ENGINES[name]) { warn(`${name.padEnd(12)} no longer supported (${REMOVED_ENGINES[name]}); the harness never uses it. Remove "${name}" from "profiles" and "autoOrder" in .harness/config.json.`); continue; }
   const probe = probeEngine(p, { force: true });
   const flags = profileFlags(p);
   const preferred = name === config.activeProfile || (config.activeProfile === 'auto' && (config.autoOrder || [])[0] === name);
@@ -231,6 +233,13 @@ console.log('\nAgent team (hierarchy: orchestrator → leads → workers)');
         ok(`engine routing (headless --hierarchy): ${team.members.map((m) => `${m.id}→${m.engine || 'auto'}`).join(', ')}`);
         const down = [...new Set(routed.map((m) => m.engine))].filter((e) => !engineUsable(config, e).ok);
         if (down.length) warn(`routed engine(s) not usable now: ${down.join(', ')} → those members fall back to "auto". Re-run  node .harness/team.mjs auto-assign`);
+        // One engine for the whole team is a single point of failure: a usage limit / HTTP 429 stops every member at once.
+        const engines = [...new Set(team.members.map((m) => m.engine || 'auto'))];
+        if (engines.length === 1 && engines[0] !== 'auto' && team.members.length > 1) {
+          const spare = Object.keys(config.profiles).filter((k) => k !== engines[0] && !REMOVED_ENGINES[k] && engineUsable(config, k).ok);
+          if (spare.length) note(`every team member is routed to ${engines[0]}: if it hits a usage limit (HTTP 429), agents retry on ${spare.join(', ')} (QUOTA_FALLBACK). To spread the load: node .harness/team.mjs auto-assign`);
+          else warn(`every team member is routed to ${engines[0]} and no other engine is usable: one usage limit (HTTP 429) stops the whole team. Install/allow a second engine (node .harness/engines.mjs), then: node .harness/team.mjs auto-assign`);
+        }
       }
       const ag = syncAgents(team, roles, { check: true });
       if (ag.stale.length) warn(`editor agents out of sync with team.json (${ag.stale.join(', ')}): run  node .harness/team.mjs sync-agents  and restart the Claude Code session`);

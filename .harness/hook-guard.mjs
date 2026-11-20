@@ -11,6 +11,10 @@
  *     git reset --hard · git clean -f… · git push --force / -f · git push to a protected branch
  *     (config.json git.protectedBranches + git.integrationBranch, e.g. main, master, prod, uat)
  *
+ * It checks real command invocations: text a program only reads (a quoted `node -e "…"` argument, a heredoc fed to
+ * node) is data and is not matched; quoted shell code (`bash -c "…"`, `powershell -Command "…"`) and git's own
+ * arguments still are.
+ *
  * The owner runs those themselves in a terminal. Anything the guard cannot parse is allowed (exit 0): the permission
  * rules in .claude/settings.json and the controller's verify still apply. Zero dependencies.
  *   node .harness/hook-guard.mjs --help
@@ -56,8 +60,30 @@ function stripDataHeredocs(cmd) {
     (/\b(?:sh|bash|zsh|dash|pwsh|powershell|cmd)\b\s*(?:-\w+\s*)*$/.test(String(before).trim()) ? all : `${before}<<HEREDOC_DATA`));
 }
 
+/**
+ * Drop quoted arguments that are data for a program (node -e "…", python -c '…', echo "…", grep "…"). A quoted
+ * argument is kept (still checked) when it runs as shell code (bash -c "…", powershell -Command "…", cmd /c "…",
+ * eval "…") or is an argument of git push (git push origin "main").
+ */
+function stripDataQuotes(cmd) {
+  let out = ''; let i = 0;
+  while (i < cmd.length) {
+    const ch = cmd[i];
+    if (ch !== '"' && ch !== "'") { out += ch; i++; continue; }
+    let j = i + 1;
+    while (j < cmd.length && cmd[j] !== ch) { if (ch === '"' && cmd[j] === '\\') j++; j++; }
+    const quoted = cmd.slice(i, j + 1);
+    const segment = out.slice(Math.max(out.lastIndexOf(';'), out.lastIndexOf('&'), out.lastIndexOf('|'), out.lastIndexOf('\n')) + 1);
+    const runsAsShell = /\b(?:sh|bash|zsh|dash|pwsh|powershell|cmd)(?:\.exe)?\b[^"']*(?:\s-c|\s-Command|\s\/c|\s-EncodedCommand)\b[^"']*$|\beval\s*$|\bInvoke-Expression\s*$|\biex\s*$/i.test(segment);
+    const gitArg = /\bgit\s+push\b[^"']*$/.test(segment); // a quoted branch name still counts; a commit message does not
+    out += runsAsShell || gitArg ? ` ${quoted.slice(1, -1)} ` : '""'; // checked without its quote marks: git push "main" = git push main
+    i = j + 1;
+  }
+  return out;
+}
+
 function commandBlockReason(cmd, branches = protectedBranches()) {
-  const c = stripDataHeredocs(String(cmd || ''));
+  const c = stripDataQuotes(stripDataHeredocs(String(cmd || '')));
   if (/\bgit\s+reset\b[^;&|\n]*--hard\b/.test(c)) return 'git reset --hard throws away work';
   if (/\bgit\s+clean\b[^;&|\n]*\s-[a-z]*f/i.test(c)) return 'git clean -f deletes untracked files';
   for (const m of c.matchAll(/\bgit\s+push\b([^;&|\n]*)/g)) {

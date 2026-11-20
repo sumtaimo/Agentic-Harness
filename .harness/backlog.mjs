@@ -8,6 +8,7 @@
  *   node .harness/backlog.mjs ready <id>                 BACKLOG/BLOCKED → READY
  *   node .harness/backlog.mjs approve <id>               OK an item autopilot held ("needs your OK": big run or possible prompt injection) → READY
  *   node .harness/backlog.mjs block <id> "reason"        → BLOCKED
+ *   node .harness/backlog.mjs done <id> "how it was finished"   → DONE (work finished outside the harness; the note is kept)
  *   node .harness/backlog.mjs pop                        move the next READY item into the inbox now
  *   node .harness/backlog.mjs import <file|folder> [--reset-memory]
  *        backlog .json  → replaces backlog.json
@@ -104,6 +105,16 @@ switch (cmd) {
     if (has('--auto-plan')) item.autoPlan = true;
     b.tasks.push(item); writeBacklog(b);
     console.log(`Added ${item.id} [${item.status}] ${item.title}`);
+    break;
+  }
+
+  case 'done': { // work finished outside the harness (by hand, another tool): close the item with a note, never silently
+    const id = positional[0];
+    const note = positional.slice(1).join(' ').trim();
+    if (!note) { console.error(`Say how it was finished, e.g.: node .harness/backlog.mjs done ${id || '<id>'} "fixed by hand in commit abc123"`); process.exit(1); }
+    const item = updateBacklogItem(id, { status: 'DONE', completedAt: new Date().toISOString(), result: 'DONE_OUTSIDE_HARNESS', doneNote: note.slice(0, 300), blockedReason: undefined, needsApproval: undefined, awaitingJudge: undefined });
+    if (!item) { console.error(`No backlog item "${id}".`); process.exit(1); }
+    console.log(`${id} → DONE (finished outside the harness: ${note.slice(0, 300)})`);
     break;
   }
 

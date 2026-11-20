@@ -82,6 +82,7 @@ their own worktrees, local or cloud. The board is `node .harness/sessions.mjs bo
 - **Each AI tool is allowed once per person** (`node .harness/engines.mjs`); headless runs never use a tool you did not allow.
 - **Big runs ask first** (team or parallel mode, 3+ workers, the high model). In autopilot, headless or in Claude Code,
   they are held as "Needs your OK" and the rest goes on; approve one with `node .harness/backlog.mjs approve <id>`.
+  Work finished outside the harness (by hand, another tool) is closed with `node .harness/backlog.mjs done <id> "how it was finished"`.
 - **Daily caps and a usage report** for headless runs: `config.json` → `dailyLimits`, `node .harness/usage.mjs`. A run warns when a cap is at 80% or more.
   Editor-mode agents run inside your editor session (`claude-code` by default, or pass `--editor antigravity` / `cursor`
   to `visible.mjs brief` and `visible.mjs assign`), so they are tracked under separate editor keys (`claude-code`,

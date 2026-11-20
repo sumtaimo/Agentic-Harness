@@ -5788,6 +5788,13 @@ await test('v1.0.23 PreToolUse guard: blocks .env/.git/releases edits, reset --h
   const allowed = [['Write', { file_path: 'src/a.js' }], ['Write', { file_path: '.env.example' }], ['Edit', { file_path: '.harness/visible.mjs' }], ['Bash', { command: 'git push origin lab' }], ['Bash', { command: 'git push --follow-tags origin feature/x' }], ['Bash', { command: 'npm test' }], ['Read', { file_path: '.env' }],
     ['Bash', { command: "node - <<'EOF'\nconst doc = 'never run git reset --hard or git push -f origin main';\nEOF" }]]; // text a program reads is data
   assert(call('Bash', { command: 'bash <<EOF\ngit reset --hard\nEOF' }) === 2, 'a heredoc fed into a shell is still checked');
+  // quoted arguments: data for a program is allowed; shell code and git's own arguments are still checked
+  for (const c of ['node -e "console.log(\'never run git reset --hard\')"', "python -c 'print(\"git push -f origin main\")'", 'echo "git clean -fd is dangerous"', 'git commit -m "docs: explain git reset --hard"', 'grep -n "git push --force" README.md']) {
+    assert(call('Bash', { command: c }) === 0, `quoted data wrongly blocked: ${c}`);
+  }
+  for (const c of ['bash -c "git reset --hard"', "sh -c 'git push -f origin lab'", 'powershell -Command "git clean -fd"', 'git push origin "main"', 'cmd /c "git push origin prod"']) {
+    assert(call('Bash', { command: c }) === 2, `shell code in quotes not blocked: ${c}`);
+  }
   for (const [t, i] of allowed) assert(call(t, i) === 0, `wrongly blocked: ${t} ${JSON.stringify(i)}`);
   assert(spawnSync(process.execPath, ['.harness/hook-guard.mjs'], { cwd: d, input: 'not json', encoding: 'utf8' }).status === 0, 'unparseable input must be allowed');
   // installed project: the harness core is blocked too
@@ -5811,6 +5818,42 @@ await test('v1.0.23 golden eval suite (test/evals/golden.json): every judge deci
   for (const t of gold.injection.benign) if (g.scanInjection(t).length) wrong.push(`false positive: ${t} (${g.scanInjection(t).map((h) => h.reason).join('; ')})`);
   assert(!wrong.length, wrong.join('\n'));
   assert(gold.judge.length >= 7 && gold.injection.malicious.length >= 10 && gold.injection.benign.length >= 6, 'golden set too small');
+});
+
+await test('v1.0.24 backlog done: work finished outside the harness is closed with a required note; doctor flags a removed engine and a one-engine team', () => {
+  const d = sandbox();
+  node(d, ['.harness/backlog.mjs', 'add', 'Hand fix', '--goal', 'fixed by hand', '--files', 'src/h.js', '--status', 'READY']);
+  const id = json(path.join(d, '.harness', 'backlog.json')).tasks[0].id;
+  const noNote = node(d, ['.harness/backlog.mjs', 'done', id]);
+  assert(noNote.status === 1 && /Say how it was finished/.test(noNote.stderr), 'done without a note must be refused');
+  const ok = node(d, ['.harness/backlog.mjs', 'done', id, 'fixed by hand in commit abc123']);
+  const item = json(path.join(d, '.harness', 'backlog.json')).tasks[0];
+  assert(ok.status === 0 && item.status === 'DONE' && item.result === 'DONE_OUTSIDE_HARNESS' && item.doneNote === 'fixed by hand in commit abc123', JSON.stringify(item));
+  assert(node(d, ['.harness/backlog.mjs', 'done', 'NOPE', 'x']).status === 1, 'unknown id');
+  // doctor: an old config that still lists a removed engine gets a clear warning, not a failed probe
+  const f = path.join(d, '.harness', 'config.json'); const c = json(f);
+  c.profiles.orca = { verified: false, binary: 'orca', args: ['--non-interactive'], promptVia: 'stdin' };
+  fs.writeFileSync(f, JSON.stringify(c, null, 2));
+  const doc = node(d, ['.harness/doctor.mjs']);
+  assert(/orca\s+no longer supported/.test(doc.stdout) && !/✖.*orca/.test(doc.stdout), doc.stdout.split('\n').filter((l) => /orca/.test(l)).join('\n'));
+  // doctor: every member on one engine with no spare → warning about the single point of failure
+  const tf = path.join(d, '.harness', 'team.json'); const t = json(tf);
+  t.members.forEach((m) => { m.engine = 'mock'; }); fs.writeFileSync(tf, JSON.stringify(t, null, 2));
+  delete c.profiles.orca; fs.writeFileSync(f, JSON.stringify(c, null, 2));
+  const doc2 = node(d, ['.harness/doctor.mjs'], { HARNESS_ENGINES: 'mock' });
+  assert(/every team member is routed to mock/.test(doc2.stdout), doc2.stdout.split('\n').filter((l) => /routed|routing/.test(l)).join('\n'));
+});
+
+await test('v1.0.24 CHANGELOG: one entry per version incl. the current one; an upgrade prints "what\'s new", a fresh install does not', () => {
+  const log = fs.readFileSync(path.join(REPO, 'CHANGELOG.md'), 'utf8');
+  const version = json(path.join(REPO, 'package.json')).version;
+  for (const v of ['1.0.19', '1.0.20', '1.0.21', '1.0.22', '1.0.23', version]) assert(new RegExp(`^## ${v.replace(/\./g, '\\.')} — \\d{4}-\\d{2}-\\d{2}`, 'm').test(log), `CHANGELOG.md has no entry for ${v}`);
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-changelog-'));
+  const first = node(REPO, ['install.mjs', d, '--no-auto-assign', '--no-skills']);
+  assert(first.status === 0 && !/What's new/.test(first.stdout), 'a fresh install must not print what\'s new');
+  const mf = path.join(d, '.harness', 'MANIFEST.json'); const m = json(mf); m.version = '1.0.18'; fs.writeFileSync(mf, JSON.stringify(m));
+  const up = node(REPO, ['install.mjs', d, '--no-auto-assign', '--no-skills']);
+  assert(up.status === 0 && up.stdout.includes(`What's new (1.0.18 → ${version})`) && /1\.0\.23\n\s+• LLM judge gate/.test(up.stdout) && !/^\s+1\.0\.18$/m.test(up.stdout), up.stdout.split("What's new")[1] || up.stdout.slice(-800));
 });
 
 const judgeOn = (d) => { const f = path.join(d, '.harness', 'config.json'); const c = json(f); c.review = { required: true, headless: true, minScore: 3 }; fs.writeFileSync(f, JSON.stringify(c, null, 2)); };

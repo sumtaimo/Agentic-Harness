@@ -132,6 +132,7 @@ Pick one:
 | A **new project** | On GitHub click **Use this template → Create a new repository**, then open it in your editor. |
 | A copy without GitHub | Click **Code → Download ZIP**, unzip it, open the folder in your editor. |
 | Add it to an **existing project** | Download/clone this repo, then run `node install.mjs /path/to/your/project`. It never overwrites your files: existing `AGENTS.md`, `CLAUDE.md`, `.vscode/tasks.json` etc. get a harness section *added*. |
+| **Update** a project that has it | Run `npx github:sumtaimo/Agentic-Harness#release .` in the project. It prints "What's new" since your version; full release notes (settings, hooks, migration steps) are in [`CHANGELOG.md`](CHANGELOG.md). |
 
 ### Hand it to another team (5 minutes, nothing installed globally)
 This repo is a template any team can drop into **their own project**. Everything is plain files in the project:

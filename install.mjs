@@ -169,12 +169,14 @@ copyDir(path.join(SRC, '.harness'), path.join(target, '.harness'));
 
 // Fingerprint of the harness core code, so doctor can tell when a project (or an AI in it) edited the template's files.
 const { hashCore, winCommandLine } = await import(pathToFileURL(path.join(target, '.harness', 'lib', 'common.mjs')).href);
+let upgradedFrom = null; let upgradedTo = null; // for the "what's new" summary at the end
 {
   const version = (() => { try { return JSON.parse(fs.readFileSync(path.join(SRC, 'package.json'), 'utf8')).version; } catch { return null; } })();
   // installing the same version again must change nothing: keep the first installedAt while version and fingerprints are identical
   const files = hashCore(target);
   const before = (() => { try { return JSON.parse(fs.readFileSync(path.join(target, '.harness', 'MANIFEST.json'), 'utf8')); } catch { return null; } })();
   const same = before && before.template === 'agentic-harness' && before.version === version && JSON.stringify(before.files) === JSON.stringify(files) && typeof before.installedAt === 'string';
+  if (before?.version && version && before.version !== version) { upgradedFrom = before.version; upgradedTo = version; }
   fs.writeFileSync(path.join(target, '.harness', 'MANIFEST.json'), `${JSON.stringify({ template: 'agentic-harness', version, installedAt: same ? before.installedAt : new Date().toISOString(), note: 'Fingerprints of the harness core code from the template. Do not edit: doctor compares them; re-install to update.', files }, null, 2)}
 `);
   report.push('wrote  .harness/MANIFEST.json (fingerprints of the harness core)');
@@ -455,3 +457,22 @@ Next steps:
                         node .harness/dispatch.mjs --goal "<what you want>" --hierarchy --max-cost 2 --wait
   Autonomous mode is ON by default; it only acts on READY tasks you add. Turn it off: set "- autonomous: off" in .harness/charter.md
   (or install with  --autonomous off ). Every file above is plain text in your project; nothing is installed globally.`);
+
+// What's new: on an upgrade, the CHANGELOG.md headlines of every version after the one this project had.
+if (upgradedFrom && upgradedTo) {
+  const num = (v) => String(v).split('.').map((n) => Number(n) || 0);
+  const newer = (a, b) => { const x = num(a); const y = num(b); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
+  let text = ''; try { text = fs.readFileSync(path.join(SRC, 'CHANGELOG.md'), 'utf8'); } catch { /* an older template without a changelog */ }
+  const entries = [...text.matchAll(/^## (\d+\.\d+\.\d+)[^\n]*\n([\s\S]*?)(?=^## |(?![\s\S]))/gm)].filter(([, v]) => newer(v, upgradedFrom) && !newer(v, upgradedTo));
+  console.log(`\nWhat's new (${upgradedFrom} → ${upgradedTo}):`);
+  if (!entries.length) console.log('  (no CHANGELOG.md entries found; see the release branch history)');
+  for (const [, v, body] of entries) {
+    console.log(`  ${v}`);
+    for (const m of body.matchAll(/^- (.+)$/gm)) {
+      const bold = m[1].match(/^\*\*([^*]+)\*\*/);
+      const line = (bold ? bold[1] : m[1].replace(/\*\*/g, '').split(/(?<=\.)\s/)[0]).replace(/\s+/g, ' ').trim();
+      console.log(`    • ${line.length > 110 ? `${line.slice(0, 107)}…` : line}`);
+    }
+  }
+  console.log('  Details, settings/hook changes and migration steps: CHANGELOG.md in the harness repository (branch release).');
+}

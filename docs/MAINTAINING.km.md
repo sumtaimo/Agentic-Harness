@@ -55,7 +55,9 @@ backlog និង memory របស់អ្នកត្រូវបានរក�
    ភាពត្រូវគ្នារវាងឯកសារនិងកូដ (`test/lib/docs-drift.mjs`) ច្បាប់របស់ម្ចាស់ និងការ build website។ ឥតគិតថ្លៃ ព្រោះវាមិនដែលហៅឧបករណ៍ AI ទេ។
 4. ការរត់ពិត៖ តែពេល command line ឬ models របស់ engine ផ្លាស់ប្តូរ ហើយតែពេលម្ចាស់យល់ព្រម (វាប្រើ quota)។
    ការងារតូចមួយក្នុង project សាកល្បង (`npm run demo` រួចការងារ `hello.txt` ក្នុង `docs/ENGINES.md`)។
-5. បង្កើន `"version"` ក្នុង `package.json` ពេលកូដស្នូលផ្លាស់ប្តូរ (ការដំឡើងនីមួយៗកត់ត្រាវា)។
+5. បង្កើន `"version"` ក្នុង `package.json` ពេលកូដស្នូលផ្លាស់ប្តូរ (ការដំឡើងនីមួយៗកត់ត្រាវា) ហើយបន្ថែម entry របស់វាក្នុង
+   `CHANGELOG.md`៖ អ្វីដែលផ្លាស់ប្តូរ, អ្នកណាត្រូវប៉ះពាល់, ការផ្លាស់ប្តូរ config / permission / hook / rule-file, និងជំហាន migration។
+   `npm test` បរាជ័យ បើ version បច្ចុប្បន្នគ្មាន entry ហើយ installer បង្ហាញចំណងជើងទាំងនោះពេល upgrade។
 6. Commit លើ `lab` រួចសួរម្ចាស់មុន push។ Push ធម្មតាប៉ុណ្ណោះ។ បើ push ពី worktree របស់ session សូមធ្វើបច្ចុប្បន្នភាព folder មេផងដែរ
    (`git pull --ff-only` នៅទីនោះ)៖ session ថ្មីចាប់ផ្តើមពីវា។ Hook ពេលចាប់ផ្តើម session ព្រមាន បើវានៅក្រោយ។
 7. **ចេញផ្សាយ**៖ ពេលកំណែក្នុង lab ត្រូវបានប្រើពិតរួច ហើយម្ចាស់និយាយថា «release» ចម្លងវាទៅ template៖
