@@ -113,6 +113,13 @@ export const SKILL_COMPOSITION = 'additive-union';
  * such as Skill Foundry may write pointers with `autoApply: false` and rely on keywords. Read the flag, never a version.
  */
 export const SKILL_MATCH = 'keywords-with-explicit';
+/** Capability flag: a keyword matches when it appears anywhere in the task text (case-insensitive substring, not whole word). */
+export const SKILL_KEYWORD_MATCH = 'substring';
+/** Highest SKILL.md `schema_version` (format of the skill pointer) this harness understands; a missing value means 1. */
+export const SKILL_SCHEMA_MAX = 1;
+const unsupportedSkills = new Map();
+/** Pointers skipped by loadSkills because their schema_version is newer than SKILL_SCHEMA_MAX: [{ name, schemaVersion }]. */
+export const unsupportedSkillPointers = () => [...unsupportedSkills].map(([name, schemaVersion]) => ({ name, schemaVersion }));
 
 /** Load .harness/roles/*.json keyed by role name (e.g. DEV_ENGINEER). */
 export function loadRoles() {
@@ -247,8 +254,16 @@ export function loadSkills() {
       const raw = fs.readFileSync(file, 'utf8');
       const { meta, body } = parseFrontmatter(raw);
       const name = String(meta.name || dir.name);
+      const sv = meta.schema_version === undefined ? 1 : Number(meta.schema_version);
+      if (Number.isFinite(sv) && sv > SKILL_SCHEMA_MAX) {
+        if (!unsupportedSkills.has(name)) process.stderr.write(`SKILL_SCHEMA_UNSUPPORTED ${name} (schema_version ${sv} > ${SKILL_SCHEMA_MAX}; update the harness)\n`);
+        unsupportedSkills.set(name, sv);
+        continue;
+      }
+      unsupportedSkills.delete(name);
       skills[name] = {
         name,
+        schemaVersion: Number.isFinite(sv) ? sv : 1,
         description: String(meta.description || ''),
         roles: (Array.isArray(meta.roles) ? meta.roles : []).map((r) => String(r).toUpperCase()),
         allowedTools: Array.isArray(meta.allowedTools) ? meta.allowedTools : [],

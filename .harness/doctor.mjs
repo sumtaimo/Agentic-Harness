@@ -11,7 +11,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, which, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
-import { SKILL_MATCH, readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents, planScopeAdaptation } from './lib/governance.mjs';
+import { SKILL_MATCH, SKILL_SCHEMA_MAX, unsupportedSkillPointers, readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents, planScopeAdaptation } from './lib/governance.mjs';
 
 ensureDirs();
 const ok = (m) => console.log(`  ✔ ${m}`);
@@ -165,6 +165,7 @@ const roles = loadRoles();
 const roleNames = Object.keys(roles);
 roleNames.length ? ok(`roles: ${roleNames.join(', ')}`) : warn('No roles in .harness/roles/ — workers run without personas or per-role tool limits.');
 const skills = loadSkills();
+for (const u of unsupportedSkillPointers()) warn(`skill ${u.name}: pointer schema_version ${u.schemaVersion} is newer than this harness understands (${SKILL_SCHEMA_MAX}), so it is skipped. Fix: update the harness (npx github:sumtaimo/Agentic-Harness#release .)`);
 for (const s of Object.values(skills)) {
   for (const r of s.roles) if (roles[r]) { const ng = skillRulesNotGranted(roles[r], [s]); if (ng.length) warn(`skill ${s.name} asks for tool rules role ${r} does not allow (ignored): ${ng.map((x) => x.split(': ')[1]).join(', ')}`); }
   const badRoles = s.roles.filter((r) => !roles[r]);
