@@ -55,6 +55,22 @@ if (prompt.startsWith('[HARNESS PO_ARCHITECT]')) {
   process.exit(0);
 }
 
+// JUDGE mode (headless reviewer gate): APPROVE by default; "JUDGE_BLOCK_CYCLES=N" anywhere in the task blocks cycles 1..N
+// with a high finding; "JUDGE_GARBAGE" answers without a verdict (the controller must fail closed).
+if (prompt.startsWith('[HARNESS JUDGE]')) {
+  fs.appendFileSync(path.join(MP, 'judge-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);
+  fs.writeFileSync(path.join(MP, 'judge.txt'), prompt);
+  const cycle = Number((prompt.match(/Cycle: (\d+)/) || [])[1] || 1);
+  const blockUpTo = Number((prompt.match(/JUDGE_BLOCK_CYCLES=(\d+)/) || [])[1] || 0);
+  const scores = { correctness: 5, acceptance: 5, tests: 5, rootCause: 5, safety: 5 };
+  const verdict = cycle <= blockUpTo
+    ? { verdict: 'NEEDS_FIX', scores: { ...scores, correctness: 2 }, findings: [{ severity: 'high', file: 'src/x.js', line: 1, issue: 'mock judge: wrong behavior', fix: 'apply the FIX line' }], summary: 'needs a fix' }
+    : { verdict: 'APPROVE', scores, findings: [], summary: 'mock judge approves' };
+  const text = prompt.includes('JUDGE_GARBAGE') ? 'Looks fine to me.' : `Reviewed.\n\`\`\`json\n${JSON.stringify(verdict)}\n\`\`\``;
+  console.log(JSON.stringify({ type: 'result', is_error: false, result: text, total_cost_usd: mockCost }));
+  process.exit(0);
+}
+
 // Planner mode: echo back the plan embedded in the goal as "PLAN_JSON {...}" (one line).
 if (prompt.startsWith('[HARNESS PLANNER]')) {
   fs.appendFileSync(path.join(MP, 'planner-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);

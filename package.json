@@ -11,6 +11,7 @@
     "ui": "node .harness/ui.mjs",
     "test": "node test/run-tests.mjs && node --test test/engine-probe.test.mjs",
     "test:live": "node test/live-e2e.mjs",
+    "eval": "node test/eval-live.mjs",
     "demo": "node examples/make-demo.mjs",
     "run": "node .harness/dispatch.mjs --mode normal --wait",
     "normal": "node .harness/dispatch.mjs --mode normal --wait",

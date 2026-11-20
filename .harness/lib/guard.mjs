@@ -114,7 +114,7 @@ const INJECTION_PATTERNS = [
   [/\b(?:ignore|disregard|forget|override)\s+(?:all\s+|any\s+|the\s+|your\s+)*(?:previous|prior|above|earlier|system|safety)?\s*(?:instructions|rules|prompts?|guardrails|constraints)\b/i, 'asks the agent to ignore its instructions'],
   [/\byou\s+are\s+(?:now|no longer)\b/i, 'tries to replace the agent\'s role'],
   [/<\/?\s*(?:system|assistant|im_start|im_end)\s*>|\[\/?(?:SYSTEM|INST)\]/i, 'contains fake system/assistant markers'],
-  [/\b(?:reveal|print|show|send|upload|post|exfiltrate|leak)\b[^.\n]{0,50}\b(?:system prompt|api[_ -]?keys?|secrets?|tokens?|credentials?|passwords?|\.env\b|ssh key)/i, 'asks to reveal secrets or the system prompt'],
+  [/\b(?:reveal|print|dump|send|upload|exfiltrate|leak|echo|cat)\b[^.\n]{0,50}(?:system prompt|api[_ -]?keys?|secrets?|credentials?|passwords?|\.env\b|ssh key|tokens? (?:to|from)\b)/i, 'asks to reveal secrets or the system prompt'],
   [/\b(?:curl|wget|iwr|Invoke-WebRequest|irm)\b[^\n|]*\|\s*(?:sh|bash|zsh|iex|node|python3?|pwsh|powershell)\b/i, 'pipes a download into a shell'],
   [/\bgit\s+push\b[^\n]*(?:--force\b|\s-f\b)|\bgit\s+reset\s+--hard\b|\brm\s+-rf\s+(?:\/|~|\*|\.\s|\.$)/i, 'asks for a destructive git/shell command'],
   [/\b(?:do not|don't|never|without)\s+(?:ask(?:ing)?|tell(?:ing)?|inform(?:ing)?|notify(?:ing)?)\s+(?:the\s+)?(?:user|human|owner|po|product owner)\b/i, 'asks to hide actions from the human'],
@@ -152,4 +152,81 @@ export function injectionHoldReason(item) {
   const hits = scanInjection(taskText(item));
   if (!hits.length) return '';
   return `Possible prompt injection in the task text (${hits.map((h) => `${h.reason}: "${h.excerpt}"`).join('; ')}). Read it; if it is safe, approve: node .harness/backlog.mjs approve ${item.id}`;
+}
+
+// ───────────────────────────── 3. Review policy (judge required?) ─────────────────────────────
+
+const DOC_FILE = /(^|\/)docs\/|\.(md|mdx|txt|rst|adoc)$/i;
+const TEST_FILE = /(^|\/)(tests?|__tests__)\/|\.(test|spec)\.[^/]+$/i;
+
+/** A changed file the judge must review: code or config, not docs-only and not test-only changes. */
+export function isReviewableFile(file) {
+  const f = String(file || '').replace(/\\/g, '/').replace(/^[+~-] /, '');
+  return Boolean(f) && !DOC_FILE.test(f) && !TEST_FILE.test(f);
+}
+
+/**
+ * config.review: { required: true|false, minScore: 1-5, headless: true|false }. Shipped default: required, min 3.
+ * `required: false` turns the judge into advice only (the old behaviour); `headless: false` skips it in the daemon.
+ */
+export function reviewPolicy(config = {}) {
+  const r = config.review || {};
+  return {
+    required: r.required !== false,
+    headless: r.headless !== false,
+    minScore: Number.isInteger(r.minScore) && r.minScore >= 1 && r.minScore <= 5 ? r.minScore : JUDGE_DEFAULT_MIN_SCORE
+  };
+}
+
+/** Did every required judge approve this editor run? (reviewer always; security too when it gave a verdict) */
+export function judgeApproved(run) {
+  const reviews = run?.reviews || {};
+  return Boolean(reviews.reviewer?.approved) && Object.values(reviews).every((r) => r.approved);
+}
+
+// ───────────────────────────── 4. Planted instructions in a change ─────────────────────────────
+
+/**
+ * Injection text an agent ADDED to a file (present now, absent before). Non-blocking: security docs may quote such
+ * text on purpose; it is shown to the judge and the human. `pairs` = [{ file, before, after }].
+ */
+export function scanAddedInjection(pairs = []) {
+  const out = [];
+  for (const { file, before = '', after = '' } of pairs) {
+    const was = new Set(scanInjection(before).map((h) => h.reason));
+    for (const h of scanInjection(after)) if (!was.has(h.reason)) out.push(`possible planted instruction in ${file}: ${h.reason} ("${h.excerpt}")`);
+  }
+  return out;
+}
+
+// ───────────────────────────── 5. Prompt size guard ─────────────────────────────
+
+export const DEFAULT_MAX_PROMPT_CHARS = 120000;
+
+/** Keep head and tail of a long text, cut the middle. */
+export function clipMiddle(text, max) {
+  const s = String(text ?? '');
+  if (s.length <= max) return s;
+  const head = Math.floor(max * 0.6); const tail = Math.max(0, max - head - 40);
+  return `${s.slice(0, head)}\n…[${s.length - head - tail} chars cut to fit the prompt limit]…\n${s.slice(-tail)}`;
+}
+
+/**
+ * Fit prompt sections into maxChars: the sections marked `shrink` (memory, error trace, repo map) are clipped first,
+ * largest first; the task itself is cut last. Returns { text, clipped: [section names] }.
+ */
+export function fitPrompt(sections, maxChars = DEFAULT_MAX_PROMPT_CHARS) {
+  const parts = sections.filter((s) => s && s.text).map((s) => ({ ...s, text: String(s.text) }));
+  const total = () => parts.reduce((n, p) => n + p.text.length + 2, 0);
+  const clipped = [];
+  for (const p of [...parts].filter((x) => x.shrink).sort((a, b) => b.text.length - a.text.length)) {
+    if (total() <= maxChars) break;
+    const room = Math.max(1500, p.text.length - (total() - maxChars));
+    if (room < p.text.length) { p.text = clipMiddle(p.text, room); clipped.push(p.name); }
+  }
+  if (total() > maxChars) {
+    const big = [...parts].sort((a, b) => b.text.length - a.text.length)[0];
+    big.text = clipMiddle(big.text, Math.max(2000, big.text.length - (total() - maxChars))); clipped.push(big.name);
+  }
+  return { text: parts.map((p) => p.text).join('\n\n'), clipped };
 }

@@ -1,0 +1,3 @@
+# Live eval results (npm run eval) are per machine and engine: never committed
+*
+!.gitignore

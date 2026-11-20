@@ -563,6 +563,7 @@ node .harness/status.mjs --log 25        # state + recent JSONL events
 node .harness/watch.mjs --job <id>       # live feed of every agent action until that job finishes
 node test/run-tests.mjs                  # end-to-end tests with a mock engine (no AI account needed, free)
 npm run audit                            # template release audit (installs, commands, docs-drift, owner rules; --site builds website)
+npm run eval -- --engine claude          # LIVE eval: real engine on golden tasks (feature, root-cause fix, injection resistance), hidden checks, judge verdicts, regression vs last run; spends quota
 npm run test:live                        # REAL Claude agents end to end, 6 scenarios (manual task, autonomous uat run, headless team, the editor workflow with named agents, autonomous editor mode, editor config); ~$2.5, needs `claude` logged in
 node .harness/visible.mjs status          # runs of the editor workflow
 node .harness/visible.mjs brief --bugfix --goal "…"   # start a bug-fix editor run (root-cause & anti-cheat audit)

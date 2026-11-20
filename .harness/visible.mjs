@@ -29,7 +29,7 @@ import { spawnSync } from 'node:child_process';
 import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, buildRepoMap, memoryContext, recordSession, remember, normalizeTarget, clipErrorTrace, diagnoseVerifyFailure, formatDiagnosis, helpIfAsked, pendingCostReasons, aiUsageSince, usageTodayLine } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor, runsNode, ENGINE_SCRIPTS, isTestFilePath, auditPatchSignals, scanPatchSafety } from './lib/governance.mjs';
-import { JUDGE_AGENTS, JUDGE_DEFAULT_MIN_SCORE, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, UNTRUSTED_CONTENT_RULE, scanInjection, taskText, injectionHoldReason } from './lib/guard.mjs';
+import { JUDGE_AGENTS, JUDGE_DEFAULT_MIN_SCORE, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, UNTRUSTED_CONTENT_RULE, scanInjection, taskText, injectionHoldReason, isReviewableFile, reviewPolicy, judgeApproved, scanAddedInjection } from './lib/guard.mjs';
 import { VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, listVisibleRuns, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
 
 if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must not use the editor workflow.'); process.exit(2); }
@@ -146,6 +146,8 @@ function reportText(run, v) {
   if (v.violations.length) L.push('', 'Violations (changes outside the assigned files):', ...v.violations.map((x) => `  ✖ ${x}`));
   if (v.reverted.length) L.push(`         The controller reverted ${v.reverted.length} out-of-scope change(s): ${v.reverted.join(', ')}`);
   if (v.revertFailed?.length) L.push(`  ⚠ COULD NOT be reverted automatically (secrets are never copied): ${v.revertFailed.join(', ')} — check and restore them by hand before anything else.`);
+  if (v.status === 'PASSED' && run.reviewRequired) L.push('', 'JUDGE REQUIRED: this code change is not DONE until the reviewer judge approves it.',
+    `  Start the read-only reviewer (and security when input, auth, files, network or secrets are touched), then: node .harness/visible.mjs judge ${run.id} --agent reviewer --file <report>`);
   if (v.status === 'PASSED' && run.acceptanceCriteria?.length) L.push('', 'Acceptance criteria — confirm each one yourself (a passing check does not prove them by itself):', ...run.acceptanceCriteria.map((c) => `  ☐ ${c}`));
   L.push('', `Cycle ${run.cycles}/${config.maxCycles ?? 3}.`);
   if (v.status === 'PASSED') L.push('', 'Next for you: review the changes (git diff) and commit them when you are happy. Cost: not measured in the editor workflow (see the agent panel for tokens).');
@@ -197,6 +199,8 @@ function brief() {
   let item = null; const auto = wantNext || !!sid;
   if (auto) {
     if (!charter.autonomous) die('Autonomous mode is off in .harness/charter.md ("- autonomous: off"). Use --goal, or ask the owner to turn it on.', 1);
+    const awaiting = allRuns().find((r) => r.status === 'PASSED' && r.reviewRequired && !judgeApproved(r));
+    if (awaiting) die(`Autonomy is paused: run ${awaiting.id} passed its check but the judge has not approved it yet. Run the reviewer and: node .harness/visible.mjs judge ${awaiting.id} --agent reviewer --file <report>`, 4);
     if (sid) {
       const runs = sessionRuns(sid);
       if (runs.length >= charter.maxAutoTasksPerRun) die(`Auto budget used: ${runs.length}/${charter.maxAutoTasksPerRun} task(s) in this session (charter maxAutoTasksPerRun). Report to the human.`, 3);
@@ -423,6 +427,16 @@ function verify() {
   const audit = auditPatchSignals({ baseFiles: auditBase, curFiles: auditCur, root: ROOT, baselineDir, testsChangedAfterFail, reports, cycle: run.cycles, isBugFix, devIds });
   const safety = scanPatchSafety({ baseFiles: auditBase, curFiles: auditCur, root: ROOT, baselineDir });
   const passed = !violations.length && check.ok && !safety.blocked;
+  // Instructions an agent planted in a file (non-blocking: shown to the judge and the human)
+  const planted = scanAddedInjection(cleanChanged.filter((f) => f in cur).map((f) => {
+    const read = (p) => { try { const st = fs.statSync(p); return st.size <= 512 * 1024 ? fs.readFileSync(p, 'utf8') : ''; } catch { return ''; } };
+    return { file: f, before: baselineDir ? read(path.join(baselineDir, f)) : '', after: read(path.join(ROOT, f)) };
+  }));
+  // LLM judge gate: a passing code change is not DONE until the reviewer judge approves it (config.review)
+  const policy = reviewPolicy(config);
+  const needJudge = passed && policy.required && d.all.some((f) => !violating.includes(f) && isReviewableFile(f));
+  delete run.reviews; fs.rmSync(path.join(runDir(run.id), 'judge.md'), { force: true });
+  run.reviewRequired = needJudge;
   const maxCycles = config.maxCycles ?? 3;
   const halted = !passed && run.cycles >= maxCycles;
   let autoRolledBack = false;
@@ -451,6 +465,7 @@ function verify() {
     check: check.text,
     antiCheatSignals: audit.signals,
     patchSafety: { blocking: safety.blocking, warnings: safety.warnings },
+    plantedInstructions: planted,
     ...(diagnosis ? { diagnosis } : {}),
     ...(rawTrace ? { trace: clipErrorTrace(rawTrace, 4000) } : {})
   };
@@ -472,14 +487,18 @@ function verify() {
     testsChangedAfterFail,
     testsDeleted,
     antiCheatSignals: audit.signals,
-    patchSafety: { blocking: safety.blocking, warnings: safety.warnings },
+    patchSafety: { blocking: safety.blocking, warnings: [...safety.warnings, ...planted] },
     diagnosis
   };
   const text = reportText(run, v);
   fs.writeFileSync(path.join(runDir(run.id), 'report.md'), `${text}\n`);
   saveRun(run);
 
-  if (passed && run.backlogId) updateBacklogItem(run.backlogId, { status: 'DONE', completedAt: new Date().toISOString(), result: 'VERIFIED', cyclesUsed: run.cycles, visibleRun: run.id });
+  if (passed && run.backlogId) {
+    updateBacklogItem(run.backlogId, needJudge
+      ? { status: 'IN_PROGRESS', awaitingJudge: true, cyclesUsed: run.cycles, visibleRun: run.id }
+      : { status: 'DONE', completedAt: new Date().toISOString(), result: 'VERIFIED', cyclesUsed: run.cycles, visibleRun: run.id });
+  }
   if (halted && run.backlogId) updateBacklogItem(run.backlogId, { status: 'BLOCKED', blockedReason: `HALTED_HITL_REQUIRED after ${run.cycles} cycles: ${violations[0] || safety.blocking[0] || check.text.split('\n')[0]}` });
   const recordAuto = (config.memory || {}).autoLessons !== false && !String(run.id).startsWith('V-test');
   if (recordAuto) {
@@ -502,7 +521,7 @@ function verify() {
       if (recordAuto && !passed) remember(`"${run.title}": editor run ${run.status} — ${(violations[0] || safety.blocking[0] || check.text.split('\n')[0]).replace(/\s+/g, ' ').slice(0, 200)}. Needs a human decision before retrying.`, FILES.autoLessons);
     } catch { /* memory is best effort */ }
   }
-  if (run.baseline.dir && (passed || (halted && autoRolledBack)) && fs.existsSync(path.join(ROOT, run.baseline.dir))) {
+  if (run.baseline.dir && ((passed && !needJudge) || (halted && autoRolledBack)) && fs.existsSync(path.join(ROOT, run.baseline.dir))) {
     fs.rmSync(path.join(ROOT, run.baseline.dir), { recursive: true, force: true });
     if (halted && autoRolledBack) { run.baseline.rollbackAvailable = false; saveRun(run); }
   }
@@ -535,15 +554,16 @@ function judge() {
   fs.writeFileSync(path.join(runDir(run.id), 'judge.md'), `${text}\n`);
   if (run.backlogId) {
     if (blockedBy.length) updateBacklogItem(run.backlogId, { status: 'BLOCKED', blockedReason: `REVIEW_BLOCKED by ${blockedBy.join(', ')}: ${run.reviews[blockedBy[0]].reasons[0]}. Fix, then verify run ${run.id} again.` });
-    else updateBacklogItem(run.backlogId, { status: 'DONE', result: 'VERIFIED+JUDGED', blockedReason: undefined });
+    else if (judgeApproved(run)) updateBacklogItem(run.backlogId, { status: 'DONE', completedAt: new Date().toISOString(), result: 'VERIFIED+JUDGED', awaitingJudge: undefined, blockedReason: undefined });
   }
+  if (!blockedBy.length && judgeApproved(run) && run.baseline?.dir && fs.existsSync(path.join(ROOT, run.baseline.dir))) fs.rmSync(path.join(ROOT, run.baseline.dir), { recursive: true, force: true });
   if (!decision.approved && (config.memory || {}).autoLessons !== false && !String(run.id).startsWith('V-test')) {
     try { remember(`Judge (${agent}) blocked "${run.title}": ${decision.reasons[0]}${verdict.findings[0] ? ` — ${verdict.findings[0].issue.slice(0, 120)}` : ''}.`, FILES.autoLessons); } catch { /* memory is best effort */ }
   }
   console.log(text);
   console.log(blockedBy.length
     ? `\nREVIEW_BLOCKED: send the findings to the responsible lead, then run: node .harness/visible.mjs verify ${run.id} (and judge it again).`
-    : '\nJUDGE APPROVED: the human reviews the diff and decides whether to commit.');
+    : judgeApproved(run) ? '\nJUDGE APPROVED: the human reviews the diff and decides whether to commit.' : '\nRecorded. The reviewer verdict is still needed: node .harness/visible.mjs judge ' + run.id + ' --agent reviewer --file <report>');
   process.exit(blockedBy.length ? 1 : 0);
 }
 
@@ -650,7 +670,8 @@ function status() {
         : r.lastVerify.patchSafety?.blocking?.length ? '  [PATCH_SAFETY]' : '')
       : '';
     const job = r.pendingJobId ? `  [headless: ${r.pendingJobId}]` : '';
-    console.log(`${r.id}  ${r.status.padEnd(22)} ${r.title}${r.backlogId ? `  [${r.backlogId}]` : ''}${ed}${diag}${job}`);
+    const awaiting = r.status === 'PASSED' && r.reviewRequired && !judgeApproved(r) ? '  [AWAITING JUDGE]' : '';
+    console.log(`${r.id}  ${r.status.padEnd(22)} ${r.title}${r.backlogId ? `  [${r.backlogId}]` : ''}${ed}${diag}${job}${awaiting}`);
   }
 }
 

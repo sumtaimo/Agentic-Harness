@@ -13,6 +13,13 @@
   ],
   "defaultVerifyCmd": "node -e \"process.exit(0)\"",
   "liveAgentOutput": true,
+  "maxPromptChars": 120000,
+  "review": {
+    "required": true,
+    "headless": true,
+    "minScore": 3,
+    "note": "LLM judge gate. required: a PASSED code change is not DONE until the reviewer judge approves (editor: visible.mjs judge; headless: the daemon runs the reviewer before committing). Docs-only and test-only changes skip it. A NEEDS_FIX verdict, a high finding or a score below minScore blocks."
+  },
   "autonomous": {
     "intervalSeconds": 60
   },

@@ -321,6 +321,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.vscode/tasks.json` | buttons for the user (Run Task menu) |
 | `.claude/settings.json` · `commands/harness/*.md` | Claude Code permission rules + start-up hook · `/harness:run`, `/harness:auto`, `/harness:sessions`, `/harness:status`, `/harness:tick`, `/harness:team`, `/harness:doctor`, `/harness:teach` (the user must trust the folder once for the rules to apply) |
 | `test/run-tests.mjs` · `test/live-e2e.mjs` | free mock-engine tests · opt-in real-agent test (`npm run test:live`) |
+| `test/evals/golden.json` · `test/eval-live.mjs` | golden judge/injection cases (run by `npm test`) · opt-in live eval with a real engine: hidden checks, injection resistance, judge verdicts, regression vs the last run (`npm run eval -- --engine <name>`) |
 
 Engines marked `"verified": false` in `config.json` have command-line flags that were not tested
 against the real tool. `node .harness/doctor.mjs` probes `<tool> --help` and lists missing flags.
