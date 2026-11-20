@@ -22,6 +22,13 @@ the entries newer than the version you had.
   - **Background workers** get the merged profile of the person who started the run: `me.md` wins line by line over
     `profile.md`, project lines stay. **Personal skills** in `me.md` are for that person's chat AI only and never reach
     workers, so results stay the same whoever runs them.
+  - **One `me.md` for all your worktrees.** A git worktree (a Claude Code worktree session, a `/harness:sessions`
+    child, a worker worktree) has no copy of the git-ignored file, so the harness reads and writes the main checkout's
+    `me.md`. You set it up once per machine, not once per worktree.
+  - The chat AI gets every `me.md` line at session start (language, style, experience), not only name and hats, because
+    editors load `profile.md` by themselves but not `me.md`.
+  - `doctor` checks each personal skill: it must exist in your own `~/.claude/skills/<name>/`; a name that is a shared
+    project skill, or found nowhere (a typo), gets a note. The web dashboard shows the same profile state.
 - **Onboarding in chat, never as a prompt.** Session start (`hook-session.mjs`), `doctor` and `start.mjs` say when
   this machine has no `me.md`, or when `profile.md` names someone other than the git user (a teammate on a new
   machine), and the editor AI asks a few questions. Scripts, the daemon, workers and CI only read; nothing waits for

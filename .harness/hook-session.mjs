@@ -190,7 +190,9 @@ try {
   // The person at this machine (me.md, git-ignored). Onboarding happens in chat, never as a prompt here.
   if (person.kind === 'me') {
     const nm = person.me.fields.find((f) => f.key === 'name')?.value;
-    lines.push(`- You: ${nm || '(no name)'}${person.me.hats.length ? ` | hats: ${person.me.hats.join(', ')}` : ''} (from .harness/memory/me.md; it overrides profile.md for language and answer style). Hats shape how you talk to this person and what you check first; they never change any permission.`);
+    lines.push(`- You: ${nm || '(no name)'}${person.me.hats.length ? ` | hats: ${person.me.hats.join(', ')}` : ''} (from .harness/memory/me.md; it overrides profile.md). Hats shape how you talk to this person and what you check first; they never change any permission.`);
+    // The editor does not load me.md by itself (CLAUDE.md imports only profile.md), so give the chat AI every line here.
+    for (const f of person.me.fields) if (!['name', 'hats', 'personal skills'].includes(f.key)) lines.push(`  - ${f.label}: ${f.value}`);
     if (person.me.skills.length) lines.push(`- Personal skills of this person (chat only, never for harness workers): ${person.me.skills.join(', ')}`);
   } else if (person.kind === 'missing') {
     lines.push(`- No personal profile on this machine yet (.harness/memory/me.md, git-ignored). Ask the user, a few at a time in simple words: name, language for answers, coding experience, how they like answers, and their hats (${HATS.join(', ')}; combinable, e.g. "po, qa"). Then save: ${ME_SETUP_CMD}`);

@@ -1389,7 +1389,29 @@ export function parseHats(text) {
 }
 
 /** Read me.md: { exists, fields: [{key,label,value}], hats: [], skills: [] }. Never throws. */
-export function readMe(file = FILES.me) {
+/**
+ * Where this person's me.md lives. me.md is git-ignored, so a git worktree (a Claude Code worktree session, a
+ * /harness:sessions child, a harness worker worktree) has no copy: use the main checkout's file, so one person has one
+ * me.md for all their worktrees. HARNESS_ME_FILE overrides it (tests). Never throws.
+ */
+let meFileCache;
+export function meFile() {
+  if (process.env.HARNESS_ME_FILE) return path.resolve(process.env.HARNESS_ME_FILE);
+  if (meFileCache !== undefined) return meFileCache;
+  meFileCache = FILES.me;
+  if (fs.existsSync(FILES.me)) return meFileCache;
+  try {
+    const r = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: ROOT, encoding: 'utf8', timeout: 3000 });
+    const common = r.status === 0 ? path.resolve(ROOT, r.stdout.trim()) : '';
+    if (common && path.basename(common) === '.git') {
+      const main = path.dirname(common);
+      if (path.resolve(main).toLowerCase() !== path.resolve(ROOT).toLowerCase() && fs.existsSync(path.join(main, '.harness'))) meFileCache = path.join(main, '.harness', 'memory', 'me.md');
+    }
+  } catch { /* not a git repository: this folder's own me.md */ }
+  return meFileCache;
+}
+
+export function readMe(file = meFile()) {
   const text = readText(file);
   const fields = text.split('\n').map(parseProfileLine).filter((f) => f && f.value);
   const get = (k) => fields.find((f) => f.key === keyOf(k))?.value || '';
@@ -1402,7 +1424,7 @@ export function readMe(file = FILES.me) {
 }
 
 /** Write me.md from { name, language, experience, style, hats, skills } (missing keys keep their current value). */
-export function writeMe(values, file = FILES.me) {
+export function writeMe(values, file = meFile()) {
   const cur = readMe(file);
   const now = Object.fromEntries(cur.fields.map((f) => [f.key, f.value]));
   const lines = ['# Me (personal, git-ignored)', '',
@@ -1414,7 +1436,7 @@ export function writeMe(values, file = FILES.me) {
     if (k === 'skills' && Array.isArray(v)) v = v.join(', ');
     lines.push(`- ${label}: ${v || ''}`.trimEnd());
   }
-  ensureDirs();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${lines.join('\n')}\n`);
   return readMe(file);
 }

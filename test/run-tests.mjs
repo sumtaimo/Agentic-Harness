@@ -6036,6 +6036,37 @@ await test('v1.0.25 people: me.md is personal (git-ignored), wins over profile.m
   fs.rmSync(proj, { recursive: true, force: true });
 });
 
+await test('v1.0.25 me.md in worktrees: a git worktree uses the main checkout\'s me.md (read and write), the chat AI sees every line, doctor checks personal skills', () => {
+  const d = sandbox();
+  const g = (args, cwd = d) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
+  const hEnv = { HOME: home, USERPROFILE: home };
+  fs.writeFileSync(path.join(d, '.gitignore'), '.harness/memory/me.md\n');
+  g(['init', '-q']); g(['add', '-A']); g(['-c', 'user.name=T', '-c', 'user.email=t@t', 'commit', '-qm', 'init']);
+  const wt = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-wt-')), 'child');
+  assert(g(['worktree', 'add', '-q', wt]).status === 0, 'worktree add failed');
+  const run = (cwd, args) => spawnSync(process.execPath, args, { cwd, env: { ...env, ...hEnv }, encoding: 'utf8', input: '', timeout: 60000 });
+
+  // Written from the worktree, it lands in the main checkout (one me.md per person, not per worktree).
+  assert(run(wt, ['.harness/memory.mjs', 'me', 'set', '--name', 'Sum', '--language', 'Khmer', '--style', 'short', '--hats', 'po', '--skills', 'my-own, spec-writer, typo-skill']).status === 0, 'me set in worktree failed');
+  assert(fs.existsSync(path.join(d, '.harness', 'memory', 'me.md')) && !fs.existsSync(path.join(wt, '.harness', 'memory', 'me.md')), 'me.md not written to the main checkout');
+  assert(/Language I want answers in: Khmer/.test(run(wt, ['.harness/memory.mjs', 'context']).stdout), 'worktree worker prompt lost the person');
+
+  // Session start in the worktree: no onboarding nag, and the chat AI gets language and style, not only name and hats.
+  const hk = run(wt, ['.harness/hook-session.mjs', '--no-fetch']).stdout;
+  assert(/- You: Sum \| hats: po/.test(hk) && /Language I want answers in: Khmer/.test(hk) && /How I like answers: short/.test(hk) && !/No personal profile/.test(hk), hk);
+
+  // Doctor: says where me.md comes from; a personal skill must exist in ~/.claude/skills; a shared one is pointed out.
+  fs.mkdirSync(path.join(home, '.claude', 'skills', 'my-own'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'skills', 'my-own', 'SKILL.md'), '---\nname: my-own\n---\n');
+  fs.mkdirSync(path.join(wt, '.claude', 'skills', 'spec-writer'), { recursive: true });
+  fs.writeFileSync(path.join(wt, '.claude', 'skills', 'spec-writer', 'SKILL.md'), '---\nname: spec-writer\n---\n');
+  const doc = run(wt, ['.harness/doctor.mjs']).stdout;
+  assert(/me\.md comes from the main checkout/.test(doc), doc);
+  assert(!/personal skill "my-own"/.test(doc) && /"spec-writer" as a personal skill, but it is a shared project skill/.test(doc) && /personal skill "typo-skill", but .* does not exist/.test(doc), doc);
+  g(['worktree', 'remove', '--force', wt]);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
 

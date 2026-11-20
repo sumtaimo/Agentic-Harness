@@ -19,7 +19,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DIRS, FILES, HATS, ensureDirs, loadConfig, remember, forget, promoteLesson, listLessons, memoryContext, helpIfAsked, readMe, writeMe, parseHats } from './lib/common.mjs';
+import { DIRS, FILES, HATS, ensureDirs, loadConfig, remember, forget, promoteLesson, listLessons, memoryContext, helpIfAsked, readMe, writeMe, parseHats, meFile } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 
 ensureDirs();
@@ -66,11 +66,11 @@ switch (cmd) {
       }
       if (opt.hats !== undefined && opt.hats.trim() && !parseHats(opt.hats).length) { console.error(`No known hat in "${opt.hats}". Hats: ${HATS.join(', ')} (combine them, e.g. "po,qa").`); process.exit(1); }
       const me = writeMe(opt);
-      console.log(`Saved ${path.relative(process.cwd(), FILES.me)} (git-ignored, yours only).${me.hats.length ? ` Hats: ${me.hats.join(', ')}.` : ''}`);
+      console.log(`Saved ${path.relative(process.cwd(), meFile())} (git-ignored, yours only).${me.hats.length ? ` Hats: ${me.hats.join(', ')}.` : ''}`);
       break;
     }
     const me = readMe();
-    if (!me.exists) { console.log(`No ${path.relative(process.cwd(), FILES.me)} on this machine yet. Create it: node .harness/memory.mjs me set --name "…" --language "…" --hats "dev"`); break; }
+    if (!me.exists) { console.log(`No ${path.relative(process.cwd(), meFile())} on this machine yet. Create it: node .harness/memory.mjs me set --name "…" --language "…" --hats "dev"`); break; }
     me.fields.forEach((f) => console.log(`- ${f.label}: ${f.value}`));
     if (me.skills.length) console.log('(Personal skills are for your chat AI only; harness workers never get them.)');
     break;

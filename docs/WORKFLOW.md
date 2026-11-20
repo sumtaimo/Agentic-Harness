@@ -137,6 +137,8 @@ is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
   `doctor` warns when people or hats appear in `team.json`. Hats never change a scope, an approval or who may push.
 - Workers get the merged profile of the person who started the run (`me.md` wins), but never that person's personal
   skills, so a check gives the same result whoever runs it.
+- One `me.md` per person and machine: git worktrees (Claude Code worktree sessions, `/harness:sessions` children) use
+  the main checkout's file. Personal skills live in your own `~/.claude/skills/<name>/`; `doctor` checks each one.
 
 ## 4. What is NOT guaranteed (read this before trusting it with a real project)
 

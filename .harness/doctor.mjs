@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, which, helpIfAsked, REMOVED_ENGINES, personStatus, ME_SETUP_CMD } from './lib/common.mjs';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, which, helpIfAsked, REMOVED_ENGINES, personStatus, ME_SETUP_CMD, meFile } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { SKILL_MATCH, SKILL_SCHEMA_MAX, unsupportedSkillPointers, readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents, planScopeAdaptation } from './lib/governance.mjs';
 
@@ -300,6 +300,16 @@ else ok('memory/profile.md is filled in');
   if (p.kind === 'me') ok(`memory/me.md (yours, git-ignored): ${p.me.fields.find((f) => f.key === 'name')?.value || 'no name'}${p.me.hats.length ? `, hats ${p.me.hats.join(', ')}` : ''}${p.me.skills.length ? `, ${p.me.skills.length} personal skill(s) for your chat AI only` : ''}`);
   else if (p.kind === 'other-person') note(`memory/profile.md names ${p.name}, but the git user here is ${p.gitName}. A teammate keeps their own preferences in memory/me.md (git-ignored): ${ME_SETUP_CMD}`);
   else if (p.kind === 'missing') note(`no memory/me.md on this machine (optional, git-ignored: your name, language, answer style and hats). Create it: ${ME_SETUP_CMD}`);
+  if (p.kind === 'me' && path.resolve(meFile()) !== path.resolve(FILES.me)) ok(`memory/me.md comes from the main checkout (${path.dirname(path.dirname(path.dirname(meFile())))}): one me.md for all your worktrees`);
+  // Personal skills: the person's own Claude skills folder (~/.claude/skills/<name>/SKILL.md). A project skill of the same
+  // name is shared, not personal; a name found nowhere is probably a typo.
+  for (const s of p.kind === 'me' ? p.me.skills : []) {
+    const personal = path.join(os.homedir(), '.claude', 'skills', s, 'SKILL.md');
+    const shared = path.join(ROOT, '.claude', 'skills', s, 'SKILL.md');
+    if (fs.existsSync(personal)) continue;
+    if (fs.existsSync(shared)) note(`me.md lists "${s}" as a personal skill, but it is a shared project skill (.claude/skills/${s}); everyone has it already, so it does not need to be in me.md`);
+    else note(`me.md lists personal skill "${s}", but ${personal} does not exist. Check the name, or install it into your own skills folder`);
+  }
   if (fs.existsSync(FILES.me) && fs.existsSync(path.join(ROOT, '.git')) && spawnSync('git', ['check-ignore', '-q', '.harness/memory/me.md'], { cwd: ROOT, stdio: 'ignore' }).status === 1) warn('memory/me.md is NOT git-ignored, so personal preferences could be committed. Fix: add ".harness/memory/me.md" to .gitignore (re-installing the harness adds it).');
 }
 if (!fs.existsSync(FILES.lessons)) note('memory/lessons.md is missing');

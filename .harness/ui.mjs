@@ -638,7 +638,7 @@ const DASHBOARD_HTML = `<!doctype html>
       ['Charter', chStr],
       ['Team', tmStr],
       ['Git', gtStr],
-      ['Profile', warns.profileIncomplete ? 'incomplete ("fill me" placeholders)' : 'ready']
+      ['Profile', warns.profileIncomplete ? 'not set up (node .harness/memory.mjs me set …)' : warns.otherPerson ? ('profile.md belongs to ' + warns.otherPerson.profileName + ': create your own me.md') : 'ready']
     ];
     document.getElementById('gov-kv').replaceChildren(...govRows.flatMap(([k, v]) => [
       el('div', { className: 'k' }, k),
