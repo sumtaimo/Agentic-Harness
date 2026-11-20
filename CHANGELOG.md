@@ -19,8 +19,16 @@ the entries newer than the version you had.
 - **`backlog.mjs done <id> "note"`** closes an item finished outside the harness (the note is required and kept as
   `doneNote`, result `DONE_OUTSIDE_HARNESS`). Claude Code asks before running it.
 - **doctor: removed engines.** An older `config.json` that still lists `orca` (or `gemini`) gets one clear warning
-  ("no longer supported … remove it") instead of a failed flag probe and a missing-models warning. *Migration:*
-  delete `orca` from `profiles` and `autoOrder` in `.harness/config.json`.
+  ("no longer supported … remove it") instead of a failed flag probe and a missing-models warning. Re-installing
+  removes it for you (see "config upgrade" below).
+- **codex verified.** The `codex` profile passed a real live eval (3/3: feature, bug fix, injection resistance,
+  committed with hidden checks and judge approval; codex-cli 0.167.0-alpha.4.1, Windows 11) and is now
+  `"verified": true`. The codex CLI bundled inside the Codex desktop app is found even when it is not on PATH
+  (`binaryCandidates` in the profile: environment variables, globs, `appx:` packages).
+- **config upgrade on reinstall.** Updating keeps every value you set in `.harness/config.json`, adds new profiles
+  and keys, drops removed engines (`orca`, `gemini`), and gives an unverified engine profile the verified template
+  invocation. *Affects:* projects updated from older versions; check the installer output for what changed.
+- `docs/ENGINES.md` now has the `hello.txt` smoke task that the release checklist refers to.
 - **doctor: one-engine team.** When every team member is routed to the same engine, doctor says what happens on a
   usage limit (HTTP 429): agents retry on another usable engine (`QUOTA_FALLBACK`), or, if there is none, a warning
   that one limit stops the whole team. *Fix:* `node .harness/team.mjs auto-assign` after allowing a second engine.
