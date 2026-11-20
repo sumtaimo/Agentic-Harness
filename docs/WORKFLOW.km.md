@@ -84,6 +84,13 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 - `node install.mjs <project>` លើ project ដែលមាន harness រួចហើយ រក្សាតម្លៃ `config.json` របស់អ្នក បន្ថែម engine profile ឬ key ដែលខ្វះ លុប engine ដែលលែងគាំទ្រ (gemini, orca) ហើយ profile ដែលមិនទាន់ verified យក `args`/models ដែលបានតេស្តពី template ពេល template verified engine នោះហើយ។ វាបង្ហាញការផ្លាស់ប្តូរនីមួយៗជា `update .harness/config.json (...)`។
 - CLI របស់ engine ដែលមិននៅលើ PATH នៅតែរកឃើញតាម `binaryCandidates` ក្នុង profile។ នៅលើ Windows `codex` ក្នុង Codex desktop app (`appx:OpenAI.Codex/...`) ត្រូវបានរកឃើញតាមវិធីនេះ ហើយ `doctor` បង្ហាញ path ពេញ។ `codex` ត្រូវបាន verified នៅថ្ងៃ 2026-11-20 (eval ពិត 3/3)។
 
+## មនុស្សច្រើននាក់លើ repository តែមួយ (v1.0.25)
+
+- **ចែករំលែក៖** `profile.md` (profile របស់ project), `lessons.md`, `charter.md`, `team.json`, backlog និង skill របស់ project ក្នុង `.claude/skills/`។
+- **ផ្ទាល់ខ្លួន (git-ignored)៖** `.harness/memory/me.md` (ឈ្មោះ ភាសា បទពិសោធន៍ coding របៀបចង់បានចម្លើយ hats និង skill ផ្ទាល់ខ្លួន), `approvals.json`, `auto-lessons.md`។ សរសេរ `me.md` ដោយ `node .harness/memory.mjs me set …`។ AI ក្នុង editor ស្នើឲ្យធ្វើវានៅពេលចាប់ផ្តើម session បើម៉ាស៊ីននេះមិនទាន់មាន ឬបើ `profile.md` ជារបស់មនុស្សផ្សេងពី git user។
+- **Hats មិនមែនជា role របស់ AI ទេ។** Hats របស់មនុស្ស (`po`, `ba`, `ux`, `dev`, `qa` អាចផ្សំគ្នាបាន) កំណត់របៀបដែល AI និយាយជាមួយពួកគេ និងអ្វីដែលវាពិនិត្យមុន។ ក្រុម AI (`team.json`) នៅដាច់ដោយឡែក ហើយ `doctor` ព្រមានពេលមានមនុស្ស ឬ hats ក្នុង `team.json`។ Hats មិនដែលប្តូរ scope ការអនុញ្ញាត ឬសិទ្ធិ push ទេ។
+- Worker ទទួលបាន profile រួមបញ្ចូលគ្នារបស់អ្នកដែលចាប់ផ្តើម run (`me.md` ឈ្នះ) ប៉ុន្តែមិនដែលទទួល skill ផ្ទាល់ខ្លួនរបស់អ្នកនោះទេ ដូច្នេះលទ្ធផល check ដូចគ្នា មិនថាអ្នកណាដំណើរការទេ។
+
 ## ៨. ការកែលម្អបន្ថែម
 
 - test មិនខូចទៀតទេ ពេលមានការងារក្នុង backlog ឬមាន run កំពុងបើក (`sandbox()` ក្នុង `test/run-tests.mjs`)។

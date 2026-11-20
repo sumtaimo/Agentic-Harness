@@ -52,6 +52,10 @@ This file tells every AI (the editor chat AND the harness workers) who you are a
 like to work. Replace each "(fill me)". You can also just tell your editor AI:
 "Read AGENTS.md and fill in my profile" — it will ask you a few questions and write this file.
 
+Working with other people on this repository? This file is shared (committed). Each person keeps their own name,
+language, answer style and hats (po, ba, ux, dev, qa) in .harness/memory/me.md, which is git-ignored and wins over
+this file: node .harness/memory.mjs me set --name "…" --language "…" --hats "dev"
+
 - Name: (fill me)
 - Role / what I do: (fill me)
 - Coding experience: (fill me — e.g. "I don't code; explain everything in plain words")
@@ -138,6 +142,7 @@ function copyDir(from, to, rel = '.harness') {
       const up = upgradeConfig(fs.readFileSync(d, 'utf8'), fs.readFileSync(s, 'utf8'));
       if (up && up.added.length) { fs.writeFileSync(d, up.text); report.push(`update ${relPath} (your settings kept; engine profile changes: ${up.added.join(', ')})`); continue; }
     }
+    if (relPath === path.join('.harness', 'memory', 'me.md')) continue; // a person's own profile (git-ignored) never travels and is never touched
     if (fs.existsSync(d) && KEEP_IF_PRESENT.test(relPath)) { report.push(`kept   ${relPath} (already existed)`); continue; }
     if (relPath === path.join('.harness', 'memory', 'lessons.md')) { // the template owner's taught rules never travel
       fs.writeFileSync(d, LESSONS_TEMPLATE);
@@ -344,11 +349,13 @@ else {
 
 const gi = path.join(target, '.gitignore');
 // npm leaves .gitignore out of packages (npx installs), so fall back to this copy. A test keeps it equal to .gitignore.
-const GITIGNORE_BLOCK = "# agentic-harness runtime (machine-specific or personal; never commit to a public template)\n.harness/state.json\n.harness/*.tmp\n.harness/telemetry.log\n.harness/daemon.pid\n.harness/engine-probe.json\n.harness/foundry-check.json\n.harness/auto-state.json\n.harness/approvals.json\n.harness/live.log\n.harness/inbox/*\n.harness/completed/*\n.harness/failed/*\n.harness/staging/*\n.harness/releases/*\n.harness/visible/*\n.harness/worktrees/*\n.harness/memory/sessions/*\n.harness/memory/auto-lessons.md\n# The folder/* form (instead of folder/) keeps each folder's .gitkeep, so the folders exist in the template.\n!.harness/**/.gitkeep\n\n# charter.md, backlog.json, roles/ and skills/ ARE committed (they define the project's governance).\n# profile.md and lessons.md ARE committed (the template ships generic starter versions).\n# In your own PUBLIC project, if they hold personal details, uncomment these two lines:\n# .harness/memory/profile.md\n# .harness/memory/lessons.md\n\n# Personal Claude Code overrides (never commit)\n.claude/settings.local.json\n# Personal profile and rules for this checkout (Claude Code loads it automatically)\nCLAUDE.local.md\n\n# A demo project created by `npm run demo` (examples/make-demo.mjs) lives next to the template, not in it\n/demo-project/\n\n# Per-person state and secrets (never commit)\n.agent-state/\n.env\n.env.*\n!.env.example\n";
+const GITIGNORE_BLOCK = "# agentic-harness runtime (machine-specific or personal; never commit to a public template)\n.harness/state.json\n.harness/*.tmp\n.harness/telemetry.log\n.harness/daemon.pid\n.harness/engine-probe.json\n.harness/foundry-check.json\n.harness/auto-state.json\n.harness/approvals.json\n.harness/live.log\n.harness/inbox/*\n.harness/completed/*\n.harness/failed/*\n.harness/staging/*\n.harness/releases/*\n.harness/visible/*\n.harness/worktrees/*\n.harness/memory/sessions/*\n.harness/memory/auto-lessons.md\n# Each person's own profile (name, language, answer style, hats); profile.md is the shared project profile\n.harness/memory/me.md\n# The folder/* form (instead of folder/) keeps each folder's .gitkeep, so the folders exist in the template.\n!.harness/**/.gitkeep\n\n# charter.md, backlog.json, roles/ and skills/ ARE committed (they define the project's governance).\n# profile.md and lessons.md ARE committed (the template ships generic starter versions).\n# In your own PUBLIC project, if they hold personal details, uncomment these two lines:\n# .harness/memory/profile.md\n# .harness/memory/lessons.md\n\n# Personal Claude Code overrides (never commit)\n.claude/settings.local.json\n# Personal profile and rules for this checkout (Claude Code loads it automatically)\nCLAUDE.local.md\n\n# A demo project created by `npm run demo` (examples/make-demo.mjs) lives next to the template, not in it\n/demo-project/\n\n# Per-person state and secrets (never commit)\n.agent-state/\n.env\n.env.*\n!.env.example\n";
 const giSrc = path.join(SRC, '.gitignore');
 const giBlock = fs.existsSync(giSrc) ? fs.readFileSync(giSrc, 'utf8') : GITIGNORE_BLOCK;
 const existing = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : '';
 if (!existing.includes('# agentic-harness runtime')) { fs.writeFileSync(gi, `${existing.replace(/\s*$/, '')}${existing ? '\n\n' : ''}${giBlock}`); report.push('updated .gitignore'); }
+// Projects installed before 1.0.25 have the block but not the personal me.md line: add only that line.
+else if (!/^\.harness\/memory\/me\.md\s*$/m.test(existing)) { fs.writeFileSync(gi, `${existing.replace(/\s*$/, '')}\n# Each person's own profile (name, language, answer style, hats); profile.md is the shared project profile\n.harness/memory/me.md\n`); report.push('added .harness/memory/me.md (personal profile) to .gitignore'); }
 
 // Line endings: the harness parses its own files (charter.md, team.json, slash commands…) with LF-based rules. On Windows
 // with core.autocrlf=true a teammate's clone would get CRLF and those rules could misread them, so pin LF for the files

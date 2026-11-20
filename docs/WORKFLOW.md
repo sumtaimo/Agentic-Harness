@@ -125,6 +125,19 @@ is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
 - An engine CLI that is not on PATH is still found through the profile's `binaryCandidates`; on Windows the `codex`
   inside the Codex desktop app (`appx:OpenAI.Codex/...`) is found this way. `doctor` shows the full path it uses.
 
+## Several people on one repository (v1.0.25)
+
+- **Shared:** `profile.md` (the project profile), `lessons.md`, `charter.md`, `team.json`, the backlog and the project's
+  skills in `.claude/skills/`.
+- **Per person (git-ignored):** `.harness/memory/me.md` (name, language, coding experience, answer style, hats, personal
+  skills), `approvals.json`, `auto-lessons.md`. Write `me.md` with `node .harness/memory.mjs me set …`; the editor AI
+  offers it at session start when this machine has none, or when `profile.md` names someone other than the git user.
+- **Hats are not AI roles.** A person's hats (`po`, `ba`, `ux`, `dev`, `qa`, combinable) shape how the AI talks to them
+  and what it checks first. The AI team (`team.json`: orchestrator, leads, roles such as `QA_AUDITOR`) is separate, and
+  `doctor` warns when people or hats appear in `team.json`. Hats never change a scope, an approval or who may push.
+- Workers get the merged profile of the person who started the run (`me.md` wins), but never that person's personal
+  skills, so a check gives the same result whoever runs it.
+
 ## 4. What is NOT guaranteed (read this before trusting it with a real project)
 
 - **The judge and the injection scanner are AI- and pattern-based.** A judge can miss a bug and the scanner can miss a cleverly worded injection; the real check still decides PASSED, and the human still reviews the diff.

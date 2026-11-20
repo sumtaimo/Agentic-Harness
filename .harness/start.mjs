@@ -18,7 +18,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   ROOT, HARNESS_DIR, DIRS, FILES, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd,
-  probeEngine, engineConsent, ROUTABLE_ENGINES, usageTodayLine, quotaWarnings, formatQuotaWarning, checkCore, listLessons, helpIfAsked
+  probeEngine, engineConsent, ROUTABLE_ENGINES, usageTodayLine, quotaWarnings, formatQuotaWarning, checkCore, listLessons, helpIfAsked, personStatus
 } from './lib/common.mjs';
 import { readCharter, readBacklog, backlogCounts, nextReady, loadRoles, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
 import { listVisibleRuns, VISIBLE_TERMINAL, RESUMABLE_STATUSES, editorDisplayName, hasVisibleBaseline, visibleRunDir } from './lib/handoff.mjs';
@@ -163,8 +163,10 @@ export function collectStatus({ skipSessions = false } = {}) {
   const staleInProgress = (pid === 0 && inboxCount === 0)
     ? (bl.tasks || []).filter((t) => t.status === 'IN_PROGRESS').map((t) => t.id)
     : [];
-  const profileText = (() => { try { return fs.readFileSync(FILES.profile, 'utf8'); } catch { return ''; } })();
-  const profileIncomplete = !fs.existsSync(FILES.profile) || !profileText.trim() || /^- .*\(fill me/im.test(profileText);
+  // The person at this machine: their own me.md (git-ignored) answers the personal questions, so profile.md
+  // placeholders only matter when there is no me.md.
+  const person = (() => { try { return personStatus(); } catch { return { kind: 'ok', me: { hats: [] } }; } })();
+  const profileIncomplete = person.kind === 'missing';
 
   return {
     root: ROOT,
@@ -229,6 +231,7 @@ export function collectStatus({ skipSessions = false } = {}) {
       stagingLeftovers,
       staleInProgress,
       profileIncomplete,
+      otherPerson: person.kind === 'other-person' ? { profileName: person.name, gitName: person.gitName } : null,
       autoLessonsCount
     },
     coreModified: [...(core.changed || []), ...(core.missing || []), ...(core.added || [])]
@@ -307,7 +310,8 @@ export function formatSummary(info) {
   if (info.team && info.team.valid && info.team.staleAgents.length) lines.push(`! Team warning: editor agent(s) out of sync: ${info.team.staleAgents.join(', ')} (use [3] -> [5] or sync-agents)`);
   if (info.warnings?.stagingLeftovers?.length) lines.push(`! Staging leftovers (.harness/staging/): ${info.warnings.stagingLeftovers.join(', ')}`);
   if (info.warnings?.staleInProgress?.length) lines.push(`! Stale IN_PROGRESS backlog item(s): ${info.warnings.staleInProgress.join(', ')} (use [4] -> [6] to reset READY)`);
-  if (info.warnings?.profileIncomplete) lines.push('! Profile incomplete: .harness/memory/profile.md still has "(fill me)" placeholders');
+  if (info.warnings?.profileIncomplete) lines.push('! No personal profile yet: node .harness/memory.mjs me set --name "…" --language "…" --hats "dev" (git-ignored .harness/memory/me.md)');
+  if (info.warnings?.otherPerson) lines.push(`! profile.md is ${info.warnings.otherPerson.profileName}'s, git user is ${info.warnings.otherPerson.gitName}: keep your own preferences in .harness/memory/me.md (node .harness/memory.mjs me set …)`);
   for (const w of info.quotaWarnings || []) lines.push(`! ${formatQuotaWarning(w)}`);
   lines.push('============================================================================');
   return lines.join('\n');

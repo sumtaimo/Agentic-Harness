@@ -17,6 +17,8 @@
 .harness/worktrees/*
 .harness/memory/sessions/*
 .harness/memory/auto-lessons.md
+# Each person's own profile (name, language, answer style, hats); profile.md is the shared project profile
+.harness/memory/me.md
 # The folder/* form (instead of folder/) keeps each folder's .gitkeep, so the folders exist in the template.
 !.harness/**/.gitkeep
 

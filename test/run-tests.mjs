@@ -37,6 +37,7 @@ function sandbox({ worktrees = false } = {}) {
     fs.writeFileSync(ch, fs.readFileSync(ch, 'utf8').replace(/^- Project objectives:[\s\S]*?(?=\n\n|\n## |(?![\s\S]))/m, '- Project objectives: (describe your product goals here to customize for your own app)').replace(/^- autonomous: off$/m, '- autonomous: on')); }
   fs.writeFileSync(path.join(dir, '.harness', 'memory', 'profile.md'), '# User profile\n\n- Name: (fill me)\n- Role / what I do: (fill me)\n'); // the owner's profile must not leak into tests
   fs.writeFileSync(path.join(dir, '.harness', 'memory', 'lessons.md'), '# Lessons the user taught\n'); // the owner's taught rules must not leak into tests
+  fs.rmSync(path.join(dir, '.harness', 'memory', 'me.md'), { force: true }); // nor the developer's own personal profile
   fs.writeFileSync(path.join(dir, '.harness', 'backlog.json'), JSON.stringify({ version: '2.0.0', project: '', maxAutoTasksPerRun: 3, tasks: [] }, null, 2));
   const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.harness', 'config.json'), 'utf8'));
   cfg.profiles.mock = { verified: true, binary: process.execPath, args: [MOCK, 'ALLOWED={allowedTools}', 'DENIED={disallowedTools}'], promptVia: 'stdin', allowedTools: [] };
@@ -1532,7 +1533,7 @@ await test('documentation matches reality: every script, sub-command and slash c
     for (const m of t.matchAll(/visible\.mjs (brief|assign|verify|rollback|propose|status|report|[a-z]+)\b/g)) if (!new RegExp(`case '${m[1]}'`).test(sources.visible)) problems.push(`${f}: visible.mjs has no sub-command "${m[1]}"`);
     for (const m of t.matchAll(/team\.mjs (show|validate|sync-agents|[a-z-]+)\b/g)) if (!sources.team.includes(`'${m[1]}'`)) problems.push(`${f}: team.mjs has no "${m[1]}"`);
     for (const m of t.matchAll(/\/harness:([a-z]+)/g)) if (!cmdFiles.has(m[1])) problems.push(`${f}: slash command /harness:${m[1]} does not exist`);
-    for (const m of t.matchAll(/`(\.harness\/(?:[a-z-]+\/)*[A-Za-z0-9_.-]+\.(?:mjs|json|md))`/g)) if (!/<|\*/.test(m[1]) && !fs.existsSync(path.join(REPO, m[1])) && !/live\.log|state\.json|telemetry|daemon\.pid|auto-state|engine-probe|auto-lessons|approvals.json|MANIFEST.json|report\.md|run\.json|failed\/|completed\/|visible\/|releases\/|sessions\/|inbox\//.test(m[1])) problems.push(`${f}: mentions ${m[1]}, which does not exist`);
+    for (const m of t.matchAll(/`(\.harness\/(?:[a-z-]+\/)*[A-Za-z0-9_.-]+\.(?:mjs|json|md))`/g)) if (!/<|\*/.test(m[1]) && !fs.existsSync(path.join(REPO, m[1])) && !/live\.log|state\.json|telemetry|daemon\.pid|auto-state|engine-probe|auto-lessons|memory\/me\.md|approvals.json|MANIFEST.json|report\.md|run\.json|failed\/|completed\/|visible\/|releases\/|sessions\/|inbox\//.test(m[1])) problems.push(`${f}: mentions ${m[1]}, which does not exist`);
   }
   assert(problems.length === 0, problems.slice(0, 12).join('\n      '));
   assert(fs.existsSync(path.join(REPO, 'docs', 'WORKFLOW.md')) && /docs\/WORKFLOW\.md/.test(fs.readFileSync(path.join(REPO, 'README.md'), 'utf8')), 'README must link to docs/WORKFLOW.md');
@@ -4122,7 +4123,8 @@ await test('Skill Foundry audit B1–B11: missing memory files, SessionStart hoo
   const hkBrief = node(d, ['.harness/hook-session.mjs', '--brief', '--no-fetch']).stdout;
   const hkFull = node(d, ['.harness/hook-session.mjs', '--no-fetch']).stdout;
   const stJson = JSON.parse(node(d, ['.harness/start.mjs', '--json']).stdout);
-  assert(/profile\.md incomplete/.test(hkBrief) && /profile\.md is not filled in yet/.test(hkFull) && stJson.warnings.profileIncomplete === true, 'missing profile.md not flagged incomplete');
+  // Since 1.0.25 the personal questions go into the person's own me.md (git-ignored), not the shared profile.md.
+  assert(/no personal profile \(me\.md\)/.test(hkBrief) && /No personal profile on this machine yet/.test(hkFull) && stJson.warnings.profileIncomplete === true, 'missing profile.md not flagged incomplete');
 
   // B4: .claude/settings.json hook command has no $CLAUDE_PROJECT_DIR, and install.mjs upgrades legacy hook in place
   const pHook = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-b4-'));
@@ -5972,6 +5974,66 @@ await test('v1.0.24 install update: an existing config.json keeps the owner\'s v
   assert(/update \.harness[\\/]config\.json/.test(r.stdout), 'install did not say it updated config.json:\n' + r.stdout);
   const again = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), mine], { encoding: 'utf8' });
   assert(/kept   \.harness[\\/]config\.json/.test(again.stdout), 'second install should change nothing');
+});
+
+await test('v1.0.25 people: me.md is personal (git-ignored), wins over profile.md in worker prompts, keeps personal skills out of workers, never prompts, and hats stay out of team.json', async () => {
+  const d = sandbox();
+  const mem = (args, extra = {}) => spawnSync(process.execPath, ['.harness/memory.mjs', ...args], { cwd: d, env: { ...env, ...extra }, encoding: 'utf8', input: '', timeout: 30000 });
+  const evalIn = (code) => spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: d, env, encoding: 'utf8', timeout: 30000 });
+  fs.writeFileSync(path.join(d, '.harness', 'memory', 'profile.md'), '# User profile\n- Name: Ada\n- Language I want answers in: English\n- What this project is: a shop\n');
+
+  // One person alone, profile.md filled in, no me.md: worker prompt unchanged (no person block), no onboarding nag.
+  const before = mem(['context']).stdout;
+  assert(/## User profile[\s\S]*Language I want answers in: English/.test(before) && !/Person who started this run/.test(before), before);
+  const ada = evalIn("const c = await import('./.harness/lib/common.mjs'); console.log(c.personStatus({ gitName: 'Ada Lovelace' }).kind)").stdout.trim();
+  assert(ada === 'ok', `owner alone should be "ok", got ${ada}`);
+  const bob = JSON.parse(evalIn("const c = await import('./.harness/lib/common.mjs'); console.log(JSON.stringify(c.personStatus({ gitName: 'Bob' })))").stdout);
+  assert(bob.kind === 'other-person' && bob.name === 'Ada' && bob.gitName === 'Bob', JSON.stringify(bob));
+
+  // Onboarding writes me.md; hats are parsed from free text and combinable; unknown hats are refused.
+  assert(mem(['me', 'set', '--hats', 'manager']).status === 1, 'unknown hat accepted');
+  const set = mem(['me', 'set', '--name', 'Bob', '--language', 'Khmer', '--hats', 'PO + QA', '--skills', 'my-notes, my-ux']);
+  assert(set.status === 0 && /Hats: po, qa/.test(set.stdout), set.stdout + set.stderr);
+  const meText = fs.readFileSync(path.join(d, '.harness', 'memory', 'me.md'), 'utf8');
+  assert(/- Hats: po, qa/.test(meText) && /- Language I want answers in: Khmer/.test(meText), meText);
+
+  // Worker prompt: the person's language wins, the shared project line stays, personal skills never reach workers.
+  const after = mem(['context']).stdout;
+  assert(/Language I want answers in: Khmer/.test(after) && !/Language I want answers in: English/.test(after), 'me.md did not override profile.md:\n' + after);
+  assert(/What this project is: a shop/.test(after), 'shared project line lost:\n' + after);
+  assert(/Hats: po, qa \(/.test(after) && /never widen your files, tools or permissions/.test(after), 'hats not explained as non-permission:\n' + after);
+  assert(!/my-notes|my-ux|Personal skills/.test(after), 'personal skills leaked into the worker prompt:\n' + after);
+
+  // Workers may not write the person's profile.
+  assert(mem(['me', 'set', '--name', 'X'], { HARNESS_WORKER: '1' }).status === 2, 'a worker changed me.md');
+
+  // Session start shows the person and their chat-only skills; it never waits for input (no terminal).
+  const hk = spawnSync(process.execPath, ['.harness/hook-session.mjs', '--no-fetch'], { cwd: d, env, encoding: 'utf8', input: '', timeout: 30000 });
+  assert(hk.status === 0 && /- You: Bob \| hats: po, qa/.test(hk.stdout) && /chat only, never for harness workers\): my-notes, my-ux/.test(hk.stdout), hk.stdout);
+  const doc = node(d, ['.harness/doctor.mjs']).stdout;
+  assert(/memory\/me\.md \(yours, git-ignored\): Bob, hats po, qa/.test(doc), doc);
+
+  // team.json is the AI team: people, e-mails and hats there are flagged.
+  const gov = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
+  const team = json(path.join(REPO, '.harness', 'team.json'));
+  assert(gov.humanFieldsInTeam(team).length === 0, 'shipped team.json flagged: ' + gov.humanFieldsInTeam(team).join('; '));
+  const bad = JSON.parse(JSON.stringify(team));
+  bad.people = ['Bob']; bad.members[1].hats = ['qa']; bad.members[2].role = 'qa'; bad.members.push({ ...bad.members[1], id: 'bob@example.com' });
+  const w = gov.humanFieldsInTeam(bad).join('\n');
+  assert(/"people" field/.test(w) && /has a "hats" field/.test(w) && /role "qa", which is a human hat/.test(w) && /looks like an e-mail/.test(w), w);
+  fs.writeFileSync(path.join(d, '.harness', 'team.json'), JSON.stringify({ ...team, people: ['Bob'] }, null, 2));
+  assert(/team\.json: team\.json has a "people" field/.test(node(d, ['.harness/doctor.mjs']).stdout), 'doctor did not warn about people in team.json');
+
+  // The installer adds the me.md line to an older .gitignore, and never copies or touches anyone's me.md.
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-me-'));
+  fs.writeFileSync(path.join(proj, '.gitignore'), '# agentic-harness runtime (old)\n.harness/state.json\n');
+  fs.mkdirSync(path.join(proj, '.harness', 'memory'), { recursive: true });
+  fs.writeFileSync(path.join(proj, '.harness', 'memory', 'me.md'), '- Name: Keep me\n');
+  const inst = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj], { encoding: 'utf8', env: { ...env, HARNESS_OFFLINE: '1' } });
+  assert(inst.status === 0, inst.stderr);
+  assert(/^\.harness\/memory\/me\.md$/m.test(fs.readFileSync(path.join(proj, '.gitignore'), 'utf8')), 'me.md not added to an older .gitignore');
+  assert(fs.readFileSync(path.join(proj, '.harness', 'memory', 'me.md'), 'utf8') === '- Name: Keep me\n', 'installer touched me.md');
+  fs.rmSync(proj, { recursive: true, force: true });
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

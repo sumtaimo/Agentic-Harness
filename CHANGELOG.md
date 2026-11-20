@@ -10,6 +10,29 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.25 — 2026-11-20
+
+- **One repository, several people: `me.md`.** Each person keeps their own name, language, coding experience, answer
+  style and **hats** in `.harness/memory/me.md`, which is git-ignored. `profile.md` stays the shared project profile.
+  A person working alone needs nothing new: without `me.md` everything works as before.
+  - *Hats* are the human's focus: `po`, `ba`, `ux`, `dev`, `qa`, combinable (`po, qa`). They shape how the AI talks to
+    that person and what it checks first. They are **not** AI roles and never change a scope, approval or permission.
+  - Write it: `node .harness/memory.mjs me set --name "…" --language "…" --experience "…" --style "…" --hats "po,qa"
+    [--skills "a,b"]`. Show it: `node .harness/memory.mjs me`. Harness workers may not change it.
+  - **Background workers** get the merged profile of the person who started the run: `me.md` wins line by line over
+    `profile.md`, project lines stay. **Personal skills** in `me.md` are for that person's chat AI only and never reach
+    workers, so results stay the same whoever runs them.
+- **Onboarding in chat, never as a prompt.** Session start (`hook-session.mjs`), `doctor` and `start.mjs` say when
+  this machine has no `me.md`, or when `profile.md` names someone other than the git user (a teammate on a new
+  machine), and the editor AI asks a few questions. Scripts, the daemon, workers and CI only read; nothing waits for
+  input.
+- **team.json stays the AI team.** `doctor` and `team.mjs validate` warn when `team.json` holds people: fields such
+  as `people`, `owner`, `name`, `email` or `hats`, a member id that is an e-mail, or a role that is a human hat (`qa`
+  instead of `QA_AUDITOR`).
+- *Affects:* every project. *Config / permissions / hooks:* none. *Installer:* adds `.harness/memory/me.md` to an
+  existing `.gitignore` and never copies or changes anyone's `me.md`. *After updating:* optional; each person can run
+  `node .harness/memory.mjs me set …` once (their AI offers it).
+
 ## 1.0.24 — 2026-11-20
 
 - **hook-guard: no more false blocks on quoted text.** A read-only command such as `node -e "…"` was blocked only

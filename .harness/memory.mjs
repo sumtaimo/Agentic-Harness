@@ -10,6 +10,8 @@
  *   node .harness/memory.mjs forget-auto L2      remove auto lesson L2
  *   node .harness/memory.mjs context [--goal "..."] [--files "a,b"]  print what workers/AIs receive (task-ranked when filtered)
  *   node .harness/memory.mjs sessions [n]        list the last n task records (default 10)
+ *   node .harness/memory.mjs me [set --name … --language … --experience … --style … --hats po,qa --skills a,b]
+ *                                                 show / write YOUR personal profile (me.md, git-ignored; hats: po ba ux dev qa)
  *
  * Nothing here trains or changes an AI model. Memory works by being re-read:
  * the harness injects it into every worker prompt, and editor, terminal CLI, and cloud AIs read it via AGENTS.md.
@@ -17,12 +19,12 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DIRS, FILES, ensureDirs, loadConfig, remember, forget, promoteLesson, listLessons, memoryContext, helpIfAsked } from './lib/common.mjs';
+import { DIRS, FILES, HATS, ensureDirs, loadConfig, remember, forget, promoteLesson, listLessons, memoryContext, helpIfAsked, readMe, writeMe, parseHats } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 
 ensureDirs();
 const [cmd, ...rest] = process.argv.slice(2);
-if (process.env.HARNESS_WORKER === '1' && ['remember', 'add', 'teach', 'learn', 'remember-auto', 'promote', 'forget', 'forget-auto'].includes(cmd)) {
+if (process.env.HARNESS_WORKER === '1' && (['remember', 'add', 'teach', 'learn', 'remember-auto', 'promote', 'forget', 'forget-auto'].includes(cmd) || (cmd === 'me' && rest[0] === 'set'))) {
   console.error('Harness workers must not change the user memory.');
   process.exit(2);
 }
@@ -50,6 +52,27 @@ switch (cmd) {
     const file = cmd === 'forget-auto' ? FILES.autoLessons : FILES.lessons;
     if (!text) { console.error('Give the id to forget, e.g. forget L3'); process.exit(1); }
     console.log(forget(text, file) ? `Forgot ${text}.` : `No entry ${text} found.`);
+    break;
+  }
+  case 'me': {
+    // node .harness/memory.mjs me                      show this person's me.md (git-ignored)
+    // node .harness/memory.mjs me set --name "…" --language "…" --experience "…" --style "…" --hats "po,qa" --skills "a,b"
+    if (rest[0] === 'set') {
+      const opt = {};
+      for (let i = 1; i < rest.length; i++) {
+        const m = rest[i].match(/^--(name|language|experience|style|hats|skills)$/);
+        if (!m || rest[i + 1] === undefined) { console.error(`Unknown or empty option: ${rest[i]}. Options: --name --language --experience --style --hats --skills`); process.exit(1); }
+        opt[m[1]] = rest[++i];
+      }
+      if (opt.hats !== undefined && opt.hats.trim() && !parseHats(opt.hats).length) { console.error(`No known hat in "${opt.hats}". Hats: ${HATS.join(', ')} (combine them, e.g. "po,qa").`); process.exit(1); }
+      const me = writeMe(opt);
+      console.log(`Saved ${path.relative(process.cwd(), FILES.me)} (git-ignored, yours only).${me.hats.length ? ` Hats: ${me.hats.join(', ')}.` : ''}`);
+      break;
+    }
+    const me = readMe();
+    if (!me.exists) { console.log(`No ${path.relative(process.cwd(), FILES.me)} on this machine yet. Create it: node .harness/memory.mjs me set --name "…" --language "…" --hats "dev"`); break; }
+    me.fields.forEach((f) => console.log(`- ${f.label}: ${f.value}`));
+    if (me.skills.length) console.log('(Personal skills are for your chat AI only; harness workers never get them.)');
     break;
   }
   case 'list': case undefined: {

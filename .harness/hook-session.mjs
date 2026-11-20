@@ -17,7 +17,7 @@ import path from 'node:path';
 try {
   const {
     FILES, DIRS, ROOT, readJsonSafe, loadConfig, listLessons, loadApprovals,
-    probeEngine, engineConsent, ROUTABLE_ENGINES, checkCore, usageTodayLine, helpIfAsked
+    probeEngine, engineConsent, ROUTABLE_ENGINES, checkCore, usageTodayLine, helpIfAsked, personStatus, ME_SETUP_CMD, HATS
   } = await import('./lib/common.mjs');
   helpIfAsked(import.meta.url);
   if (process.env.HARNESS_WORKER === '1') process.exit(0);
@@ -38,8 +38,8 @@ try {
   const charter = (() => { try { return readCharter(); } catch { return { autonomous: false, text: '' }; } })();
   const cfg = (() => { try { return loadConfig(); } catch (e) { configError = e.message; return {}; } })();
   const count = (d) => { try { return fs.readdirSync(d).filter((f) => f.endsWith('.json')).length; } catch { return 0; } };
-  const profile = (() => { try { return fs.readFileSync(FILES.profile, 'utf8'); } catch { return ''; } })();
   const git = cfg.git || {};
+  const person = (() => { try { return personStatus(); } catch { return { kind: 'ok', me: { fields: [], hats: [], skills: [] } }; } })();
 
   const runs = listVisibleRuns();
   const open = runs.filter((r) => !['PASSED', 'HALTED_HITL_REQUIRED', 'ROLLED_BACK', 'ESCALATED'].includes(r.status));
@@ -169,7 +169,8 @@ try {
     if (stagingLeftovers.length) notes.push(`staging leftovers (${stagingLeftovers.slice(0, 3).join(', ')})`);
     if (staleInProgress.length) notes.push(`stale IN_PROGRESS (${staleInProgress.slice(0, 3).join(', ')})`);
     if (newestStopped && newestOpen) notes.push(`stopped run ${newestStopped.id} awaits decision`);
-    if (!fs.existsSync(FILES.profile) || !profile.trim() || /^- .*\(fill me/im.test(profile)) notes.push('profile.md incomplete');
+    if (person.kind === 'missing') notes.push('no personal profile (me.md) on this machine');
+    if (person.kind === 'other-person') notes.push(`profile.md is ${person.name}'s; git user is ${person.gitName}: create your own me.md`);
     if (notes.length) briefLines.push(`! Notice: ${notes.join(' | ')}`);
 
     for (const l of foundryLines) briefLines.push(`! ${l}`);
@@ -186,7 +187,16 @@ try {
     `- Memory: ${taughtCount} taught rule(s) (already loaded via CLAUDE.md), ${autoLessonsCount} auto-lesson(s) (task-ranked via memory.mjs context)`
   ];
   if (configError) lines.push(`- WARNING: .harness/config.json is invalid (${configError}); fix its JSON syntax before running tasks.`);
-  if (!fs.existsSync(FILES.profile) || !profile.trim() || /^- .*\(fill me/im.test(profile)) lines.push('- profile.md is not filled in yet: ask the user a few simple questions and fill it (see AGENTS.md section 1).');
+  // The person at this machine (me.md, git-ignored). Onboarding happens in chat, never as a prompt here.
+  if (person.kind === 'me') {
+    const nm = person.me.fields.find((f) => f.key === 'name')?.value;
+    lines.push(`- You: ${nm || '(no name)'}${person.me.hats.length ? ` | hats: ${person.me.hats.join(', ')}` : ''} (from .harness/memory/me.md; it overrides profile.md for language and answer style). Hats shape how you talk to this person and what you check first; they never change any permission.`);
+    if (person.me.skills.length) lines.push(`- Personal skills of this person (chat only, never for harness workers): ${person.me.skills.join(', ')}`);
+  } else if (person.kind === 'missing') {
+    lines.push(`- No personal profile on this machine yet (.harness/memory/me.md, git-ignored). Ask the user, a few at a time in simple words: name, language for answers, coding experience, how they like answers, and their hats (${HATS.join(', ')}; combinable, e.g. "po, qa"). Then save: ${ME_SETUP_CMD}`);
+  } else if (person.kind === 'other-person') {
+    lines.push(`- profile.md describes ${person.name}, but the git user here is ${person.gitName}. If this is a different person, ask their name, language, answer style and hats (${HATS.join(', ')}) and save them in their own me.md: ${ME_SETUP_CMD}. Do not edit profile.md for this.`);
+  }
 
   // Editor workflow state: unfinished runs need a decision; AUTO MODE starts the workflow by itself.
   if (newestOpen) {

@@ -337,9 +337,30 @@ export const globsOverlap = (a, b) => globProbes(a).some((p) => matchesAny(p, [b
  *  - lead scopes are pairwise disjoint, so teams can never collide on a file
  *  - budgets only shrink downwards (sum of lead cost caps <= orchestrator cap; lead minutes <= orchestrator minutes)
  */
+/**
+ * team.json is the AI agent team only. People (names, e-mails, hats po/ba/ux/dev/qa) live in each person's git-ignored
+ * .harness/memory/me.md, so a human "hat" can never be read as an AI role or widen a scope. Returns warnings.
+ */
+const HUMAN_TEAM_KEYS = ['hats', 'hat', 'human', 'humans', 'people', 'person', 'persons', 'owner', 'owners', 'name', 'email', 'assignee', 'assignees', 'user', 'users', 'members_human'];
+const HUMAN_HATS = ['po', 'ba', 'ux', 'dev', 'qa'];
+export function humanFieldsInTeam(team) {
+  const out = [];
+  const fix = 'team.json is the AI agent team; put people and their hats in their own .harness/memory/me.md (node .harness/memory.mjs me set --hats …)';
+  for (const k of Object.keys(team || {})) if (HUMAN_TEAM_KEYS.includes(k.toLowerCase())) out.push(`team.json has a "${k}" field: ${fix}`);
+  for (const m of Array.isArray(team?.members) ? team.members : []) {
+    if (!m || typeof m !== 'object') continue;
+    const id = m.id || '?';
+    for (const k of Object.keys(m)) if (HUMAN_TEAM_KEYS.includes(k.toLowerCase())) out.push(`member "${id}" has a "${k}" field: ${fix}`);
+    if (typeof m.id === 'string' && m.id.includes('@')) out.push(`member "${id}" looks like an e-mail address: ${fix}`);
+    if (typeof m.role === 'string' && HUMAN_HATS.includes(m.role.toLowerCase()) && m.role === m.role.toLowerCase()) out.push(`member "${id}" has role "${m.role}", which is a human hat, not an AI role (use a role from .harness/roles/, e.g. QA_AUDITOR): ${fix}`);
+  }
+  return out;
+}
+
 export function validateTeam(team, { roles = {}, charter = null, plannerMaxWorkers = 4, engines = null } = {}) {
   const errors = []; const warnings = [];
   if (!team || !Array.isArray(team.members)) return { errors: ['team.json must be an object with a "members" list'], warnings };
+  for (const w of humanFieldsInTeam(team)) warnings.push(w);
   const ids = new Set();
   for (const m of team.members) {
     if (!m || typeof m.id !== 'string' || !m.id) { errors.push('every member needs an "id"'); continue; }

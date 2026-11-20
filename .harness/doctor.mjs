@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, which, helpIfAsked, REMOVED_ENGINES } from './lib/common.mjs';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, which, helpIfAsked, REMOVED_ENGINES, personStatus, ME_SETUP_CMD } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { SKILL_MATCH, SKILL_SCHEMA_MAX, unsupportedSkillPointers, readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents, planScopeAdaptation } from './lib/governance.mjs';
 
@@ -294,6 +294,14 @@ const profile = fs.existsSync(FILES.profile) ? fs.readFileSync(FILES.profile, 'u
 if (!fs.existsSync(FILES.profile) || !profile.trim()) note('memory/profile.md is missing or empty. Run node install.mjs <project> or create .harness/memory/profile.md');
 else if (/^- .*\(fill me/im.test(profile)) note('memory/profile.md still has "(fill me)" placeholders. Optional: tell your AI "Read AGENTS.md and fill in my profile". The shared template keeps it generic on purpose.');
 else ok('memory/profile.md is filled in');
+{
+  // The person at this machine: me.md is git-ignored, one per person (hats are human focus, never AI roles).
+  const p = personStatus();
+  if (p.kind === 'me') ok(`memory/me.md (yours, git-ignored): ${p.me.fields.find((f) => f.key === 'name')?.value || 'no name'}${p.me.hats.length ? `, hats ${p.me.hats.join(', ')}` : ''}${p.me.skills.length ? `, ${p.me.skills.length} personal skill(s) for your chat AI only` : ''}`);
+  else if (p.kind === 'other-person') note(`memory/profile.md names ${p.name}, but the git user here is ${p.gitName}. A teammate keeps their own preferences in memory/me.md (git-ignored): ${ME_SETUP_CMD}`);
+  else if (p.kind === 'missing') note(`no memory/me.md on this machine (optional, git-ignored: your name, language, answer style and hats). Create it: ${ME_SETUP_CMD}`);
+  if (fs.existsSync(FILES.me) && fs.existsSync(path.join(ROOT, '.git')) && spawnSync('git', ['check-ignore', '-q', '.harness/memory/me.md'], { cwd: ROOT, stdio: 'ignore' }).status === 1) warn('memory/me.md is NOT git-ignored, so personal preferences could be committed. Fix: add ".harness/memory/me.md" to .gitignore (re-installing the harness adds it).');
+}
 if (!fs.existsSync(FILES.lessons)) note('memory/lessons.md is missing');
 ok(`${listLessons(FILES.lessons).length} taught rule(s), ${listLessons(FILES.autoLessons).length} auto lesson(s)`);
 

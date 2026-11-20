@@ -168,9 +168,11 @@ One developer and a team of people get the same harness: the full AI agent team 
 
 **Kept per person:**
 - `.agent-state/` and `.claude/settings.local.json`: already ignored by `.gitignore`
-- `.harness/memory/profile.md`: who you are and how you like to work. It is committed by default (the template ships a
-  starter one), so on a shared repo uncomment the `.harness/memory/profile.md` line in `.gitignore` and untrack it once
-  with `git rm --cached .harness/memory/profile.md`
+- `.harness/memory/me.md`: who you are and how you like to work (name, language, answer style, **hats** `po` `ba` `ux`
+  `dev` `qa`, combinable, and your personal skills for your chat AI). It is git-ignored and wins over the shared
+  `profile.md`. Your AI asks you a few questions the first time; or run
+  `node .harness/memory.mjs me set --name "…" --language "…" --hats "po,qa"`. Hats shape how the AI talks to you; they
+  are not AI agent roles (`team.json`) and never change a permission.
 - your own CLI logins and subscriptions (`claude`, `agy`, `codex`); tokens are spent on your own account
 
 **Team rules:**
@@ -471,7 +473,8 @@ All memory is plain text in `.harness/memory/`, which you can open and edit your
 
 | File | Written by | Used for | In git? |
 |---|---|---|---|
-| `profile.md` | you / your AI | who you are, your level, your language, how you like answers | yes (generic starter) |
+| `profile.md` | you / your AI | the shared project profile (and your preferences if you work alone) | yes (generic starter) |
+| `me.md` | each person (`memory.mjs me set`) | your name, language, answer style, hats; wins over `profile.md` | **no**: personal |
 | `lessons.md` | **you** (`remember`, `/harness:teach`, `promote`) | permanent rules every AI must follow across machines/sessions, highest priority | yes (generic starter) |
 | `auto-lessons.md` | the harness (`daemon`, `visible`) & `memory.mjs learn` | failures, retry recoveries, scope violations & local technical lessons | **no**: personal history |
 | `sessions/*.md` | the harness | one record per task: plan, check, errors, result, rollback | **no**: personal history |

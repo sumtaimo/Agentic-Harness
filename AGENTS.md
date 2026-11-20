@@ -102,11 +102,17 @@ contract, stay inside your scoped files, and **never** run `.harness/dispatch.mj
 
 ## 1. At the start of every conversation (editor, terminal CLI, or cloud)
 
-1. Read `.harness/memory/profile.md` (who the user is, how they want answers).
+1. Read `.harness/memory/profile.md` (the shared project profile) and, if it exists, `.harness/memory/me.md` (the person at
+   this machine: name, language, answer style, hats; git-ignored, one per person). `me.md` wins over `profile.md`.
+   **Hats** (`po`, `ba`, `ux`, `dev`, `qa`, combinable) shape how you talk to that person and what you check first; they
+   are not AI roles (`team.json`) and never change any scope, approval or permission. Personal skills listed in `me.md`
+   are for the chat AI only, never for harness workers.
 2. Read `.harness/memory/lessons.md` — permanent rules the user taught (git-tracked). **These override your defaults.**
 3. Skim `.harness/memory/auto-lessons.md` (git-ignored mistakes, retry recoveries, scope violations, and local technical lessons recorded by the harness or via `learn`), or retrieve task-ranked entries with `node .harness/memory.mjs context --goal "<task>" --files "<paths>"`.
-4. If `profile.md` still contains `(fill me)`, ask the user those questions — a few at a time,
-   in simple words — and write the answers into `profile.md`.
+4. If the session start says there is no personal profile (or that `profile.md` belongs to someone else), ask the user
+   a few at a time, in simple words: name, language, coding experience, how they like answers, and their hats. Save them
+   with `node .harness/memory.mjs me set --name "…" --language "…" --experience "…" --style "…" --hats "po,qa"`.
+   Never write one person's preferences into the shared `profile.md`.
 
 ## 2. Learning from mistakes and from the user (the "memory" rules)
 
@@ -297,7 +303,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/memory.mjs` | remember / learn / promote / list / forget / forget-auto / context (`--goal`, `--files`) / sessions |
 | `.harness/doctor.mjs` · `status.mjs` | setup check (incl. duplicate `agy` PATH guard & cross-tool rule parity) · current state |
 | `.harness/config.json` | engines, max cycles, timeouts, worktrees, auto git commit |
-| `.harness/memory/` | `profile.md`, `lessons.md` (committed); `auto-lessons.md`, `sessions/` (git-ignored) |
+| `.harness/memory/` | `profile.md` (shared project profile), `lessons.md` (committed); `me.md` (each person's own profile and hats), `auto-lessons.md`, `sessions/` (git-ignored) |
 | `.harness/inbox/` → `completed/` or `failed/` | job files (`failed/` also has `.trace.txt`) |
 | `.harness/staging/` | backups of scoped files while a task runs (restored on failure) |
 | `.harness/charter.md` · `backlog.json` | autonomous limits · task backlog |

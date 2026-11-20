@@ -35,7 +35,8 @@ export const FILES = {
   probe: path.join(HARNESS_DIR, 'engine-probe.json'),
   approvals: path.join(HARNESS_DIR, 'approvals.json'), // per person, git-ignored: which AI tools may be used, "don't ask again" answers
   live: path.join(HARNESS_DIR, 'live.log'),
-  profile: path.join(HARNESS_DIR, 'memory', 'profile.md'),
+  profile: path.join(HARNESS_DIR, 'memory', 'profile.md'), // shared project profile (committed)
+  me: path.join(HARNESS_DIR, 'memory', 'me.md'), // per person, git-ignored: name, language, style, hats, personal skills
   lessons: path.join(HARNESS_DIR, 'memory', 'lessons.md'),
   autoLessons: path.join(HARNESS_DIR, 'memory', 'auto-lessons.md')
 };
@@ -1351,6 +1352,106 @@ export function formatDiagnosis(diag) {
   return lines.join('\n');
 }
 
+// ───────────────────────────── the person (me.md) ─────────────────────────────
+// .harness/memory/me.md is git-ignored: one per person and machine. profile.md stays the shared project profile.
+// "Hats" are the HUMAN's focus (po, ba, ux, dev, qa; combinable). They are not AI roles (team.json, roles/*.json):
+// they shape how an AI talks to and checks with this person, and never change any scope, approval or permission.
+export const HATS = ['po', 'ba', 'ux', 'dev', 'qa'];
+export const ME_KEYS = [
+  ['name', 'Name'],
+  ['language', 'Language I want answers in'],
+  ['experience', 'Coding experience'],
+  ['style', 'How I like answers'],
+  ['hats', 'Hats'],
+  ['skills', 'Personal skills']
+];
+const HAT_HINTS = {
+  po: 'acceptance criteria, scope and decisions first',
+  ba: 'business rules, data and edge cases first',
+  ux: 'user flows, states and accessibility first',
+  dev: 'file:line references and the technical root cause first',
+  qa: 'test evidence, regressions and Given-When-Then checks first'
+};
+const keyOf = (label) => String(label).toLowerCase().replace(/\(.*?\)/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** "- Label: value" → { key, label, value }; null for other lines and "(fill me" placeholders. */
+export function parseProfileLine(line) {
+  const m = String(line).match(/^\s*-\s+([^:]+):\s*(.*)$/);
+  if (!m || /\(fill me/i.test(m[2])) return null;
+  return { key: keyOf(m[1]), label: m[1].trim(), value: m[2].trim() };
+}
+
+/** Hats from free text: "PO + QA", "po, qa", "dev/qa" → ['po','qa']; unknown words are dropped. */
+export function parseHats(text) {
+  const out = [];
+  for (const w of String(text || '').toLowerCase().split(/[^a-z]+/)) if (HATS.includes(w) && !out.includes(w)) out.push(w);
+  return out;
+}
+
+/** Read me.md: { exists, fields: [{key,label,value}], hats: [], skills: [] }. Never throws. */
+export function readMe(file = FILES.me) {
+  const text = readText(file);
+  const fields = text.split('\n').map(parseProfileLine).filter((f) => f && f.value);
+  const get = (k) => fields.find((f) => f.key === keyOf(k))?.value || '';
+  return {
+    exists: fs.existsSync(file),
+    fields,
+    hats: parseHats(get('Hats')),
+    skills: get('Personal skills').split(/[,;]/).map((s) => s.trim()).filter(Boolean)
+  };
+}
+
+/** Write me.md from { name, language, experience, style, hats, skills } (missing keys keep their current value). */
+export function writeMe(values, file = FILES.me) {
+  const cur = readMe(file);
+  const now = Object.fromEntries(cur.fields.map((f) => [f.key, f.value]));
+  const lines = ['# Me (personal, git-ignored)', '',
+    'This file is yours only: it is never committed. The shared project profile is profile.md.',
+    'Hats (po, ba, ux, dev, qa; combinable) shape how the AI talks to you; they never change permissions.', ''];
+  for (const [k, label] of ME_KEYS) {
+    let v = values[k] !== undefined ? values[k] : now[keyOf(label)];
+    if (k === 'hats' && v !== undefined) v = parseHats(Array.isArray(v) ? v.join(',') : v).join(', ');
+    if (k === 'skills' && Array.isArray(v)) v = v.join(', ');
+    lines.push(`- ${label}: ${v || ''}`.trimEnd());
+  }
+  ensureDirs();
+  fs.writeFileSync(file, `${lines.join('\n')}\n`);
+  return readMe(file);
+}
+
+export const ME_SETUP_CMD = 'node .harness/memory.mjs me set --name "…" --language "…" --experience "…" --style "…" --hats "po,qa"';
+
+/**
+ * Who is at this machine, for session start and doctor. Read-only, never asks anything (safe without a terminal).
+ *  { me, kind: 'me' | 'missing' | 'other-person' | 'ok', name?, gitName? }
+ *  - 'me': this person has me.md;
+ *  - 'missing': no me.md and profile.md is not filled in → onboard this person;
+ *  - 'other-person': no me.md, profile.md names someone else than the git user → probably a teammate on a new machine;
+ *  - 'ok': no me.md but profile.md is filled in and matches (one person working alone: nothing changes).
+ */
+export function personStatus({ gitName } = {}) {
+  const me = readMe();
+  if (me.exists && me.fields.length) return { me, kind: 'me' };
+  const profileText = readText(FILES.profile);
+  const filled = profileText.trim() && !/^- .*\(fill me/im.test(profileText);
+  if (!filled) return { me, kind: 'missing' };
+  const name = profileText.split('\n').map(parseProfileLine).find((f) => f && f.key === 'name')?.value || '';
+  if (gitName === undefined) { try { gitName = spawnSync('git', ['config', 'user.name'], { cwd: ROOT, encoding: 'utf8', timeout: 3000 }).stdout?.trim() || ''; } catch { gitName = ''; } }
+  const a = name.toLowerCase(); const b = String(gitName).toLowerCase();
+  if (a && b && !a.includes(b) && !b.includes(a)) return { me, kind: 'other-person', name, gitName };
+  return { me, kind: 'ok' };
+}
+
+/** The person block for worker prompts: me.md without personal skills, plus what the hats mean. '' without me.md. */
+export function mePromptBlock(me = readMe()) {
+  const lines = me.fields.filter((f) => f.key !== keyOf('Personal skills') && f.key !== keyOf('Hats')).map((f) => `- ${f.label}: ${f.value}`);
+  if (me.hats.length) {
+    lines.push(`- Hats: ${me.hats.join(', ')} (${me.hats.map((h) => HAT_HINTS[h]).join('; ')})`);
+    lines.push('- Hats only shape how you report and what you check first. They never widen your files, tools or permissions.');
+  }
+  return lines.length ? `## Person who started this run (me.md, overrides the user profile)\n${lines.join('\n')}` : '';
+}
+
 /**
  * Build the memory block injected into worker prompts.
  *  - skip: ['profile','lessons'] when the engine already auto-loads them (e.g. CLAUDE.md @imports)
@@ -1364,10 +1465,18 @@ export function memoryContext(config, { skip = [], query = '' } = {}) {
   const maxLines = mem.maxLessonLines ?? 50;
   const parts = [];
 
+  const me = readMe();
   if (!skip.includes('profile')) {
-    const profile = readText(FILES.profile).split('\n').filter((l) => !/\(fill me/i.test(l)).join('\n').trim();
+    // Shared profile lines that the person's own me.md answers are left out: the person's value wins.
+    const overridden = new Set(me.fields.map((f) => f.key));
+    const profile = readText(FILES.profile).split('\n')
+      .filter((l) => !/\(fill me/i.test(l))
+      .filter((l) => { const f = parseProfileLine(l); return !f || !overridden.has(f.key); })
+      .join('\n').trim();
     if (profile && /^- .+:\s*\S/m.test(profile)) parts.push(`## User profile\n${profile}`);
   }
+  const meBlock = mePromptBlock(me); // personal skills stay out: they are for the chat AI only
+  if (meBlock) parts.push(meBlock);
 
   const seen = new Set();
   const fresh = (l) => { const k = norm(stripSeen(l.text)); if (seen.has(k)) return false; seen.add(k); return true; };
