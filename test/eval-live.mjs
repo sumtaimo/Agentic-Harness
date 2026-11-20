@@ -83,15 +83,19 @@ for (const task of TASKS) {
   const committed = run.status === 0 && tel.some((e) => e.phase === '4_COMMITTER');
   const engineMissing = /ENGINE_APPROVAL_NEEDED|not installed|No usable engine/i.test(`${run.stdout}${run.stderr}`) && !committed;
   const hidden = spawnSync(process.execPath, ['-e', task.hidden], { cwd: d, encoding: 'utf8', timeout: 60000 });
-  const judge = tel.filter((e) => /^JUDGE_(APPROVED|BLOCKED)$/.test(e.phase)).map((e) => e.phase.replace('JUDGE_', ''));
+  const judgeEvents = tel.filter((e) => /^JUDGE_(APPROVED|BLOCKED)$/.test(e.phase));
+  const judge = judgeEvents.map((e) => e.phase.replace('JUDGE_', ''));
+  // why the judge decided (reasons, scores, findings), so a block can be told apart from a false alarm
+  const judgeNotes = judgeEvents.map((e) => ({ decision: e.phase.replace('JUDGE_', ''), cycle: e.cycle ?? e.data?.cycle, summary: String(e.message || '').slice(0, 300), reasons: e.reasons || e.data?.reasons || [], scores: e.scores || e.data?.scores, findings: (e.findings || e.data?.findings || []).slice(0, 7) }));
   const r = {
     id: task.id, score: committed && hidden.status === 0 ? 1 : 0, committed, hiddenPassed: hidden.status === 0,
     hiddenError: hidden.status === 0 ? '' : (hidden.stderr || hidden.stdout).split('\n').find((l) => /Error|assert/i.test(l)) || 'failed',
-    cycles: Math.max(0, ...tel.filter((e) => e.cycle).map((e) => e.cycle)), judge,
+    cycles: Math.max(0, ...tel.filter((e) => e.cycle).map((e) => e.cycle)), judge, judgeNotes,
     clipped: tel.some((e) => e.phase === 'PROMPT_CLIPPED'), seconds: Math.round((Date.now() - t0) / 1000), engineMissing
   };
   results.push(r);
   console.log(`  ${r.score ? '✔' : '✖'} ${task.id}: committed=${committed} hidden=${r.hiddenPassed}${r.hiddenError ? ` (${r.hiddenError.trim().slice(0, 120)})` : ''} judge=[${judge.join(',')}] ${r.seconds}s`);
+  for (const n of judgeNotes.filter((x) => x.decision === 'BLOCKED')) console.log(`      judge blocked${n.cycle ? ` (cycle ${n.cycle})` : ''}: ${(n.reasons[0] || n.summary).slice(0, 160)}${n.findings[0] ? ` — ${n.findings[0].issue}` : ''}`);
   if (engineMissing) { console.log(`\nNOT RUN: engine "${engine}" is not installed, not logged in, or not usable here.\n${(run.stdout + run.stderr).split('\n').slice(-6).join('\n')}`); process.exit(2); }
 }
 
