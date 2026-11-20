@@ -60,7 +60,8 @@
     "deny": [
       "Edit(.harness/releases/**)",
       "Bash(git push --force:*)",
-      "Bash(git push -f:*)"
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)"
     ]
   },
   "hooks": {
@@ -71,6 +72,17 @@
           {
             "type": "command",
             "command": "node .harness/hook-session.mjs"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .harness/hook-guard.mjs"
           }
         ]
       }

@@ -13,6 +13,7 @@
  *   node .harness/visible.mjs brief  --next [--auto-session <id>] [--editor <name>]   take the highest-priority READY backlog item
  *   node .harness/visible.mjs assign <run> '<delegation json>' [--editor <name>]       validate delegation, print each agent's prompt
  *   node .harness/visible.mjs verify <run> [--reports '<json {lead: "one-line report"}>']
+ *   node .harness/visible.mjs judge  <run> --agent reviewer|security (--verdict '<json or report>' | --file <path>)   LLM judge gate after PASSED
  *   node .harness/visible.mjs handoff [run] [--prompt] [--json]      inspect an unfinished run & print a continuation prompt/command
  *   node .harness/visible.mjs rollback <run>                          restore every file to how it was before the run
  *   node .harness/visible.mjs propose <auto-session> '<tasks json>'   (autonomous mode) add READY tasks to the backlog
@@ -28,6 +29,7 @@ import { spawnSync } from 'node:child_process';
 import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, buildRepoMap, memoryContext, recordSession, remember, normalizeTarget, clipErrorTrace, diagnoseVerifyFailure, formatDiagnosis, helpIfAsked, pendingCostReasons, aiUsageSince, usageTodayLine } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor, runsNode, ENGINE_SCRIPTS, isTestFilePath, auditPatchSignals, scanPatchSafety } from './lib/governance.mjs';
+import { JUDGE_AGENTS, JUDGE_DEFAULT_MIN_SCORE, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, UNTRUSTED_CONTENT_RULE, scanInjection, taskText, injectionHoldReason } from './lib/guard.mjs';
 import { VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, listVisibleRuns, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
 
 if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must not use the editor workflow.'); process.exit(2); }
@@ -101,6 +103,7 @@ function leadPrompt(run, lead, a, roles, skills) {
     `\nYour assignment: ${a.goal}`,
     `\nYou may create or change ONLY these files/folders: ${a.files.join(', ')}.`,
     'Do not touch anything else: the controller compares every changed file against the assignments after all agents finish, reverts anything outside your files, and the run fails.',
+    `\n${UNTRUSTED_CONTENT_RULE}`,
     run.interfaceContract ? `\nShared interface contract (the other leads are building against exactly this, in parallel):\n${run.interfaceContract}` : '',
     run.acceptanceCriteria?.length ? `\nAcceptance criteria:\n${run.acceptanceCriteria.map((c) => `- ${c}`).join('\n')}` : '',
     `\nTask overall: ${run.goal}`,
@@ -205,6 +208,8 @@ function brief() {
     // Same rule as the headless autopilot: a READY item that may use a lot of quota is held ("Needs your OK"), not started.
     const held = [];
     for (item = nextReady(); item; item = nextReady()) {
+      const injection = injectionHoldReason(item);
+      if (injection) { updateBacklogItem(item.id, { status: 'BLOCKED', needsApproval: true, blockedReason: injection }); held.push(`${item.id} ("${item.title || item.goal}", possible prompt injection)`); continue; }
       const pending = pendingCostReasons(config, item);
       if (!pending.length) break;
       updateBacklogItem(item.id, { status: 'BLOCKED', needsApproval: true, blockedReason: `Needs your OK (may use a lot of quota): ${pending.map((p) => p.text).join('; ')}. Approve: node .harness/backlog.mjs approve ${item.id}` });
@@ -359,7 +364,8 @@ function runCheck(run) {
 
 function verify() {
   const run = loadRun(positional[0]);
-  if (!['DELEGATED', 'FAILED'].includes(run.status)) die(`Run ${run.id} is ${run.status}; it can only be verified after assign (DELEGATED) or after a failed verify.`);
+  if (!['DELEGATED', 'FAILED', 'REVIEW_BLOCKED'].includes(run.status)) die(`Run ${run.id} is ${run.status}; it can only be verified after assign (DELEGATED), after a failed verify, or after the judge blocked it (REVIEW_BLOCKED).`);
+  if (run.status === 'REVIEW_BLOCKED') { delete run.reviews; fs.rmSync(path.join(runDir(run.id), 'judge.md'), { force: true }); } // the code changed: it needs a fresh judge verdict
   const prevTrace = run.lastVerify && !run.lastVerify.passed ? (run.lastVerify.trace || run.lastVerify.check || '') : '';
   let reports = {}; try { reports = flag('--reports') ? JSON.parse(flag('--reports')) : {}; } catch { /* ignore a malformed summary */ }
   run.cycles += 1;
@@ -504,6 +510,43 @@ function verify() {
   process.exit(passed ? 0 : 1);
 }
 
+/**
+ * LLM judge gate: record a reviewer/security verdict for a PASSED run. The controller validates the JSON against the
+ * rubric and decides (lib/guard.mjs decideJudge); a block turns the run into REVIEW_BLOCKED and the backlog item BLOCKED.
+ */
+function judge() {
+  const run = loadRun(positional[0]);
+  if (!['PASSED', 'REVIEW_BLOCKED'].includes(run.status)) die(`Run ${run.id} is ${run.status}; the judge only reviews a run the controller verified (PASSED).`);
+  const agent = flag('--agent') || 'reviewer';
+  if (!JUDGE_AGENTS.includes(agent)) die(`--agent must be one of: ${JUDGE_AGENTS.join(', ')}`);
+  let raw = flag('--verdict');
+  if (flag('--file')) { try { raw = fs.readFileSync(path.resolve(flag('--file')), 'utf8'); } catch (e) { die(`Cannot read --file: ${e.message}`); } }
+  if (raw === '-') raw = fs.readFileSync(0, 'utf8');
+  if (!raw) die(`Give the judge's verdict with --verdict '<json or full report>' or --file <path>.\n${JUDGE_FORMAT}`);
+  const { verdict, errors } = parseJudgeVerdict(raw);
+  if (!verdict) die(`INVALID VERDICT from ${agent} (nothing recorded; ask the agent to answer in the required format):\n  - ${errors.join('\n  - ')}\n${JUDGE_FORMAT}`);
+  const minScore = Number.isInteger(config.review?.minScore) ? config.review.minScore : JUDGE_DEFAULT_MIN_SCORE;
+  const decision = decideJudge(verdict, { minScore });
+  run.reviews = { ...(run.reviews || {}), [agent]: { at: new Date().toISOString(), ...verdict, approved: decision.approved, reasons: decision.reasons } };
+  const blockedBy = Object.entries(run.reviews).filter(([, r]) => !r.approved).map(([a]) => a);
+  run.status = blockedBy.length ? 'REVIEW_BLOCKED' : 'PASSED';
+  saveRun(run);
+  const text = Object.entries(run.reviews).map(([a, r]) => formatJudge(a, r, { approved: r.approved, reasons: r.reasons })).join('\n\n');
+  fs.writeFileSync(path.join(runDir(run.id), 'judge.md'), `${text}\n`);
+  if (run.backlogId) {
+    if (blockedBy.length) updateBacklogItem(run.backlogId, { status: 'BLOCKED', blockedReason: `REVIEW_BLOCKED by ${blockedBy.join(', ')}: ${run.reviews[blockedBy[0]].reasons[0]}. Fix, then verify run ${run.id} again.` });
+    else updateBacklogItem(run.backlogId, { status: 'DONE', result: 'VERIFIED+JUDGED', blockedReason: undefined });
+  }
+  if (!decision.approved && (config.memory || {}).autoLessons !== false && !String(run.id).startsWith('V-test')) {
+    try { remember(`Judge (${agent}) blocked "${run.title}": ${decision.reasons[0]}${verdict.findings[0] ? ` — ${verdict.findings[0].issue.slice(0, 120)}` : ''}.`, FILES.autoLessons); } catch { /* memory is best effort */ }
+  }
+  console.log(text);
+  console.log(blockedBy.length
+    ? `\nREVIEW_BLOCKED: send the findings to the responsible lead, then run: node .harness/visible.mjs verify ${run.id} (and judge it again).`
+    : '\nJUDGE APPROVED: the human reviews the diff and decides whether to commit.');
+  process.exit(blockedBy.length ? 1 : 0);
+}
+
 function rollback() {
   const run = loadRun(positional[0]);
   const scopeGlobs = run.userAllowed?.length ? run.userAllowed : (run.charter?.allowedPaths || []);
@@ -536,6 +579,8 @@ function propose() {
       if (!t.title || !String(t.title).trim()) throw new Error('no title');
       if (have.has(norm(t.title))) throw new Error('duplicate of an existing backlog item');
       if (!Array.isArray(t.files) || !t.files.length) throw new Error('no files');
+      const inj = scanInjection(taskText(t));
+      if (inj.length) throw new Error(`possible prompt injection (${inj.map((h) => h.reason).join('; ')})`);
       const files = t.files.map((f) => { const s = normalizeTarget(f); if (!s) throw new Error(`unsafe path "${f}"`); return s; });
       for (const f of files) {
         if (!leads.some((l) => leadOwns(l, f, leads))) throw new Error(`"${f}" is not inside any lead's scope`);
@@ -613,10 +658,11 @@ switch (cmd) {
   case 'brief': brief(); break;
   case 'assign': assign(); break;
   case 'verify': verify(); break;
+  case 'judge': judge(); break;
   case 'handoff': handoff(); break;
   case 'rollback': rollback(); break;
   case 'propose': propose(); break;
-  case 'report': { const f = path.join(runDir(positional[0] || ''), 'report.md'); if (!fs.existsSync(f)) die(`No report for run ${positional[0] || '(none)'} yet (verify it first).`); console.log(fs.readFileSync(f, 'utf8')); break; }
+  case 'report': { const f = path.join(runDir(positional[0] || ''), 'report.md'); if (!fs.existsSync(f)) die(`No report for run ${positional[0] || '(none)'} yet (verify it first).`); console.log(fs.readFileSync(f, 'utf8')); const j = path.join(runDir(positional[0]), 'judge.md'); if (fs.existsSync(j)) console.log(fs.readFileSync(j, 'utf8')); break; }
   case 'status': status(); break;
-  default: die(`Unknown command "${cmd}". Use: brief | assign | verify | handoff | rollback | propose | status | report`);
+  default: die(`Unknown command "${cmd}". Use: brief | assign | verify | judge | handoff | rollback | propose | status | report`);
 }

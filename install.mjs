@@ -273,8 +273,12 @@ else {
         }
         const present = JSON.stringify(mine.hooks.SessionStart).includes('hook-session.mjs');
         if (!present) mine.hooks.SessionStart.push(srcSet.hooks.SessionStart[0]);
+        // PreToolUse guard (hook-guard.mjs): added once; a project's own PreToolUse hooks stay
+        mine.hooks.PreToolUse = mine.hooks.PreToolUse || [];
+        const guardPresent = JSON.stringify(mine.hooks.PreToolUse).includes('hook-guard.mjs');
+        if (!guardPresent && srcSet.hooks.PreToolUse?.[0]) mine.hooks.PreToolUse.push(srcSet.hooks.PreToolUse[0]);
         fs.writeFileSync(setPath, JSON.stringify(mine, null, 2) + '\n');
-        report.push(`merged harness rules${present ? '' : ' + SessionStart hook'} into existing .claude/settings.json`);
+        report.push(`merged harness rules${present ? '' : ' + SessionStart hook'}${guardPresent ? '' : ' + PreToolUse guard'} into existing .claude/settings.json`);
       } catch {
         fs.writeFileSync(path.join(target, '.claude', 'settings.harness.json'), JSON.stringify(srcSet, null, 2) + '\n');
         report.push('! .claude/settings.json is not valid JSON — wrote .claude/settings.harness.json; merge it by hand');

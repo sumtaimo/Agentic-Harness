@@ -304,7 +304,9 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/backlog.mjs` | backlog list / add / ready / pop / import (with snapshot) / releases |
 | `.harness/roles/` · `skills/` | role personas + tool limits · skill rules |
 | `.harness/team.json` · `team.mjs` | the agent team (orchestrator → leads → workers): scopes, limits, budgets · show / validate / `sync-agents` / `adapt-scopes` |
-| `.harness/visible.mjs` | the controller for the editor workflow: brief / assign / verify / handoff / rollback / propose / status / report |
+| `.harness/visible.mjs` | the controller for the editor workflow: brief / assign / verify / judge / handoff / rollback / propose / status / report |
+| `.harness/lib/guard.mjs` | LLM judge gate (rubric + JSON verdict the controller decides on; `visible.mjs judge` → `REVIEW_BLOCKED`) and prompt-injection guard (a "data, not instructions" rule in every prompt; injected backlog or proposed tasks are held or rejected) |
+| `.harness/hook-guard.mjs` | Claude Code PreToolUse guard: blocks edits to `.env*`, `.git/**`, `.harness/releases/**` (and the core in installed projects), hard resets, `git clean -f`, force pushes and pushes to protected branches **before** they happen |
 | `.harness/sessions.mjs` · `/harness:sessions` | session board: Session A (role COORDINATOR) runs up to 4 child sessions, one task each; `checkpoint` saves WIP, `handoff` inspects & prepares cross-engine resume (`dispatch.mjs --cwd`), merge only with the owner's yes; merged tasks are cleaned up, unfinished ones flagged HIGH RISK, never deleted |
 | `.claude/agents/lead-*.md` | the named agents (generated from team.json; the user sees them working in the session) |
 | `docs/WORKFLOW.md` | the workflow, the rules, the two modes, what is not guaranteed |

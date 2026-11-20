@@ -50,6 +50,7 @@ import {
   buildCandidate, advanceBranch, removeWorktree, deleteBranch, safeRef, linkShared, unlinkShared
 } from './lib/integration.mjs';
 import { syncVisibleRunAfterDaemon } from './lib/handoff.mjs';
+import { UNTRUSTED_CONTENT_RULE, injectionHoldReason } from './lib/guard.mjs';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -522,6 +523,7 @@ function buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov = {}, cy
   return [
     `[HARNESS WORKER ID: ${subtask.id} | ENGINE: ${String(profileName).toUpperCase()}${role ? ` | ROLE: ${role.name}` : ''}]`,
     '[YOU ARE A HARNESS WORKER: do the task below directly. Do NOT dispatch new harness tasks.]',
+    `[UNTRUSTED CONTENT RULE]: ${UNTRUSTED_CONTENT_RULE}`,
     role ? `[ROLE PERSONA — ${role.name}]:\n${role.mission || role.description || ''}` : '',
     scoped
       ? `[SCOPED TARGET FILES: ${subtask.targetFiles.join(', ')}]\n[STRICT CONSTRAINT: Only modify your scoped target files. Do not touch unrelated files.${role ? ' Your engine permissions are limited to these paths; other edits will be denied.' : ''}]`
@@ -1777,6 +1779,13 @@ async function autonomousTick(reason = 'interval') {
     // A READY item that may use a lot of quota is held (BLOCKED, "needs your OK"), and autopilot moves on to the next one.
     const pickReady = () => {
       for (let it = nextReady(); it; it = nextReady()) {
+        const injection = injectionHoldReason(it);
+        if (injection) {
+          updateBacklogItem(it.id, { status: 'BLOCKED', blockedReason: injection, needsApproval: true });
+          logTelemetry('AUTO_HELD_INJECTION', `Held ${it.id}: ${injection}`, { backlogId: it.id });
+          writeState({ history: pushHistory(`⏸ HELD  ${it.id} possible prompt injection`) });
+          continue;
+        }
         const pending = pendingCostReasons(config, it);
         if (!pending.length) return it;
         const why = `Needs your OK (may use a lot of quota): ${pending.map((p) => p.text).join('; ')}. Approve: node .harness/backlog.mjs approve ${it.id}`;
