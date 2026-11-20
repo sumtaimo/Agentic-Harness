@@ -29,7 +29,7 @@ import path from 'node:path';
 import { exec, execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
-  ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which,
+  ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which, engineBinary,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd, buildRepoMap, clipErrorTrace, diagnoseVerifyFailure, formatDiagnosis,
   listProjectFiles, safeTarget, normalizeTarget, isSecretFile, isSameDir, validateExternalWorkRoot,
   winQuote, winCommandLine, needsWinShell, MODEL_TIERS, chooseModelTier, resolveModel, compatibleModelFor, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
@@ -136,7 +136,7 @@ function nextStepHint(s) {
 }
 
 const engineList = () => Object.entries(config.profiles)
-  .map(([k, p]) => `${k.toUpperCase()}${which(p.binary) ? '✓' : '·'}`).join(' ');
+  .map(([k, p]) => `${k.toUpperCase()}${engineBinary(p) ? '✓' : '·'}`).join(' ');
 
 function renderHUD(s) {
   if (process.env.HARNESS_SILENT === '1') return;
@@ -354,7 +354,7 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
     }
     const live = liveOn();
     const stream = live && Array.isArray(profile.output?.stream);
-    const binPath = which(profile.binary);
+    const binPath = engineBinary(profile);
     // Engines that take the prompt as a command-line argument (agy) hit the OS limit (Windows: 32,767 chars for the whole
     // command line). Over the budget, the full prompt goes to a file and the engine gets a short instruction to read it.
     const viaArg = (profile.promptVia || ((profile.args || []).includes('{prompt}') ? 'arg' : 'stdin')) !== 'stdin';

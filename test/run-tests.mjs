@@ -5936,6 +5936,44 @@ await test('v1.0.23 prompt size guard: an oversized worker prompt is clipped (me
   assert(read(d, '.mock-prompts/w.txt').length <= 8200, 'prompt not clipped: ' + read(d, '.mock-prompts/w.txt').length);
 });
 
+await test('v1.0.24 engineBinary: a CLI shipped inside an app (not on PATH) is found via binaryCandidates', async () => {
+  const common = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'h-bin-'));
+  for (const v of ['App_1.0.0_x64', 'App_2.0.0_x64']) { const d = path.join(root, v, 'resources'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'tool.exe'), 'x'); }
+  const env = { PATH: path.join(root, 'empty'), PATHEXT: '.EXE', APPROOT: root };
+  const prof = { binary: 'tool', binaryCandidates: ['%NOPE_UNSET_VAR%/tool.exe', '%APPROOT%/App_*_x64/resources/tool.exe'] };
+  assert(common.which('tool', env.PATH) === null, 'precondition: not on PATH');
+  const hit = common.engineBinary(prof, env);
+  assert(hit && hit.includes('App_2.0.0_x64'), `newest candidate expected, got ${hit}`);
+  assert(common.engineBinary({ binary: 'tool' }, env) === null, 'no candidates -> null');
+  assert(common.engineBinary({ binary: 'tool', binaryCandidates: ['$APPROOT/none/*.exe'] }, env) === null, 'no match -> null');
+  const cfg = JSON.parse(fs.readFileSync(path.join(REPO, '.harness', 'config.json'), 'utf8'));
+  const appRoot = path.join(root, 'App_2.0.0_x64');
+  const viaAppx = common.engineBinary({ binary: 'tool', binaryCandidates: ['appx:Vendor.App/resources/tool.exe'] }, env, (n) => (n === 'Vendor.App' ? appRoot : null));
+  assert(viaAppx === path.join(appRoot, 'resources', 'tool.exe'), `appx candidate, got ${viaAppx}`);
+  assert(common.engineBinary({ binary: 'tool', binaryCandidates: ['appx:Other.App/resources/tool.exe'] }, env, () => null) === null, 'appx not installed -> null');
+  assert((cfg.profiles.codex.binaryCandidates || []).some((c) => /^appx:OpenAI\.Codex\//.test(c)), 'codex profile lists the Codex desktop app package');
+});
+
+await test('v1.0.24 install update: an existing config.json keeps the owner\'s values but gets new engine profile keys, and removed engines are dropped', () => {
+  const mine = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-cfg-up-'));
+  fs.mkdirSync(path.join(mine, '.harness'), { recursive: true });
+  const old = { activeProfile: 'auto', autoOrder: ['claude', 'orca', 'codex'], maxCycles: 7,
+    profiles: { codex: { verified: false, binary: 'codex', args: ['exec', '--full-auto', '-'] }, claude: { verified: true, binary: 'claude', args: ['-p', '--my-own-flag'] }, orca: { binary: 'orca' } } };
+  fs.writeFileSync(path.join(mine, '.harness', 'config.json'), JSON.stringify(old));
+  const r = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), mine], { encoding: 'utf8' });
+  assert(r.status === 0, r.stderr);
+  const cfg = json(path.join(mine, '.harness', 'config.json'));
+  assert(cfg.maxCycles === 7 && JSON.stringify(cfg.profiles.claude.args) === JSON.stringify(old.profiles.claude.args), 'owner values of a verified profile overwritten');
+  const tpl = json(path.join(REPO, '.harness', 'config.json')).profiles.codex;
+  assert(tpl.verified === true && cfg.profiles.codex.verified === true && JSON.stringify(cfg.profiles.codex.args) === JSON.stringify(tpl.args), 'unverified stale codex args not replaced by the verified template: ' + JSON.stringify(cfg.profiles.codex.args));
+  assert(Array.isArray(cfg.profiles.codex.binaryCandidates) && cfg.profiles.antigravity, 'new profile keys / profiles not added: ' + JSON.stringify(Object.keys(cfg.profiles)));
+  assert(!cfg.profiles.orca && !cfg.autoOrder.includes('orca'), 'removed engine kept');
+  assert(/update \.harness[\\/]config\.json/.test(r.stdout), 'install did not say it updated config.json:\n' + r.stdout);
+  const again = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), mine], { encoding: 'utf8' });
+  assert(/kept   \.harness[\\/]config\.json/.test(again.stdout), 'second install should change nothing');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
 

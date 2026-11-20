@@ -137,9 +137,13 @@
       ]
     },
     "codex": {
-      "verified": false,
-      "note": "Checked with codex-cli 0.169.0 (2026-11-14): '--full-auto' no longer exists; 'exec --sandbox workspace-write' runs non-interactively and may edit files in the project only. '-' reads the prompt from stdin. Log in once with 'codex login'.",
+      "verified": true,
+      "note": "Verified 2026-11-20 with codex-cli 0.167.0-alpha.4.1 (Windows, Codex desktop app, ChatGPT login): 'npm run eval -- --engine codex' committed 3/3 tasks (feature, bugfix, injection) with hidden checks passing and the judge gate approving. 'exec --sandbox workspace-write' runs non-interactively and may edit files in the project only; '-' reads the prompt from stdin; '--full-auto' no longer exists (checked with 0.169.0 on 2026-11-14). Log in once with 'codex login'.",
       "binary": "codex",
+      "binaryCandidates": [
+        "appx:OpenAI.Codex/app/resources/codex.exe"
+      ],
+      "binaryCandidatesNote": "Used only when 'codex' is not on PATH: the Windows Codex desktop app (Store package OpenAI.Codex) ships the CLI in its install folder without adding it to PATH, and Node may not list C:\\Program Files\\WindowsApps, so it is found through Get-AppxPackage (seen 2026-11-20, codex-cli 0.167.0-alpha.4.1).",
       "args": [
         "exec",
         "--sandbox",

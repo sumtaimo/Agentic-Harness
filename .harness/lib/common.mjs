@@ -81,6 +81,66 @@ export function which(binary, envPath = process.env.PATH, pathExt = process.env.
 }
 
 /**
+ * Resolve an engine profile's executable: `binary` on PATH first, then each `binaryCandidates` entry
+ * (for CLIs that ship inside an app and are not put on PATH, e.g. the Codex desktop app on Windows).
+ * A candidate may use %VAR% / $VAR / ${VAR} and `*` inside path segments; with several matches the
+ * highest-sorting (newest version folder) wins. A candidate 'appx:<PackageName>/<relative path>' is
+ * resolved on Windows through Get-AppxPackage, because Node may not list C:\Program Files\WindowsApps (EPERM).
+ * Returns a full path or null.
+ */
+const appxCache = new Map();
+function appxLocation(name) {
+  if (process.platform !== 'win32' || !/^[A-Za-z0-9._-]+$/.test(name)) return null;
+  if (!appxCache.has(name)) {
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-AppxPackage -Name '${name}' | Sort-Object Version -Descending | Select-Object -First 1).InstallLocation`], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+    appxCache.set(name, (r.stdout || '').trim() || null);
+  }
+  return appxCache.get(name);
+}
+
+export function engineBinary(profile, env = process.env, locateAppx = appxLocation) {
+  if (!profile) return null;
+  const onPath = which(profile.binary, env.PATH, env.PATHEXT);
+  if (onPath) return onPath;
+  for (const raw of [].concat(profile.binaryCandidates || [])) {
+    const expanded = String(raw)
+      .replace(/%([A-Za-z0-9_]+)%/g, (m, v) => env[v] ?? '\0')
+      .replace(/\$\{?([A-Za-z0-9_]+)\}?/g, (m, v) => env[v] ?? '\0');
+    if (expanded.includes('\0')) continue; // a variable is not set on this machine
+    const appx = /^appx:([^/\\]+)[/\\](.+)$/.exec(expanded);
+    if (appx) {
+      const loc = locateAppx(appx[1]);
+      const f = loc && path.join(loc, appx[2]);
+      try { if (f && fs.statSync(f).isFile()) return f; } catch { /* not there */ }
+      continue;
+    }
+    const hit = globFile(expanded);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function globFile(pattern) {
+  const parts = pattern.split(/[\\/]+/);
+  let bases = [parts[0] === '' ? path.sep : (/^[A-Za-z]:$/.test(parts[0]) ? parts[0] + path.sep : parts[0])];
+  for (let i = 1; i < parts.length; i++) {
+    const seg = parts[i];
+    if (!seg) continue;
+    const next = [];
+    for (const base of bases) {
+      if (!seg.includes('*')) { next.push(path.join(base, seg)); continue; }
+      const re = new RegExp(`^${seg.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`, 'i');
+      let names = [];
+      try { names = fs.readdirSync(base); } catch { /* unreadable */ }
+      next.push(...names.filter((n) => re.test(n)).sort().reverse().map((n) => path.join(base, n)));
+    }
+    bases = next;
+  }
+  for (const f of bases) { try { if (fs.statSync(f).isFile()) return f; } catch { /* next */ } }
+  return null;
+}
+
+/**
  * Find every distinct copy of `binary` across PATH directories in search order.
  * Resolves symlinks/junctions to deduplicate identical underlying binaries and picks at most one
  * winning executable per directory (matching `which()` so Windows paired `<bin>` + `<bin>.cmd` shims
@@ -282,7 +342,7 @@ export function profileFlags(profile) {
 const PROBE_VERSION = 2;
 
 export function probeEngine(profile, { force = false } = {}) {
-  const binPath = which(profile.binary);
+  const binPath = engineBinary(profile);
   if (!binPath) return { installed: false, checked: false, compatible: false, missing: [], binPath: null };
   const flags = profileFlags(profile);
   if (flags.length === 0) return { installed: true, checked: false, compatible: true, missing: [], binPath };

@@ -79,6 +79,11 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 
 នេះហើយជាគោលការណ៍ "Deterministic Verification"៖ test ពិតប្រាកដជាអ្នកសម្រេច មិនមែន AI ទេ។
 
+## ការ update project និងការរក engine (v1.0.24)
+
+- `node install.mjs <project>` លើ project ដែលមាន harness រួចហើយ រក្សាតម្លៃ `config.json` របស់អ្នក បន្ថែម engine profile ឬ key ដែលខ្វះ លុប engine ដែលលែងគាំទ្រ (gemini, orca) ហើយ profile ដែលមិនទាន់ verified យក `args`/models ដែលបានតេស្តពី template ពេល template verified engine នោះហើយ។ វាបង្ហាញការផ្លាស់ប្តូរនីមួយៗជា `update .harness/config.json (...)`។
+- CLI របស់ engine ដែលមិននៅលើ PATH នៅតែរកឃើញតាម `binaryCandidates` ក្នុង profile។ នៅលើ Windows `codex` ក្នុង Codex desktop app (`appx:OpenAI.Codex/...`) ត្រូវបានរកឃើញតាមវិធីនេះ ហើយ `doctor` បង្ហាញ path ពេញ។ `codex` ត្រូវបាន verified នៅថ្ងៃ 2026-11-20 (eval ពិត 3/3)។
+
 ## ៨. ការកែលម្អបន្ថែម
 
 - test មិនខូចទៀតទេ ពេលមានការងារក្នុង backlog ឬមាន run កំពុងបើក (`sandbox()` ក្នុង `test/run-tests.mjs`)។

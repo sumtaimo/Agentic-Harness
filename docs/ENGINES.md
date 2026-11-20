@@ -112,7 +112,9 @@ Details and the full rules: [`MULTI-MODEL-SETUP.md`](MULTI-MODEL-SETUP.md#6-mode
 - **Non-blocking notice:** if any `*_API_KEY` env var is active in your shell, `node .harness/doctor.mjs` prints a 1-line notice so you do not use paid API tokens when you meant to use your subscription.
 - Antigravity: log in through the Antigravity app with your Google account.
 - Claude Code: run `claude` once and log in with your subscription.
-- Codex: run `codex` once and log in.
+- Codex: run `codex` once and log in. On Windows the Codex desktop app (Microsoft Store package `OpenAI.Codex`) ships the
+  CLI inside its install folder without putting it on PATH; the profile's `binaryCandidates` (`appx:OpenAI.Codex/app/resources/codex.exe`)
+  finds it through `Get-AppxPackage`, so `node .harness/doctor.mjs` shows its full path. A `codex` on PATH always wins.
 
 ## Check your setup with doctor
 
@@ -139,13 +141,18 @@ Antigravity there. Cloud sessions therefore use Claude Code. Antigravity is for 
 ## Verified and unverified profiles
 
 Profiles in `.harness/config.json` have `"verified": false` until a real run with that tool
-succeeds. Today `claude` and `antigravity` are `"verified": true`.
+succeeds. Today `claude`, `antigravity` and `codex` are `"verified": true`.
+
+When you update an existing project with `node install.mjs <project>`, its `config.json` keeps your own values, gains
+any engine profile or profile key it lacks (for example `binaryCandidates`), drops removed engines, and an unverified
+profile takes the template's tested `args`/models once the template marks that engine verified. The installer prints
+every such change as `update .harness/config.json (...)`.
 
 | Profile | Configured now | Status |
 |---|---|---|
 | `claude` | binary `claude`, `-p`, prompt on stdin | verified |
 | `antigravity` | binary `agy`, args `-p {prompt}` (prompt as argument), no auto-approve | verified on Windows 11 / Node 24 with `agy` 1.5.8 (2026-11-14; re-verified 2026-11-16) and `agy` 1.5.9 (2026-11-18, 2026-11-19): a scoped file task ran on Cycle 1 (`shell: false`, multi-line prompt and `--model` preserved), the real check passed and the job was COMMITTED, also with a 3,049-character goal; all three model tiers, live quota-fallback step-down, and the full v1.0.6–v1.0.21 live suite (including `dailyLimits` `DAILY_LIMIT` → `QUOTA_FALLBACK`, `--resume-visible` cross-engine model alias guard, `MODEL_TIER` right-sizing & retry escalation, 3-level `--hierarchy`, role/skill `allowedTools` & `mcp.json`, `.harness/sdk.mjs`, v1.0.19 `visible.mjs brief --bugfix` + Red-Green + Antigravity editor protocol, headless v1.0.18 `daemon.mjs --tick` PASS→`uat` and FAIL→`exit 1`/`BLOCKED`, and v1.0.21 task-aware memory ranking, `FAILURE_DIAGNOSED`, `scanPatchSafety`, adaptive scopes, repo map, and cross-tool rule parity) passed real runs |
-| `codex` | binary `codex`, args `exec --sandbox workspace-write -`, prompt on stdin, `--model` + reasoning effort | partly verified with codex-cli 0.169.0 (2026-11-14): flags, model and effort accepted (`approval: never`, `sandbox: workspace-write`); a full task has not completed yet, so not marked verified (`"verified": false`) |
+| `codex` | binary `codex`, args `exec --sandbox workspace-write -`, prompt on stdin, `--model` + reasoning effort | verified on Windows 11 / Node 24 with codex-cli 0.167.0-alpha.4.1 from the Codex desktop app (2026-11-20): `npm run eval -- --engine codex` committed 3/3 tasks (feature, bugfix, injection), every hidden check passed and the judge gate approved each one; flags, model and effort were first accepted with codex-cli 0.169.0 (2026-11-14) |
 
 Notes for Antigravity:
 
@@ -157,7 +164,20 @@ Notes for Antigravity:
 <!-- docs-drift:ignore -->
 - On 2026-11-18, v1.0.19 (`node .harness/visible.mjs brief --bugfix`, `lead-dev` test-file isolation rejecting `tests/**`, Red-Green `lead-qa` → `lead-dev` sequencing with `Symptom / Root Cause / Blast Radius`, `visible.mjs verify` passing `npm test` with empty `antiCheatSignals`, and `usage.mjs` attribution under `antigravity-editor`) and the Antigravity `AGENTS.md`/`GEMINI.md` editor protocol passed a live Antigravity editor run in a scratch `demo-project` (`Node.js` 24.22.2).
 <!-- docs-drift:ignore -->
-- On 2026-11-19, the remaining headless v1.0.18 `node .harness/daemon.mjs --tick` and v1.0.21 capabilities passed live on Windows 11 / Node 24 with `agy` 1.5.9: passing autonomous `--tick` (`--priority 0`, task-aware `memory.mjs learn` / `context` ranking applied live on Cycle 1, merged to `uat` while leaving `main` and the working folder untouched, exit `0`, `DONE`), failing autonomous `--tick` (exit `1`, `uat` unchanged, `BLOCKED`, `FAILURE_DIAGNOSED` + auto-lesson captured), `scanPatchSafety` blocking leaked secrets `(redacted)` and merge conflict markers with `PATCH_SAFETY` parity across `status.mjs` / `hook-session.mjs` / `handoff`, `[REPO MAP]` injection, adaptive `app/` + `styles/` scopes + polyglot `pytest` detection, and `doctor.mjs` 6-file cross-tool rule parity. Only a full `codex` run (`"verified": false` in `.harness/config.json`) still awaits a machine with `codex` installed.
+- On 2026-11-19, the remaining headless v1.0.18 `node .harness/daemon.mjs --tick` and v1.0.21 capabilities passed live on Windows 11 / Node 24 with `agy` 1.5.9: passing autonomous `--tick` (`--priority 0`, task-aware `memory.mjs learn` / `context` ranking applied live on Cycle 1, merged to `uat` while leaving `main` and the working folder untouched, exit `0`, `DONE`), failing autonomous `--tick` (exit `1`, `uat` unchanged, `BLOCKED`, `FAILURE_DIAGNOSED` + auto-lesson captured), `scanPatchSafety` blocking leaked secrets `(redacted)` and merge conflict markers with `PATCH_SAFETY` parity across `status.mjs` / `hook-session.mjs` / `handoff`, `[REPO MAP]` injection, adaptive `app/` + `styles/` scopes + polyglot `pytest` detection, and `doctor.mjs` 6-file cross-tool rule parity. On 2026-11-20 a full `codex` run closed that last gap (see the table above).
+
+## Smoke task (one tiny real run)
+
+After changing an engine profile, run one tiny task in a scratch project:
+
+```bash
+npm run demo -- ../harness-smoke            # throw-away project with the harness
+cd ../harness-smoke
+node .harness/engines.mjs allow <engine>    # your own OK to spend that tool's quota (you run this, not an AI)
+node .harness/dispatch.mjs --mode normal --engine <engine> --files hello.txt --goal "Create hello.txt containing exactly: hello from the harness" --check "node -e \"process.exit(require('fs').readFileSync('hello.txt','utf8').trim()==='hello from the harness'?0:1)\"" --wait
+```
+
+It passes when the job is COMMITTED. For a stronger check use `npm run eval -- --engine <engine>` in the template.
 
 To fix a profile: run `<binary> --help`, propose the change to the owner, then edit
 `.harness/config.json` and run doctor again.
