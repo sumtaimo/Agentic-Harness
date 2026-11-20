@@ -118,15 +118,19 @@ test('no codex or agy on PATH gives installed=false', () => {
   }
 });
 
+// codex is verified since 1.0.24; these tests need an UNVERIFIED profile, so they say so explicitly
+const unverifiedCodex = { ...profiles.codex, verified: false };
+const unverifiedConfig = { ...config, profiles: { ...profiles, codex: unverifiedCodex } };
+
 test('help printing nothing: an unverified profile is rejected and auto falls through to agy', () => {
   useBin('silent', { codex: 'exit 0', agy: AGY_HELP });
-  const probe = probeEngine(profiles.codex, { force: true });
+  const probe = probeEngine(unverifiedCodex, { force: true });
   assert.equal(probe.installed, true);
   assert.equal(probe.checked, false);
   assert.equal(probe.compatible, false);
   assert.match(probe.error, /printed nothing/);
-  assert.equal(resolveProfile(config).name, 'antigravity');
-  const r = resolveProfile(config, 'codex');
+  assert.equal(resolveProfile(unverifiedConfig).name, 'antigravity');
+  const r = resolveProfile(unverifiedConfig, 'codex');
   assert.equal(r.fallbackFrom, 'codex');
   assert.match(r.fallbackReason, /could not be checked/);
 });
@@ -144,18 +148,18 @@ test('an old-format cache entry claiming compatible is ignored, and a verified c
   const { FILES } = await import('../.harness/lib/common.mjs');
   const dir = useBin('stale-cache', { codex: 'exit 0' });
   const bin = path.join(dir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
-  const oldKey = `${bin}|${fs.statSync(bin).mtimeMs}|${profileFlags(profiles.codex).join(' ')}`;
+  const oldKey = `${bin}|${fs.statSync(bin).mtimeMs}|${profileFlags(unverifiedCodex).join(' ')}`;
   fs.writeFileSync(FILES.probe, JSON.stringify({ [oldKey]: { installed: true, checked: false, compatible: true, missing: [], binPath: bin } }));
-  assert.equal(probeEngine(profiles.codex).compatible, false, 'old cache entry must not be reused');
-  assert.equal(probeEngine({ ...profiles.codex, verified: true }).compatible, true, 'flipping verified must re-probe');
-  assert.equal(probeEngine(profiles.codex).compatible, false, 'unverified result is cached separately');
+  assert.equal(probeEngine(unverifiedCodex).compatible, false, 'old cache entry must not be reused');
+  assert.equal(probeEngine({ ...unverifiedCodex, verified: true }).compatible, true, 'flipping verified must re-probe');
+  assert.equal(probeEngine(unverifiedCodex).compatible, false, 'unverified result is cached separately');
 });
 
-test('a fresh install has no removed engine (gemini, orca); an existing config is kept as it is', () => {
+test('a fresh install has no removed engine (gemini, orca); an update keeps the owner\'s values and drops removed engines (1.0.24)', () => {
   const fresh = fs.mkdtempSync(path.join(tmpRoot, 'inst-fresh-'));
   const own = fs.mkdtempSync(path.join(tmpRoot, 'inst-own-'));
   fs.mkdirSync(path.join(own, '.harness'), { recursive: true });
-  const ownCfg = JSON.stringify({ profiles: { gemini: { args: ['--approval-mode', 'yolo', '-p', ''] } } });
+  const ownCfg = JSON.stringify({ maxCycles: 7, profiles: { gemini: { args: ['--approval-mode', 'yolo', '-p', ''] } } });
   fs.writeFileSync(path.join(own, '.harness', 'config.json'), ownCfg);
   const installer = path.join(here, '..', 'install.mjs');
   spawnSync(process.execPath, [installer, fresh], { encoding: 'utf8' });
@@ -163,7 +167,10 @@ test('a fresh install has no removed engine (gemini, orca); an existing config i
   const freshCfg = JSON.parse(fs.readFileSync(path.join(fresh, '.harness', 'config.json'), 'utf8'));
   assert.ok(!('gemini' in freshCfg.profiles) && !('orca' in freshCfg.profiles) && !freshCfg.autoOrder.includes('gemini'), 'fresh install must not have a removed engine');
   assert.ok(['claude', 'antigravity', 'codex'].every((e) => e in freshCfg.profiles), 'fresh install has the supported engines');
-  assert.equal(fs.readFileSync(path.join(own, '.harness', 'config.json'), 'utf8'), ownCfg, 'existing config must be kept');
+  const upd = JSON.parse(fs.readFileSync(path.join(own, '.harness', 'config.json'), 'utf8'));
+  assert.equal(upd.maxCycles, 7, 'the owner\'s own value must be kept');
+  assert.ok(!('gemini' in upd.profiles), 'a removed engine is dropped on update');
+  assert.ok(['claude', 'antigravity', 'codex'].every((e) => e in upd.profiles), 'missing supported engines are added on update');
 });
 
 test('the installer\'s embedded .gitignore copy (used by npx installs) matches .gitignore', () => {
