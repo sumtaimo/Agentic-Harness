@@ -3,6 +3,9 @@
   "version": "1.0.23",
   "private": true,
   "description": "Zero-dependency agentic workflow harness template (no packages to install)",
+  "engines": {
+    "node": ">=18"
+  },
   "bin": {
     "agentic-harness": "./install.mjs"
   },
