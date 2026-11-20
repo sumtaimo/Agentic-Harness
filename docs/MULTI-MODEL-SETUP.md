@@ -67,11 +67,10 @@ Run these yourself in a terminal, one at a time. Each one is read-only.
    Under **AI engines**, every tool you use should show `✔`:
    - `✖ … --help does NOT list: …` means the profile's flags don't match your version of the tool.
      Compare with `<tool> --help` and fix `args` for that profile in `.harness/config.json`.
-   - `· not installed` means the tool is not on your PATH.
+   - `· not installed` means the tool is not on your PATH (and, for codex, not in the Codex desktop app either).
 
-Today the `claude` and `antigravity` profiles are verified end to end. The `codex` profile
-follows that tool's documented flags but is marked `"verified": false` until someone confirms it with a
-real run (see [`ENGINES.md`](ENGINES.md)).
+Today the `claude`, `antigravity` and `codex` profiles are verified end to end (codex on 2026-11-20; see
+[`ENGINES.md`](ENGINES.md)). On Windows, a `codex` that came with the Codex desktop app is found even when it is not on PATH.
 
 ## 4. Smart routing: give each role the right engine
 

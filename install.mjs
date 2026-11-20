@@ -90,6 +90,33 @@ function cleanConfig(text) {
   if (REMOVED_PROFILES.includes(String(cfg.activeProfile).toLowerCase())) cfg.activeProfile = 'auto';
   return JSON.stringify(cfg, null, 2) + '\n';
 }
+/**
+ * Update an existing project's config.json from the template without overwriting the owner's choices:
+ * removed engines are dropped (as on a new install), engine profiles the project lacks are added, keys a
+ * profile lacks (e.g. new binaryCandidates) are filled in, and an unverified profile takes the template's
+ * invocation once the template marks that engine verified. Returns { text, added[] } or null if either side is unreadable.
+ */
+function upgradeConfig(existingText, templateText) {
+  let cur = null; let tpl = null;
+  try { cur = JSON.parse(existingText); tpl = JSON.parse(cleanConfig(templateText) || 'null'); } catch { return null; }
+  if (!cur || !tpl || typeof cur.profiles !== 'object' || !cur.profiles) return null;
+  const cleaned = JSON.parse(cleanConfig(existingText));
+  const added = [];
+  for (const k of Object.keys(cur.profiles)) if (!(k in cleaned.profiles)) added.push(`-${k}`);
+  for (const [name, prof] of Object.entries(tpl.profiles || {})) {
+    if (!cleaned.profiles[name]) { cleaned.profiles[name] = prof; added.push(name); continue; }
+    // An unverified profile never had its flags confirmed; once the template verified that engine, its tested invocation wins.
+    if (prof.verified === true && cleaned.profiles[name].verified !== true) {
+      for (const key of ['verified', 'note', 'args', 'promptVia', 'modelArgs', 'models', 'modelsNote']) {
+        if (key in prof && JSON.stringify(cleaned.profiles[name][key]) !== JSON.stringify(prof[key])) { cleaned.profiles[name][key] = prof[key]; added.push(`${name}.${key}`); }
+      }
+    }
+    for (const [key, val] of Object.entries(prof)) {
+      if (!(key in cleaned.profiles[name])) { cleaned.profiles[name][key] = val; added.push(`${name}.${key}`); }
+    }
+  }
+  return { text: JSON.stringify(cleaned, null, 2) + '\n', added };
+}
 function cleanBacklog(text) {
   let src = {}; try { src = JSON.parse(text); } catch { /* broken backlog: use defaults */ }
   return JSON.stringify({ version: src.version || '2.0.0', project: '', maxAutoTasksPerRun: src.maxAutoTasksPerRun ?? 3, tasks: [] }, null, 2) + '\n';
@@ -107,6 +134,10 @@ function copyDir(from, to, rel = '.harness') {
       copyDir(s, d, relPath); continue;
     }
     if (RUNTIME.has(entry.name) || (/^(inbox|completed|failed)$/.test(path.basename(from)) && entry.name !== '.gitkeep')) continue;
+    if (fs.existsSync(d) && relPath === path.join('.harness', 'config.json')) {
+      const up = upgradeConfig(fs.readFileSync(d, 'utf8'), fs.readFileSync(s, 'utf8'));
+      if (up && up.added.length) { fs.writeFileSync(d, up.text); report.push(`update ${relPath} (your settings kept; engine profile changes: ${up.added.join(', ')})`); continue; }
+    }
     if (fs.existsSync(d) && KEEP_IF_PRESENT.test(relPath)) { report.push(`kept   ${relPath} (already existed)`); continue; }
     if (relPath === path.join('.harness', 'memory', 'lessons.md')) { // the template owner's taught rules never travel
       fs.writeFileSync(d, LESSONS_TEMPLATE);
