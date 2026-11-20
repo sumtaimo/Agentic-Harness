@@ -70,6 +70,9 @@ Save local/technical lesson (git-ignored): node .harness/memory.mjs learn "..."
 Remove rule:                               node .harness/memory.mjs forget L3
 `;
 const OBJECTIVES_PLACEHOLDER = '- Project objectives: (describe your product goals here to customize for your own app)';
+// Skills that describe how to work ON this template (install.mjs, its tests, its engine profiles). They stay in this repo:
+// an installed project's .claude/skills/ belongs to Skill Foundry, and these would inject unrelated rules into other workers.
+const TEMPLATE_ONLY = ['.harness/skills/template-leak-check', '.harness/skills/engine-profile-checks'];
 const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|roles[\\/]|skills[\\/]|config\.json$|charter\.md$|backlog\.json$|team\.json$)/;
 
 // Clean defaults for a new project (used by a normal install and by --reset), so both follow the same rules.
@@ -98,6 +101,7 @@ function copyDir(from, to, rel = '.harness') {
     const relPath = path.join(rel, entry.name);
     const s = path.join(from, entry.name); const d = path.join(to, entry.name);
     if (entry.isDirectory()) {
+      if (TEMPLATE_ONLY.includes(relPath.split(path.sep).join('/'))) continue; // working methods for THIS template: never shipped to other projects
       if (['worktrees', 'staging', 'releases', 'visible'].includes(entry.name)) { fs.mkdirSync(d, { recursive: true }); continue; } // never copy history or open runs
       if (entry.name === 'sessions') { fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, '.gitkeep'), ''); continue; }
       copyDir(s, d, relPath); continue;
@@ -242,7 +246,7 @@ else {
   const srcClaude = path.join(SRC, '.claude');
   if (fs.existsSync(srcClaude)) {
     const walk = (dir, rel = '') => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name), path.join(rel, e.name)) : [path.join(rel, e.name)]));
-    for (const rel of walk(srcClaude).filter((f) => f !== 'settings.json' && !f.startsWith('settings.local'))) {
+    for (const rel of walk(srcClaude).filter((f) => f !== 'settings.json' && !f.startsWith('settings.local') && !/^skills[\\/]/.test(f))) {
       const d = path.join(target, '.claude', rel);
       fs.mkdirSync(path.dirname(d), { recursive: true });
       if (fs.existsSync(d)) report.push(`kept   .claude/${rel} (already existed)`);

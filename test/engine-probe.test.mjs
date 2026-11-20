@@ -206,6 +206,19 @@ test('install.mjs --reset cleans a template copy: owner profile, rules, objectiv
   assert.notEqual(none.status, 0, 'a folder without .harness/ is refused');
 });
 
+test('working-method skills stay in this template and are not installed into other projects', () => {
+  const dest = fs.mkdtempSync(path.join(tmpRoot, 'inst-skills-'));
+  const r = spawnSync(process.execPath, [path.join(here, '..', 'install.mjs'), dest, '--no-skills'], { encoding: 'utf8', env: { ...process.env, HARNESS_OFFLINE: '1' } });
+  assert.equal(r.status, 0, r.stderr);
+  for (const f of ['.harness/skills/template-leak-check', '.harness/skills/engine-profile-checks']) {
+    assert.ok(fs.existsSync(path.join(here, '..', f, 'SKILL.md')), `${f} is missing from this template`);
+    assert.ok(!fs.existsSync(path.join(dest, f)), `${f} must not be installed into other projects`);
+  }
+  assert.ok(fs.existsSync(path.join(here, '..', '.claude', 'skills', 'harness-phased-workflow', 'SKILL.md')), 'template skills are missing');
+  assert.ok(!fs.existsSync(path.join(dest, '.claude', 'skills')), '.claude/skills belongs to Skill Foundry in an installed project');
+  assert.ok(fs.existsSync(path.join(dest, '.harness', 'skills', 'code-craft', 'SKILL.md')), 'the shipped starter skills are still installed');
+});
+
 test('winQuote keeps an empty argument on Windows, collapses newlines for cmd.exe, and needsWinShell only matches .cmd/.bat on Windows', async () => {
   const { winQuote, winCommandLine, needsWinShell } = await import('../.harness/lib/common.mjs');
   assert.equal(winQuote(''), '""');
