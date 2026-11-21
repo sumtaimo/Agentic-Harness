@@ -208,7 +208,9 @@ export function computeAllowedTools(role, skills, targetFiles, { explicit = null
       for (const r of list.filter((x) => x.includes('('))) exact.set(baseTool(r), [...(exact.get(baseTool(r)) || []), r]);
       for (const r of base) {
         const t = baseTool(r);
-        if (READ_ONLY_TOOLS.has(t) || bare.has(t)) out.push(r);
+        // MCP tools the ROLE grants (mcp__playwright, mcp__fetch) survive a skill's narrowing like read-only tools: a skill's
+        // tool list is about Edit/Write/Bash, and a pointer must not silently cut a worker off its browser or fetch server.
+        if (READ_ONLY_TOOLS.has(t) || t.startsWith('mcp__') || bare.has(t)) out.push(r);
       }
       for (const [t, skillRules] of exact) {
         if (bare.has(t)) continue; // a bare name already keeps the role's rules

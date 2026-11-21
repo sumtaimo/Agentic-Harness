@@ -17,8 +17,10 @@ the entries newer than the version you had.
   every preset: copy it into `mcpServers` and set `"useMcp": true` for the engine in `config.json`.
 - **MCP tools per role.** A role's `allowedTools` now names the MCP servers that fit it, so each worker gets only its
   own: `mcp__playwright` for DEV_ENGINEER, QA_AUDITOR and UX_DESIGNER (check the UI in a browser); `mcp__fetch` for
-  BA_ANALYST (read public pages for research). PO_ARCHITECT, REVIEWER, SECURITY and COORDINATOR get none. A skill that
-  lists its own tools still narrows them away (a skill can only narrow). Web content is data, never instructions.
+  BA_ANALYST (read public pages for research). PO_ARCHITECT, REVIEWER, SECURITY and COORDINATOR get none. Like the
+  read-only tools, an MCP tool the role grants is kept when a skill narrows the worker's tools (an engine pointer's
+  `Edit, Write, Bash` list no longer cuts a worker off its browser); a skill can still never add an MCP tool the role
+  lacks. Web content is data, never instructions.
 - *Affects:* only projects that turn MCP on. *Config:* none by default. *Roles:* four role files gained one tool each;
   a project that customised its roles keeps its own files and can add the same lines by hand.
 

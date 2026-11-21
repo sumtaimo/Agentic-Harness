@@ -1040,6 +1040,13 @@ await test('MCP per role: playwright preset is pinned and optional; only DEV/QA/
   for (const r of ['DEV_ENGINEER', 'QA_AUDITOR', 'UX_DESIGNER']) assert(has(r, 'mcp__playwright'), `${r} lacks mcp__playwright`);
   assert(has('BA_ANALYST', 'mcp__fetch') && !has('BA_ANALYST', 'mcp__playwright'), 'BA mcp tools wrong');
   for (const r of ['PO_ARCHITECT', 'REVIEWER', 'SECURITY', 'COORDINATOR']) assert(!computeAllowedTools(roles[r], [], []).some((t) => t.startsWith('mcp__')), `${r} must get no MCP tool`);
+  // a narrowing skill (engine pointer: Edit/Write/Bash) keeps the role's MCP tools, but can never ADD one the role lacks
+  const pointer = { name: 'design-system', allowedTools: ['Edit', 'Write', 'Bash'] };
+  assert(computeAllowedTools(roles.UX_DESIGNER, [pointer], ['src/a.css']).includes('mcp__playwright'), 'narrowing skill stripped mcp__playwright');
+  assert(computeAllowedTools(roles.BA_ANALYST, [pointer], ['docs/a.md']).includes('mcp__fetch'), 'narrowing skill stripped mcp__fetch');
+  const grab = { name: 'grab', allowedTools: ['Read', 'mcp__playwright', 'mcp__github'] };
+  const po = computeAllowedTools(roles.PO_ARCHITECT, [grab], []);
+  assert(!po.some((t) => t.startsWith('mcp__')), `skill granted MCP the role lacks: ${po.join()}`);
 });
 
 await test('role + skill end-to-end: engine args for a DEV worker carry exactly the narrowed rules; the ungranted skill rule is logged', () => {
