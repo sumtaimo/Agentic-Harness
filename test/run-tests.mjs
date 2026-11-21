@@ -273,6 +273,29 @@ await test('dispatch without --check warns that there is no real gate', () => {
   assert(/NO real check/.test(r.stdout) && /WARNING/.test(r.stdout), r.stdout);
 });
 
+await test('dispatch --role gives the direct worker its role (so role skills can match); bad role refused; unknown option warned', () => {
+  const d = sandbox();
+  const r = node(d, ['.harness/dispatch.mjs', '--goal', 'WRITE a.txt a', '--files', 'a.txt', '--role', 'dev_engineer', '--bogus']);
+  const job = json(path.join(d, '.harness', 'inbox', ls(d, 'inbox')[0]));
+  assert(job.subtasks[0].role === 'DEV_ENGINEER', JSON.stringify(job.subtasks));
+  assert(/ignoring unknown option --bogus/.test(r.stderr), r.stderr);
+  const bad = node(d, ['.harness/dispatch.mjs', '--goal', 'x', '--role', 'NOPE']);
+  assert(bad.status === 1 && /Unknown role 'NOPE'/.test(bad.stderr) && ls(d, 'inbox').length === 1, bad.stderr);
+  const sw = node(d, ['.harness/dispatch.mjs', 'T', '--role', 'QA_AUDITOR', '--worker', 'w1:b.txt:WRITE b.txt b']);
+  const swJob = json(path.join(d, '.harness', 'inbox', ls(d, 'inbox').find((f) => json(path.join(d, '.harness', 'inbox', f)).title === 'T')));
+  assert(sw.status === 0 && swJob.subtasks[0].role === 'QA_AUDITOR', JSON.stringify(swJob.subtasks));
+});
+
+await test('a role-less worker whose task matches a skill keyword logs SKILL_NEEDS_ROLE (it gets no skills)', () => {
+  const d = sandbox();
+  const sd = path.join(d, '.harness', 'skills', 'copy-kw'); fs.mkdirSync(sd, { recursive: true });
+  fs.writeFileSync(path.join(sd, 'SKILL.md'), '---\nname: copy-kw\ndescription: test\nroles: ["DEV_ENGINEER"]\nkeywords: ["wordy"]\nautoApply: false\n---\nbody\n');
+  drop(d, { id: 'nr1', title: 'nr1', subtasks: [{ id: 'w', targetFiles: ['n.txt'], prompt: 'WRITE n.txt the copy is wordy' }] });
+  runOnce(d);
+  const hit = log(d).find((e) => e.phase === 'SKILL_NEEDS_ROLE');
+  assert(hit && hit.skills.join() === 'copy-kw' && /DEV_ENGINEER/.test(hit.message), JSON.stringify(hit));
+});
+
 await test('dispatch refuses inside a harness worker (no agent loops)', () => {
   const d = sandbox();
   const r = node(d, ['.harness/dispatch.mjs', '--goal', 'x'], { HARNESS_WORKER: '1' });

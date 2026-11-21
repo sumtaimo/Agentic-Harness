@@ -27,6 +27,8 @@
  *   (omitting RUN_ID picks the open/latest unfinished visible run; keeps partial edits on disk, carries
  *    over assignments/contract/acceptance criteria/last verify error, and updates .harness/visible/<RUN_ID>/ when finished)
  *
+ * --role DEV_ENGINEER   give the direct worker (and every --worker) a role: its persona, its tool limits and the
+ *                skills for that role whose keywords appear in the task. Without a role a worker gets no skills.
  * --mode normal    one direct worker, no planner (fastest, fewest tokens)  — npm run run -- --goal "…"
  * --mode parallel  AI planner splits into parallel workers (same as --auto-plan)
  * --mode team      orchestrator → leads → workers (same as --hierarchy)
@@ -54,7 +56,7 @@ import { spawn } from 'node:child_process';
 import readline from 'node:readline/promises';
 import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, clipErrorTrace, costlyRunReasons, engineUsable, detectEngines, compatibleModelFor, aiUsageSince, usageLine, usageTodayLine, quotaWarnings, formatQuotaWarning, MODEL_TIERS, isSameDir, validateExternalWorkRoot, harnessPidAlive } from './lib/common.mjs';
 import { askEngineConsent } from './lib/consent.mjs';
-import { loadTeam } from './lib/governance.mjs';
+import { loadTeam, loadRoles } from './lib/governance.mjs';
 import { RESUMABLE_STATUSES, VISIBLE_TERMINAL, editorDisplayName, listVisibleRuns, readVisibleRun, writeVisibleRun, inspectVisibleRun } from './lib/handoff.mjs';
 
 if (process.env.HARNESS_WORKER === '1') {
@@ -84,6 +86,8 @@ let maxCost;
 let yes = process.env.HARNESS_YES === '1';
 let resumeVisible;
 let explicitMode = false;
+let role;
+const KNOWN_OPTIONS = new Set(['--engine', '--model', '--verify', '--check', '--goal', '--title', '--files', '--wait', '--yes', '--branch', '--cwd', '--hierarchy', '--resume-visible', '--mode', '--max-cost', '--auto-plan', '--worker', '--role']);
 const subtasks = [];
 
 for (let i = 0; i < args.length; i++) {
@@ -130,6 +134,11 @@ for (let i = 0; i < args.length; i++) {
     explicitMode = true;
     if (/^(yes|no|true|false|on|off)$/i.test(v || '')) autoPlan = /^(yes|true|on)$/i.test(args[++i]);
   }
+  else if (a === '--role' && v !== undefined) {
+    role = args[++i].trim().toUpperCase();
+    const known = Object.keys(loadRoles());
+    if (!known.includes(role)) { console.error(`Unknown role '${role}'. Choose one of: ${known.join(', ')}`); process.exit(1); }
+  }
   else if (a === '--worker' && v !== undefined) {
     explicitMode = true;
     const [id, filesCsv, ...promptParts] = args[++i].split(':');
@@ -139,7 +148,10 @@ for (let i = 0; i < args.length; i++) {
       prompt: promptParts.join(':').trim() || title
     });
   }
+  // An option this script does not know was silently ignored before (e.g. --role up to v1.0.28): say so.
+  else if (a.startsWith('--') && !KNOWN_OPTIONS.has(a.split('=')[0])) console.error(`dispatch: ignoring unknown option ${a} (see --help)`);
 }
+if (role) for (const s of subtasks) if (!s.role) s.role = role;
 if (!engine || engine === 'auto') engine = undefined;
 if (engine && !config.profiles[engine]) {
   console.error(`Unknown engine '${engine}'. Choose one of: auto, ${Object.keys(config.profiles).join(', ')}`);
@@ -357,7 +369,7 @@ const job = {
     : {
         subtasks: subtasks.length > 0
           ? subtasks
-          : [{ id: 'worker-main', ...(engine ? { engine } : {}), targetFiles: files, prompt: goal }]
+          : [{ id: 'worker-main', ...(engine ? { engine } : {}), ...(role ? { role } : {}), targetFiles: files, prompt: goal }]
       })
 };
 
