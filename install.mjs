@@ -43,7 +43,7 @@ const report = [];
 // Runtime + personal history never travels to another project.
 // approvals.json is per person (which AI tools THEY allowed): copying it would silently allow the template owner's tools.
 // MANIFEST.json is written fresh for each install below.
-const RUNTIME = new Set(['state.json', 'telemetry.log', 'daemon.pid', 'engine-probe.json', 'auto-lessons.md', 'live.log', 'auto-state.json', 'approvals.json', 'MANIFEST.json']);
+const RUNTIME = new Set(['update-check.json', 'state.json', 'telemetry.log', 'daemon.pid', 'engine-probe.json', 'auto-lessons.md', 'live.log', 'auto-state.json', 'approvals.json', 'MANIFEST.json']);
 // The target project's own data wins: memory, config, charter, backlog, roles, skills, team.
 // A new project gets a blank profile, never the profile of whoever owns this template copy.
 const PROFILE_TEMPLATE = `# Project profile
@@ -75,6 +75,22 @@ const OBJECTIVES_PLACEHOLDER = '- Project objectives: (describe your product goa
 // an installed project's .claude/skills/ belongs to Skill Foundry, and these would inject unrelated rules into other workers.
 const TEMPLATE_ONLY = ['.harness/skills/template-leak-check', '.harness/skills/engine-profile-checks'];
 const KEEP_IF_PRESENT = /^\.harness[\\/](memory[\\/]|inbox[\\/]|completed[\\/]|failed[\\/]|roles[\\/]|skills[\\/]|config\.json$|charter\.md$|backlog\.json$|team\.json$)/;
+// A project's skills are its own and are kept. A BUILT-IN skill whose keywords line is still exactly an older shipped
+// one, and that is otherwise identical to the new file, was never edited: it gets the new file (narrower keywords),
+// so a fix for over-matching keywords reaches existing projects. Any other difference keeps the project's file.
+const OLD_SKILL_KEYWORDS = {
+  'security-guard': ['keywords: ["security", "auth", "login", "password", "token", "secret", "sql", "upload", "permission"]'],
+  'api-craft': ['keywords: ["api", "endpoint", "route", "rest", "http", "json"]']
+};
+function untouchedOldSkill(relPath, mine, theirs) {
+  const m = relPath.split(path.sep).join('/').match(/^\.harness\/skills\/([^/]+)\/SKILL\.md$/);
+  const olds = m && OLD_SKILL_KEYWORDS[m[1]];
+  if (!olds) return false;
+  const norm = (t) => t.replace(/\r\n/g, '\n');
+  const kwLine = (t) => (norm(t).match(/^keywords:.*$/m) || [''])[0];
+  const old = kwLine(mine);
+  return olds.includes(old) && norm(mine).replace(old, kwLine(theirs)) === norm(theirs);
+}
 
 // Clean defaults for a new project (used by a normal install and by --reset), so both follow the same rules.
 const REMOVED_PROFILES = ['gemini', 'orca']; // engines the harness no longer supports (see docs/ENGINES.md)
@@ -141,6 +157,9 @@ function copyDir(from, to, rel = '.harness') {
     }
     if (relPath === path.join('.harness', 'memory', 'me.md')) continue; // a person's own profile (git-ignored) never travels and is never touched
     if (relPath === path.join('.harness', 'memory', 'people.md')) continue; // the template team's page never travels; a project's own is kept
+    if (fs.existsSync(d) && untouchedOldSkill(relPath, fs.readFileSync(d, 'utf8'), fs.readFileSync(s, 'utf8'))) {
+      fs.copyFileSync(s, d); report.push(`update ${relPath} (built-in skill you had not edited: narrower keywords)`); continue;
+    }
     if (fs.existsSync(d) && KEEP_IF_PRESENT.test(relPath)) { report.push(`kept   ${relPath} (already existed)`); continue; }
     if (relPath === path.join('.harness', 'memory', 'lessons.md')) { // the template owner's taught rules never travel
       fs.writeFileSync(d, LESSONS_TEMPLATE);
@@ -350,13 +369,20 @@ else {
 
 const gi = path.join(target, '.gitignore');
 // npm leaves .gitignore out of packages (npx installs), so fall back to this copy. A test keeps it equal to .gitignore.
-const GITIGNORE_BLOCK = "# agentic-harness runtime (machine-specific or personal; never commit to a public template)\n.harness/state.json\n.harness/*.tmp\n.harness/telemetry.log\n.harness/daemon.pid\n.harness/engine-probe.json\n.harness/foundry-check.json\n.harness/auto-state.json\n.harness/approvals.json\n.harness/live.log\n.harness/inbox/*\n.harness/completed/*\n.harness/failed/*\n.harness/staging/*\n.harness/releases/*\n.harness/visible/*\n.harness/worktrees/*\n.harness/memory/sessions/*\n.harness/memory/auto-lessons.md\n# Each person's own profile (name, language, answer style, hats); profile.md is the shared project profile\n.harness/memory/me.md\n# The folder/* form (instead of folder/) keeps each folder's .gitkeep, so the folders exist in the template.\n!.harness/**/.gitkeep\n\n# charter.md, backlog.json, roles/ and skills/ ARE committed (they define the project's governance).\n# profile.md and lessons.md ARE committed (the template ships generic starter versions).\n# In your own PUBLIC project, if they hold personal details, uncomment these two lines:\n# .harness/memory/profile.md\n# .harness/memory/lessons.md\n\n# Personal Claude Code overrides (never commit)\n.claude/settings.local.json\n# Personal profile and rules for this checkout (Claude Code loads it automatically)\nCLAUDE.local.md\n\n# A demo project created by `npm run demo` (examples/make-demo.mjs) lives next to the template, not in it\n/demo-project/\n\n# Per-person state and secrets (never commit)\n.agent-state/\n.env\n.env.*\n!.env.example\n";
+const GITIGNORE_BLOCK = "# agentic-harness runtime (machine-specific or personal; never commit to a public template)\n.harness/state.json\n.harness/*.tmp\n.harness/telemetry.log\n.harness/daemon.pid\n.harness/engine-probe.json\n.harness/foundry-check.json\n.harness/update-check.json\n.harness/auto-state.json\n.harness/approvals.json\n.harness/live.log\n.harness/inbox/*\n.harness/completed/*\n.harness/failed/*\n.harness/staging/*\n.harness/releases/*\n.harness/visible/*\n.harness/worktrees/*\n.harness/memory/sessions/*\n.harness/memory/auto-lessons.md\n# Each person's own profile (name, language, answer style, hats); profile.md is the shared project profile\n.harness/memory/me.md\n# The folder/* form (instead of folder/) keeps each folder's .gitkeep, so the folders exist in the template.\n!.harness/**/.gitkeep\n\n# charter.md, backlog.json, roles/ and skills/ ARE committed (they define the project's governance).\n# profile.md and lessons.md ARE committed (the template ships generic starter versions).\n# In your own PUBLIC project, if they hold personal details, uncomment these two lines:\n# .harness/memory/profile.md\n# .harness/memory/lessons.md\n\n# Personal Claude Code overrides (never commit)\n.claude/settings.local.json\n# Personal profile and rules for this checkout (Claude Code loads it automatically)\nCLAUDE.local.md\n\n# A demo project created by `npm run demo` (examples/make-demo.mjs) lives next to the template, not in it\n/demo-project/\n\n# Per-person state and secrets (never commit)\n.agent-state/\n.env\n.env.*\n!.env.example\n";
 const giSrc = path.join(SRC, '.gitignore');
 const giBlock = fs.existsSync(giSrc) ? fs.readFileSync(giSrc, 'utf8') : GITIGNORE_BLOCK;
 const existing = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : '';
 if (!existing.includes('# agentic-harness runtime')) { fs.writeFileSync(gi, `${existing.replace(/\s*$/, '')}${existing ? '\n\n' : ''}${giBlock}`); report.push('updated .gitignore'); }
 // Projects installed before 1.0.25 have the block but not the personal me.md line: add only that line.
 else if (!/^\.harness\/memory\/me\.md\s*$/m.test(existing)) { fs.writeFileSync(gi, `${existing.replace(/\s*$/, '')}\n# Each person's own profile (name, language, answer style, hats); profile.md is the shared project profile\n.harness/memory/me.md\n`); report.push('added .harness/memory/me.md (personal profile) to .gitignore'); }
+// Projects installed before 1.0.31 have the block but not the update-check cache line: add only that line.
+{
+  const cur = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf8') : '';
+  if (cur.includes('# agentic-harness runtime') && !/^\.harness\/update-check\.json\s*$/m.test(cur)) {
+    fs.writeFileSync(gi, `${cur.replace(/\s*$/, '')}\n.harness/update-check.json\n`); report.push('added .harness/update-check.json (update check cache) to .gitignore');
+  }
+}
 
 // Line endings: the harness parses its own files (charter.md, team.json, slash commands…) with LF-based rules. On Windows
 // with core.autocrlf=true a teammate's clone would get CRLF and those rules could misread them, so pin LF for the files

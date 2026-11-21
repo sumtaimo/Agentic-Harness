@@ -115,7 +115,7 @@ const en = {
     cloud: ['Install Node.js 18+, git and an AI tool', 'Log in once', 'Start the controller, then send it a task'],
     cloudNote: 'Local subscription logins (`claude`, `agy`, `codex`) are the default; an optional paid API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) works via a git-ignored `.env` or CI env (`doctor.mjs` prints a 1-line notice if one is set).',
     upgrade: ['Save your work first', 'Re-install from `#release`', 'Check, and refresh the named agents'],
-    upgradeNote: 'Your charter, team, backlog, memory and every value in `config.json` are kept; new engine profiles and settings are added for you. The installer prints what is new (`CHANGELOG.md`).',
+    upgradeNote: 'Your charter, team, backlog, memory and every value in `config.json` are kept; new engine profiles and settings are added for you. The installer prints what is new (`CHANGELOG.md`), and your project tells you when a newer version is out.',
   },
   people: {
     intro: 'One person gets the whole team, just like a group does.',
@@ -308,7 +308,7 @@ const kh: Dict = {
     cloud: ['ដំឡើង Node.js 18+, git និងឧបករណ៍ AI', 'ចូលគណនីម្តង', 'ចាប់ផ្តើម controller រួចផ្ញើការងារ'],
     cloudNote: 'លំនាំដើមគឺប្រើគណនី subscription (`claude`, `agy`, `codex`)។ API key សម្រាប់គម្រោងមានថវិកាឬ CI អាចដាក់ក្នុង `.env` ដែល git រំលង (`doctor.mjs` បង្ហាញសារជូនដំណឹង ១ បន្ទាត់ពេលមាន `*_API_KEY`)។',
     upgrade: ['រក្សាទុកការងាររបស់អ្នកជាមុន', 'ដំឡើងម្តងទៀតពី `#release`', 'ពិនិត្យ ហើយ refresh agents ដែលមានឈ្មោះ'],
-    upgradeNote: 'Charter, team, backlog, memory និងតម្លៃនីមួយៗក្នុង `config.json` របស់អ្នកត្រូវបានរក្សាទុក។ Engine profile និង settings ថ្មីត្រូវបានបន្ថែមឲ្យ។ Installer បង្ហាញអ្វីដែលថ្មី (`CHANGELOG.md`)។',
+    upgradeNote: 'Charter, team, backlog, memory និងតម្លៃនីមួយៗក្នុង `config.json` របស់អ្នកត្រូវបានរក្សាទុក។ Engine profile និង settings ថ្មីត្រូវបានបន្ថែមឲ្យ។ Installer បង្ហាញអ្វីដែលថ្មី (`CHANGELOG.md`) ហើយ project របស់អ្នកប្រាប់អ្នកពេលមាន version ថ្មី។',
   },
   people: {
     intro: 'មនុស្សម្នាក់ក៏ទទួលបានក្រុមទាំងមូល ដូចក្រុមមនុស្សដែរ។',

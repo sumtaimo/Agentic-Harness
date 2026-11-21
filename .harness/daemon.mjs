@@ -44,7 +44,7 @@ const highAlwaysAllowed = () => (loadApprovals().alwaysAllow || []).includes('hi
 import {
   readCharter, loadRoles, loadSkills, matchSkills, computeAllowedTools, computeDisallowedTools,
   matchesAny, withinAll, skillRulesNotGranted, readBacklog, writeBacklog, updateBacklogItem, nextReady, backlogCounts, itemToJob,
-  loadTeam, validateTeam, leadOwns, validateDelegation, isTestFilePath, auditPatchSignals, scanPatchSafety, globsOverlap
+  loadTeam, validateTeam, leadOwns, validateDelegation, isTestFilePath, auditPatchSignals, scanPatchSafety, globsOverlap, keywordMatches
 } from './lib/governance.mjs';
 import {
   isRepoWithCommits, branchSha, ensureBranch, protectedShas, ensureWorkerWorktree, commitScoped,
@@ -565,7 +565,7 @@ function resolveGovernance(sub, gov) {
     // A role is always required for a skill, so a role-less worker gets none. Name what the task text matched, so the
     // user sees why and which --role would bring them in (was silent up to v1.0.28).
     const text = String(sub.prompt || '').toLowerCase();
-    const missed = Object.values(gov.skills).filter((s) => s.roles.length && s.keywords.some((k) => k && text.includes(String(k).toLowerCase())));
+    const missed = Object.values(gov.skills).filter((s) => s.roles.length && s.keywords.some((k) => keywordMatches(text, k)));
     if (missed.length) logTelemetry('SKILL_NEEDS_ROLE', `${sub.id}: no role, so no skills; the task matches ${missed.map((s) => `${s.name} (${s.roles.join('/')})`).join(', ')}. Add --role to dispatch.`, { worker: sub.id, skills: missed.map((s) => s.name) });
   }
   sub.resolvedRole = role ? role.name : null;
@@ -1367,6 +1367,39 @@ async function runJudgeGate(plan, task, cycle, gitCtx) {
   return { approved: decision.approved, trace: decision.approved ? '' : `JUDGE_BLOCKED — fix these review findings:\n${text}` };
 }
 
+/** Untracked, not ignored files in the folder (git), or null when it is not a git repository. */
+async function untrackedFiles(root) {
+  try { return new Set((await execFileAsync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root, maxBuffer: 16 << 20 })).stdout.split('\0').filter(Boolean)); } catch { return null; }
+}
+
+/**
+ * Without worktrees a worker can create files OUTSIDE its targetFiles. They survived a rollback, and the next check and
+ * judge saw them as the worker's work, which it was not allowed to touch (a judge loop). After every worker round, new
+ * untracked files outside every worker's targets are MOVED (never deleted) to .harness/staging/<task>-out-of-scope/,
+ * as worktree mode discards them. Files that existed before the task, git-ignored files and .harness/ are left alone.
+ */
+async function moveStrayFiles(plan, task, root, before, cycle) {
+  const targets = [...new Set((plan.subtasks || []).flatMap((s) => s.targetFiles || []))];
+  if (!targets.length) return [];
+  const now = await untrackedFiles(root);
+  if (!now) return [];
+  const stray = [...now].filter((f) => !before.has(f) && !f.startsWith('.harness/') && !inScope(f, targets));
+  if (!stray.length) return [];
+  const dest = path.join(DIRS.staging, `${String(task.id || 'task').replace(/[^\w.-]/g, '_')}-out-of-scope`);
+  const moved = [];
+  for (const f of stray) {
+    try {
+      const to = path.join(dest, `cycle${cycle}`, f);
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.renameSync(path.join(root, f), to);
+      moved.push(f);
+    } catch { /* in use: left in place and still reported below */ }
+  }
+  task.outOfScopeMoved = [...new Set([...(task.outOfScopeMoved || []), ...moved])];
+  logTelemetry('2_SCOPE_VIOLATION', `Moved ${moved.length} new file(s) created outside the assigned files to ${path.relative(ROOT, dest)} (not the worker's to keep): ${moved.slice(0, 8).join(', ')}${moved.length > 8 ? ', …' : ''}`, { taskId: task.id, cycle, blocked: moved, movedTo: path.relative(ROOT, dest) });
+  return moved;
+}
+
 function snapshotScopeHashes(plan, workRoot) {
   const allTargets = [...new Set((plan.subtasks || []).flatMap((s) => s.targetFiles || []))];
   let candidates = [];
@@ -1582,7 +1615,7 @@ async function executeSquareCycle(taskFile) {
   const errors = [];
   let plan = null; let outputs = []; let cycle = 1; let lastErrorTrace = task.initialError || null;
   let errorDiagnosis = task.initialError ? diagnoseVerifyFailure(task.initialError, { targetFiles: task.targetFiles || [], subtasks: task.subtasks || [], verifyCmd: task.verifyCmd || '' }) : null;
-  let haltReason = null; let backup = null; let preRunFiles = null;
+  let haltReason = null; let backup = null; let preRunFiles = null; let preUntracked = null;
   const integration = integrationFor(task); let gitCtx = null; let gitResult = null;
   let workRoot = ROOT;
   const title = task.title || path.basename(taskFile);
@@ -1614,8 +1647,10 @@ async function executeSquareCycle(taskFile) {
       if (cycle === 1 && !gitCtx && config.useGitWorktrees) await refuseDirtyWorktreeScope(plan, workRoot);
       if (cycle === 1 && !backup && !gitCtx) backup = backupScope(plan, workRoot);
       if (cycle === 1 && !gitCtx && preRunFiles === null) preRunFiles = snapshotScopeHashes(plan, workRoot);
+      if (cycle === 1 && !gitCtx && !config.useGitWorktrees && preUntracked === null) preUntracked = await untrackedFiles(workRoot);
       if (cycle > 1) enforceBudget(task, `cycle ${cycle - 1}`); // never start another cycle once over budget
       outputs = await runExecutorSwarm(plan, gitCtx);
+      if (preUntracked) await moveStrayFiles(plan, task, workRoot, preUntracked, cycle);
       enforceBudget(task, `cycle ${cycle} workers`);
       const verification = await runVerifier(plan);
       const { safety } = await auditDaemonPatch(plan, task, outputs, cycle, backup, gitCtx, preRunFiles);

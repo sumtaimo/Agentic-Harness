@@ -3,7 +3,7 @@ name: api-craft
 description: Consistent HTTP/JSON API design: validation, status codes, error shape.
 roles: ["DEV_ENGINEER", "BA_ANALYST"]
 allowedTools: ["Read", "Edit", "Write"]
-keywords: ["api", "endpoint", "route", "rest", "http", "json"]
+keywords: ["api", "endpoint", "route", "rest api", "json api", "http"]
 autoApply: false
 ---
 # API Craft Rules

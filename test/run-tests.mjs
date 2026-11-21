@@ -2391,6 +2391,92 @@ await test('v1.0.29 removeWorktree unlinks shared junctions first, so the projec
   assert(!fs.existsSync(wt), 'the worktree was not removed');
 });
 
+await test('v1.0.31 out-of-scope new files: moved aside (never deleted) after each worker round, so a failed task leaves none and the judge never sees them; files from before stay', () => {
+  const d = sandbox();
+  const git = (...a) => execFileSync('git', a, { cwd: d, stdio: 'pipe' });
+  fs.writeFileSync(path.join(d, 'mine-before.txt'), 'the user had this, untracked');
+  git('init', '-q'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init');
+  drop(d, { id: 'stray', title: 'stray', verifyCmd: 'node -e "process.exit(1)"', subtasks: [{ id: 'w', targetFiles: ['theme/'], prompt: 'WRITE theme/a.css x\nWRITE design-tokens.json {}\nWRITE tokens.css y' }] });
+  runOnce(d);
+  assert(!fs.existsSync(path.join(d, 'design-tokens.json')) && !fs.existsSync(path.join(d, 'tokens.css')), 'out-of-scope files left in the project after a failed task');
+  const aside = path.join(d, '.harness', 'staging', 'stray-out-of-scope');
+  assert(fs.existsSync(path.join(aside, 'cycle1', 'design-tokens.json')), 'the stray file was not kept aside (it must never be deleted)');
+  assert(fs.readFileSync(path.join(d, 'mine-before.txt'), 'utf8') === 'the user had this, untracked', 'a file from before the task was touched');
+  assert(log(d).some((e) => e.phase === '2_SCOPE_VIOLATION' && (e.blocked || []).includes('tokens.css')), 'not logged');
+  const failedJob = fs.readdirSync(path.join(d, '.harness', 'failed')).find((f) => f.endsWith('.json'));
+  assert(json(path.join(d, '.harness', 'failed', failedJob)).outOfScopeMoved.includes('design-tokens.json'), 'not recorded on the task');
+});
+
+await test('update check: an installed project is told when a newer harness is released (session start, doctor, menu); never in the template, never when off, never blocking', async () => {
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-update '));
+  assert(spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj], { encoding: 'utf8', env: { ...env, HARNESS_OFFLINE: '1' } }).status === 0, 'install');
+  const mine = json(path.join(proj, '.harness', 'MANIFEST.json')).version;
+  const rel = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-rel-')), 'package.json');
+  const release = (v) => fs.writeFileSync(rel, JSON.stringify({ name: 'agentic-harness', version: v }));
+  const [a, b, c] = mine.split('.').map(Number);
+  const newer = `${a}.${b}.${c + 1}`;
+  const on = { ...env, HARNESS_OFFLINE: '0', HARNESS_UPDATE_URL: rel };
+  const hook = (extra = {}) => spawnSync(process.execPath, ['.harness/hook-session.mjs', '--no-fetch'], { cwd: proj, env: { ...on, ...extra }, encoding: 'utf8', input: '', timeout: 30000 }).stdout;
+  const cache = path.join(proj, '.harness', 'update-check.json');
+
+  // A newer release: shown at session start (inline here so the test needs no background process) and by doctor.
+  release(newer);
+  const h = hook({ HARNESS_UPDATE_SYNC: '1' });
+  assert(new RegExp(`Harness update available: this project has ${mine.replace(/\./g, '\\.')}, the latest release is ${newer.replace(/\./g, '\\.')}`).test(h) && /ask before updating/.test(h), h);
+  assert(/Harness update available/.test(node(proj, ['.harness/doctor.mjs'], on).stdout), 'doctor did not warn');
+  assert(/Harness update available/.test(node(proj, ['.harness/start.mjs', '--summary'], on).stdout), 'the menu banner did not show it');
+  assert(json(cache).latest === newer, 'cache not written');
+  // Cached: the release file can disappear (offline) and the answer is still shown without a fetch.
+  fs.rmSync(rel);
+  assert(/Harness update available/.test(hook()), 'the cached answer was not used');
+  // After updating (MANIFEST says the new version) the notice is gone at once, whatever the cache says.
+  const m = json(path.join(proj, '.harness', 'MANIFEST.json')); m.version = newer; fs.writeFileSync(path.join(proj, '.harness', 'MANIFEST.json'), JSON.stringify(m));
+  assert(!/Harness update available/.test(hook()), 'still shown after the update');
+  // Off: HARNESS_OFFLINE, HARNESS_UPDATE_CHECK=0, config updateCheck false.
+  m.version = mine; fs.writeFileSync(path.join(proj, '.harness', 'MANIFEST.json'), JSON.stringify(m));
+  for (const extra of [{ HARNESS_OFFLINE: '1' }, { HARNESS_UPDATE_CHECK: '0' }]) assert(!/Harness update available/.test(hook(extra)), `shown although off: ${JSON.stringify(extra)}`);
+  // An old cache starts ONE background refresh and the session does not wait for it.
+  release(newer); fs.writeFileSync(cache, JSON.stringify({ at: 1, ok: false }));
+  const t0 = Date.now(); hook(); const took = Date.now() - t0;
+  let refreshed = null;
+  for (let i = 0; i < 50 && !refreshed; i++) { await new Promise((r) => setTimeout(r, 200)); const cj = json(cache); if (cj.ok) refreshed = cj; }
+  assert(refreshed && refreshed.latest === newer, 'the background refresh did not write the cache');
+  assert(took < 15000, `session start waited ${took} ms`);
+  // The template repository itself (no MANIFEST.json) is never told to update.
+  assert(!/Harness update available/.test(spawnSync(process.execPath, ['.harness/hook-session.mjs', '--no-fetch'], { cwd: REPO, env: { ...on, HARNESS_UPDATE_SYNC: '1' }, encoding: 'utf8' }).stdout), 'the template was told to update');
+  // The cache is git-ignored in installed projects.
+  assert(/^\.harness\/update-check\.json$/m.test(fs.readFileSync(path.join(proj, '.gitignore'), 'utf8')), 'cache not git-ignored');
+});
+
+await test('skill keywords match whole words (plural allowed): a design-tokens task gets no security/api skill; a real login endpoint still does', async () => {
+  const g = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
+  assert(g.SKILL_KEYWORD_MATCH === 'word', 'capability flag');
+  for (const [text, k, want] of [['tokens', 'token', true], ['tokenizer', 'token', false], ['a rapid build', 'api', false], ['the author', 'auth', false], ['restore it', 'rest', false], ['the router', 'route', false], ['two routes', 'route', true], ['run install.mjs', 'install.mjs', true], ['use --reset', '--reset', true], ['an access  token', 'access token', true]]) {
+    assert(g.keywordMatches(text, k) === want, `keywordMatches(${JSON.stringify(text)}, ${k}) should be ${want}`);
+  }
+  const skills = g.loadSkills();
+  const pick = (prompt) => g.matchSkills({ id: 'w', prompt }, 'DEV_ENGINEER', skills).chosen.map((s) => s.name);
+  const tokens = pick('Create design tokens from #0f766e: write design-tokens.json and tokens.css, plus a contrast report');
+  assert(!tokens.includes('security-guard') && !tokens.includes('api-craft'), 'unrelated skills injected: ' + tokens.join(', '));
+  const login = pick('Add a login endpoint that returns an access token');
+  assert(login.includes('security-guard') && login.includes('api-craft'), 'a real auth endpoint lost its skills: ' + login.join(', '));
+
+  // Existing projects: an untouched built-in skill with the old keywords is updated on reinstall; an edited one is kept.
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-skillkw-'));
+  const inst = () => spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj], { encoding: 'utf8', env: { ...env, HARNESS_OFFLINE: '1' } });
+  assert(inst().status === 0, 'install');
+  const sk = (n) => path.join(proj, '.harness', 'skills', n, 'SKILL.md');
+  const oldOf = (t, line) => t.replace(/^keywords:.*$/m, line);
+  fs.writeFileSync(sk('security-guard'), oldOf(fs.readFileSync(sk('security-guard'), 'utf8'), 'keywords: ["security", "auth", "login", "password", "token", "secret", "sql", "upload", "permission"]').replace(/\n/g, '\r\n'));
+  const editedApi = oldOf(fs.readFileSync(sk('api-craft'), 'utf8'), 'keywords: ["api", "endpoint", "route", "rest", "http", "json"]') + '\n5. Our own rule.\n';
+  fs.writeFileSync(sk('api-craft'), editedApi);
+  const r = inst();
+  assert(r.status === 0 && /update \.harness[\\/]skills[\\/]security-guard[\\/]SKILL\.md/.test(r.stdout), r.stdout);
+  assert(/"access token"/.test(fs.readFileSync(sk('security-guard'), 'utf8')), 'untouched old skill not updated');
+  assert(fs.readFileSync(sk('api-craft'), 'utf8') === editedApi, 'an edited skill was overwritten');
+  assert(!/update \.harness[\\/]skills/.test(inst().stdout), 'a second install should change no skill');
+});
+
 await test('v1.0.30 session merge never drops a commit that lands on the base during the check; plans reject case-only and pattern clashes', () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-race '));
   const main = path.join(base, 'main'); fs.cpSync(sandbox(), main, { recursive: true });
@@ -3988,7 +4074,7 @@ await test('skill pointer schema_version: missing = 1 accepted, newer than SKILL
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: p, encoding: 'utf8', env: { ...process.env, HARNESS_ROOT: p } });
   assert(r.status === 0, r.stderr);
   const o = JSON.parse(r.stdout.trim().split('\n').pop());
-  assert(o.max === 1 && o.kw === 'substring' && o.sv === 1, JSON.stringify(o));
+  assert(o.max === 1 && o.kw === 'word' && o.sv === 1, JSON.stringify(o));
   assert(o.names.includes('sch-none') && o.names.includes('sch-one') && !o.names.includes('sch-two'), JSON.stringify(o.names));
   assert(o.bad.length === 1 && o.bad[0].name === 'sch-two' && o.bad[0].schemaVersion === 2, JSON.stringify(o.bad));
   assert(/SKILL_SCHEMA_UNSUPPORTED sch-two/.test(r.stderr), r.stderr);

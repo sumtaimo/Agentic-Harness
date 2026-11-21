@@ -5,6 +5,7 @@
 .harness/daemon.pid
 .harness/engine-probe.json
 .harness/foundry-check.json
+.harness/update-check.json
 .harness/auto-state.json
 .harness/approvals.json
 .harness/live.log

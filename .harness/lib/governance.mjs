@@ -113,8 +113,21 @@ export const SKILL_COMPOSITION = 'additive-union';
  * such as Skill Foundry may write pointers with `autoApply: false` and rely on keywords. Read the flag, never a version.
  */
 export const SKILL_MATCH = 'keywords-with-explicit';
-/** Capability flag: a keyword matches when it appears anywhere in the task text (case-insensitive substring, not whole word). */
-export const SKILL_KEYWORD_MATCH = 'substring';
+/**
+ * Capability flag: a keyword matches as a WHOLE word or phrase (case-insensitive), also with a plural "s"/"es" — so
+ * "token" matches "tokens" but not "tokenizer", "api" not "rapid", "auth" not "author", "rest" not "restore".
+ * Multi-word keywords ("access token") and keywords with punctuation ("install.mjs", "--reset") match as written.
+ * Up to v1.0.30 this was 'substring' (anywhere in the text), which injected unrelated skills.
+ */
+export const SKILL_KEYWORD_MATCH = 'word';
+
+/** Does this skill keyword appear in the text as a whole word or phrase (plural allowed)? See SKILL_KEYWORD_MATCH. */
+export function keywordMatches(text, keyword) {
+  const k = String(keyword || '').trim().toLowerCase();
+  if (!k) return false;
+  const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  return new RegExp(`(?<![a-z0-9])${esc}(?:s|es)?(?![a-z0-9])`, 'i').test(String(text || ''));
+}
 /** Highest SKILL.md `schema_version` (format of the skill pointer) this harness understands; a missing value means 1. */
 export const SKILL_SCHEMA_MAX = 1;
 const unsupportedSkills = new Map();
@@ -306,7 +319,7 @@ export function matchSkills(sub, roleName, allSkills) {
   for (const s of Object.values(allSkills)) {
     if (chosen.includes(s) || !fits(s) || s.roles.length === 0) continue;
     // added to the explicit list: autoApply skills, and skills whose keyword appears in the task (with or without a list)
-    if (s.autoApply || s.keywords.some((k) => k && text.includes(String(k).toLowerCase()))) chosen.push(s);
+    if (s.autoApply || s.keywords.some((k) => keywordMatches(text, k))) chosen.push(s);
   }
   return { chosen, mismatched, unknown };
 }

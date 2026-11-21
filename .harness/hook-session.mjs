@@ -68,6 +68,8 @@ try {
   const autoLessonsCount = (() => { try { return listLessons(FILES.autoLessons).length; } catch { return 0; } })();
   // Installed Skill Foundry skills that are outdated or were edited: report only (never updates anything). Silent when all is fine.
   const foundryLines = await (async () => { try { return (await import('./lib/foundry-check.mjs')).foundryCheck({ root: ROOT }).lines; } catch { return []; } })();
+  // A newer harness release (installed projects only; reads a cache, never waits for the network).
+  const updateLines = await (async () => { try { return (await (await import('./lib/update-check.mjs')).updateCheck({ root: ROOT })).lines; } catch { return []; } })();
 
   if (brief) {
     const briefLines = [
@@ -181,6 +183,7 @@ try {
     if (person.kind === 'other-person') notes.push(`profile.md is ${person.name}'s; git user is ${person.gitName}: create your own me.md`);
     if (notes.length) briefLines.push(`! Notice: ${notes.join(' | ')}`);
 
+    for (const l of updateLines) briefLines.push(`! ${l}`);
     for (const l of foundryLines) briefLines.push(`! ${l}`);
     briefLines.push('- Menu: node .harness/start.mjs (template: npm start) · Web UI: node .harness/ui.mjs · Health: node .harness/doctor.mjs · Rules: AGENTS.md');
     console.log(briefLines.join('\n'));
@@ -194,6 +197,7 @@ try {
     `- Autonomous mode: charter says ${charter.autonomous ? 'ON' : 'off'}${git.integrationBranch && git.integrationMode !== 'off' ? `; autonomous work lands on the '${git.integrationBranch}' branch, never main` : ''}`,
     `- Memory: ${taughtCount} taught rule(s) (already loaded via CLAUDE.md), ${autoLessonsCount} auto-lesson(s) (task-ranked via memory.mjs context)`
   ];
+  for (const l of updateLines) lines.push(`- ${l}`);
   if (configError) lines.push(`- WARNING: .harness/config.json is invalid (${configError}); fix its JSON syntax before running tasks.`);
   // The person at this machine (me.md, git-ignored). Onboarding happens in chat, never as a prompt here.
   if (person.kind === 'me') {

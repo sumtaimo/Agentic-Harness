@@ -3,7 +3,7 @@ name: security-guard
 description: Blocks common security mistakes (hard-coded secrets, injection, unsafe eval, path traversal) in generated code and tests.
 roles: ["DEV_ENGINEER", "QA_AUDITOR"]
 allowedTools: ["Read", "Edit", "Write"]
-keywords: ["security", "auth", "login", "password", "token", "secret", "sql", "upload", "permission"]
+keywords: ["security", "auth", "authentication", "login", "password", "access token", "auth token", "api key", "secret", "sql", "upload", "permission"]
 autoApply: false
 ---
 # Security Guard Rules

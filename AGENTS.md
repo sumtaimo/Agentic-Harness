@@ -241,7 +241,8 @@ Rules for you when dispatching:
 - `--files` limits what a worker may change, and lets the harness **back those files up and
   restore them if the task fails**. With no files and no `--auto-plan`, there is no automatic
   undo. With `useGitWorktrees: true` the scope is strictly enforced (out-of-scope edits are
-  discarded); otherwise it is an instruction plus the backup.
+  discarded); otherwise it is an instruction plus the backup, and new files created outside the assigned files are moved
+  aside to `.harness/staging/<task>-out-of-scope/` (in a git repository; never deleted).
 - The AI planner's suggested check is only recorded, never run. Review it with the user before
   using it as `--check`.
 - **Show the work live in the chat** (preferred when the user wants to watch):
@@ -281,7 +282,8 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
   exact rules like `Bash(npm test:*)` are granted only if the role already covers them. With several skills, each
   narrows on its own and the worker gets the union (never more than the role). A lead's `skills` list in `team.json`
   is added to: every skill for its role with `autoApply: true`, and every skill for its role whose `keywords` appear in
-  the task. A skill whose `roles` exclude the worker's role is never injected. Only skills in the explicit list may
+  the task as whole words or phrases (a plural is fine; "token" does not match "tokenizer"). A worker without a role gets
+  no skills: give headless tasks one with `dispatch --role <ROLE>`. A skill whose `roles` exclude the worker's role is never injected. Only skills in the explicit list may
   narrow a worker's tools; a skill added by keyword or `autoApply` brings its rules, never takes a tool away.
 - One step now: `node .harness/daemon.mjs --tick`. Scheduled: `node .harness/daemon.mjs --autonomous`
   (only one daemon per folder). When READY items run out, the PO_ARCHITECT proposes new ones
@@ -330,6 +332,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/live.log` · `watch.mjs` | plain-text live feed of every agent action · follow it (`--job <id>` ends with the result) |
 | `.harness/start.mjs` · `usage.mjs` | interactive `[1]`–`[6]` launcher + live banner (`--summary`, `--json`, `npm start`) · daily/7d/30d quota & 80% pre-flight/banner warnings (`npm run usage`) |
 | `.harness/ui.mjs` | read-only local web dashboard on `127.0.0.1:4173` (`npm run ui`, `--port <n>`, `--no-open`; status, backlog, quota, visible runs, sessions, logs) |
+| `.harness/lib/update-check.mjs` | tells an installed project when a newer harness is released (cached, background refresh, `HARNESS_OFFLINE=1` / `"updateCheck": false` to turn off); when it says so, tell the user and ask before running the update |
 | `.harness/hook-session.mjs` | prints harness state at session start (`--brief`: 4–8 line read-only summary for any editor/shell) |
 | `.vscode/tasks.json` | buttons for the user (Run Task menu) |
 | `.claude/settings.json` · `commands/harness/*.md` | Claude Code permission rules + start-up hook · `/harness:run`, `/harness:auto`, `/harness:sessions`, `/harness:status`, `/harness:tick`, `/harness:team`, `/harness:doctor`, `/harness:teach` (the user must trust the folder once for the rules to apply) |

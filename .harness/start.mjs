@@ -20,6 +20,7 @@ import {
   ROOT, HARNESS_DIR, DIRS, FILES, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd,
   probeEngine, engineConsent, ROUTABLE_ENGINES, usageTodayLine, quotaWarnings, formatQuotaWarning, checkCore, listLessons, helpIfAsked, personStatus
 } from './lib/common.mjs';
+import { cachedUpdateLines } from './lib/update-check.mjs';
 import { readCharter, readBacklog, backlogCounts, nextReady, loadRoles, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
 import { listVisibleRuns, VISIBLE_TERMINAL, RESUMABLE_STATUSES, editorDisplayName, hasVisibleBaseline, visibleRunDir } from './lib/handoff.mjs';
 
@@ -226,6 +227,7 @@ export function collectStatus({ skipSessions = false } = {}) {
     sessions,
     usageToday,
     quotaWarnings: quotaWarnList,
+    updateAvailable: cachedUpdateLines(ROOT),
     taughtCount,
     warnings: {
       stagingLeftovers,
@@ -312,6 +314,7 @@ export function formatSummary(info) {
   if (info.warnings?.staleInProgress?.length) lines.push(`! Stale IN_PROGRESS backlog item(s): ${info.warnings.staleInProgress.join(', ')} (use [4] -> [6] to reset READY)`);
   if (info.warnings?.profileIncomplete) lines.push('! No personal profile yet: node .harness/memory.mjs me set --name "…" --language "…" --hats "dev" (git-ignored .harness/memory/me.md)');
   if (info.warnings?.otherPerson) lines.push(`! profile.md is ${info.warnings.otherPerson.profileName}'s, git user is ${info.warnings.otherPerson.gitName}: keep your own preferences in .harness/memory/me.md (node .harness/memory.mjs me set …)`);
+  for (const l of info.updateAvailable || []) lines.push(`! ${l}`);
   for (const w of info.quotaWarnings || []) lines.push(`! ${formatQuotaWarning(w)}`);
   lines.push('============================================================================');
   return lines.join('\n');

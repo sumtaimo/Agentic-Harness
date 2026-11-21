@@ -119,6 +119,15 @@ const isTemplate = fs.existsSync(path.join(ROOT, 'install.mjs')) && /"name":\s*"
       const list = [...c.changed.map((f) => `${f} (edited)`), ...c.missing.map((f) => `${f} (deleted)`), ...c.added.map((f) => `${f} (new)`)];
       warn(`harness core differs from the template: ${list.join(', ')}. The core belongs to the template: do not fix the harness inside a project. Report the gap to the template (docs/MAINTAINING.md), then re-install to get the fix: npx github:sumtaimo/Agentic-Harness#release .`);
     }
+    // Is there a newer release? (inline here; one HTTPS GET of the release's package.json, nothing about you is sent)
+    try {
+      const { updateCheck } = await import('./lib/update-check.mjs');
+      const u = await updateCheck({ root: ROOT, sync: true });
+      if (u.lines.length) for (const l of u.lines) warn(l);
+      else if (u.source === 'off') note('update check is off (HARNESS_OFFLINE=1, HARNESS_UPDATE_CHECK=0 or "updateCheck": false)');
+      else if (u.latest) ok(`harness ${u.installed} is the latest release`);
+      else note(`could not reach the release to check for a newer harness (offline?). To update by hand: npx github:sumtaimo/Agentic-Harness#release .`);
+    } catch { /* a courtesy: never fail the doctor */ }
   }
 }
 

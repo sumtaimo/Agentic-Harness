@@ -10,7 +10,23 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
-## Unreleased
+## 1.0.31 — 2026-11-21
+
+- **New: your project is told when a newer harness is released.** Projects installed from an old release never learned
+  about later fixes (some of them data-loss fixes). Session start, `doctor` and the menu now say "Harness update
+  available: this project has X, the latest release is Y" with the update command, and the AI is told to ask you before
+  updating. How: about twice a day one background process reads the version of the `release` branch (a single HTTPS
+  GET of a public file; nothing about you or your project is sent) into `.harness/update-check.json` (git-ignored); a
+  session start only reads that cache and never waits. Off with `HARNESS_OFFLINE=1`, `HARNESS_UPDATE_CHECK=0` or
+  `"updateCheck": false` in config.json. **Projects on an older version must update once by hand to get this check.**
+- **Fix: files a worker created outside its assigned files stayed in your folder**, also after a failed task, and the
+  check and judge then treated them as the worker's work (which it may not touch: a judge that blocks every cycle).
+  Without worktrees, new untracked files outside every worker's files are now moved aside after each worker round, to
+  `.harness/staging/<task>-out-of-scope/` (never deleted), and listed in the result. Files that existed before the task,
+  git-ignored files and `.harness/` are left alone. Needs a git repository. Found in a real run.
+- **Existing projects now get narrower keywords for the built-in skills.** A project's `.harness/skills/` is kept on
+  update, so the keyword fix below never reached them. A built-in skill you never edited (its keywords line is exactly
+  an older shipped one) is now updated; any skill you changed is kept as it is.
 
 - **Fix: a direct (`--mode normal` / `npm run run`) or swarm task could never get a skill.** A skill needs the worker's
   role, and `dispatch.mjs` had no way to give one: `--role` was silently ignored. `dispatch --role <ROLE>` now sets the
@@ -19,7 +35,15 @@ the entries newer than the version you had.
 - A role-less worker whose task text matches a skill keyword now logs `SKILL_NEEDS_ROLE` with the skills and their roles,
   so the missing role is visible instead of silent. The rule "a role is always required for a skill" is unchanged.
 - `dispatch.mjs` warns on an option it does not know instead of ignoring it.
-- *Affects:* headless direct and swarm tasks. *Config / permissions:* none.
+- **Fix: skill keywords matched inside other words, so unrelated skills were injected.** A keyword now matches as a
+  whole word or phrase (a plural "s"/"es" is allowed): "token" no longer matches "tokenizer", "api" not "rapid",
+  "auth" not "author", "rest" not "restore", "route" not "router". Found with a real run: a design-tokens task for
+  DEV_ENGINEER got 4 skills, including `security-guard` ("token") and `api-craft` ("json"). The built-in skills'
+  keywords are narrower too (`security-guard`: "access token", "auth token", "api key" instead of "token";
+  `api-craft`: "rest api", "json api" instead of "rest", "json"). Capability flag `SKILL_KEYWORD_MATCH` is now `'word'`
+  (was `'substring'`) for tools such as Skill Foundry that read flags, not versions.
+- *Affects:* headless direct and swarm tasks, and every task whose text matched a skill keyword inside another word.
+  *Config / permissions:* none.
 ## 1.0.30 — 2026-11-21
 
 - **Fix (lost commit): `sessions merge` could drop a commit that landed on the base during the check.** When the base
