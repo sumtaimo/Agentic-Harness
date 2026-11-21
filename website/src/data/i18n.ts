@@ -59,6 +59,7 @@ const en = {
     note3: 'The first time, accept the trust dialog and restart the session, so the named agents load.',
     rows: [
       { k: 'Run a goal', cmd: '/harness:run', arg: 'Add a /health endpoint with tests' },
+      { k: 'Big feature', cmd: '/harness:feature', arg: 'login', tag: 'you keep the steps' },
       { k: 'Work the backlog', cmd: '/harness:auto', arg: '', tag: 'autonomous' },
       { k: 'Many sessions', cmd: '/harness:sessions', arg: 'feat: login page', tag: 'max 4 children' },
       { k: 'Check status', cmd: '/harness:status', arg: '' },
@@ -137,6 +138,7 @@ const en = {
     items: {
       run: 'Give the team a task. You watch, the controller checks.',
       team: 'Show the team and check its rules.',
+      feature: 'Grow a short goal into the whole user workflow; you keep the steps, then autopilot builds them.',
       auto: 'Work through the READY backlog by itself.',
       tick: 'Do one autonomous step now.',
       status: 'What is running and what is waiting.',
@@ -252,6 +254,7 @@ const kh: Dict = {
     note3: 'លើកដំបូង សូមទទួល trust dialog ហើយ restart session ដើម្បីឲ្យ agents ដែលមានឈ្មោះ load។',
     rows: [
       { k: 'រត់គោលដៅ', cmd: '/harness:run', arg: 'Add a /health endpoint with tests' },
+      { k: 'Feature ធំ', cmd: '/harness:feature', arg: 'login', tag: 'អ្នកជ្រើសជំហាន' },
       { k: 'ធ្វើការងារក្នុង backlog', cmd: '/harness:auto', arg: '', tag: 'ស្វ័យប្រវត្តិ' },
       { k: 'Sessions ច្រើនព្រមគ្នា', cmd: '/harness:sessions', arg: 'feat: login page', tag: 'កូនអតិបរមា 4' },
       { k: 'ពិនិត្យស្ថានភាព', cmd: '/harness:status', arg: '' },
@@ -330,6 +333,7 @@ const kh: Dict = {
     items: {
       run: 'ប្រគល់ការងារឲ្យក្រុម។ អ្នកមើល controller ពិនិត្យ។',
       team: 'បង្ហាញក្រុម និងពិនិត្យច្បាប់របស់វា។',
+      feature: 'ពង្រីកគោលដៅខ្លីទៅជាដំណើរការអ្នកប្រើពេញលេញ។ អ្នកជ្រើសជំហាន រួច autopilot សាងសង់។',
       auto: 'ធ្វើការងារ READY ក្នុង backlog ដោយខ្លួនឯង។',
       tick: 'ធ្វើជំហានស្វ័យប្រវត្តិមួយឥឡូវនេះ។',
       status: 'អ្វីកំពុងរត់ និងអ្វីកំពុងរង់ចាំ។',

@@ -669,11 +669,13 @@ export function validateBacklog(b) {
   return Array.isArray(b) ? { version: '2.0.0', project: '', tasks } : b;
 }
 
-/** Highest priority READY item: lowest "priority" number first, then oldest. */
+/** Highest priority READY item: lowest "priority" number first, then oldest. An item whose "dependsOn" items are not all
+ *  DONE waits (feature steps run in journey order; a missing dependency id also waits, never runs early). */
 export function nextReady(b = readBacklog()) {
+  const done = new Set(b.tasks.filter((t) => t.status === 'DONE').map((t) => t.id));
   return b.tasks
     .map((t, i) => ({ t, i }))
-    .filter(({ t }) => t.status === 'READY')
+    .filter(({ t }) => t.status === 'READY' && (!Array.isArray(t.dependsOn) || t.dependsOn.every((d) => done.has(d))))
     .sort((a, z) => (a.t.priority ?? 99) - (z.t.priority ?? 99) || a.i - z.i)[0]?.t || null;
 }
 

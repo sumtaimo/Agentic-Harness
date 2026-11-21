@@ -8,6 +8,7 @@ interface Command { cmd: string; where: 'claude' | 'terminal'; key: keyof Dict['
 
 const COMMANDS: Command[] = [
   { cmd: '/harness:run <goal>', where: 'claude', key: 'run' },
+  { cmd: '/harness:feature <goal>', where: 'claude', key: 'feature' },
   { cmd: '/harness:auto', where: 'claude', key: 'auto' },
   { cmd: '/harness:team', where: 'claude', key: 'team' },
   { cmd: '/harness:status', where: 'claude', key: 'status' },

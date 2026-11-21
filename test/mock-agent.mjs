@@ -46,6 +46,15 @@ if (prompt.startsWith('[HARNESS LEAD ')) {
   process.exit(0);
 }
 
+// FEATURE_BA mode: echo back "FEATURE_JSON {...}" from the owner goal (one line).
+if (prompt.startsWith('[HARNESS FEATURE_BA]')) {
+  fs.appendFileSync(path.join(MP, 'feature-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);
+  fs.writeFileSync(path.join(MP, 'feature-ba.txt'), prompt);
+  const plan = (prompt.match(/FEATURE_JSON (\{.*\})/) || [])[1] || 'not json';
+  console.log(JSON.stringify({ type: 'result', is_error: false, result: plan, total_cost_usd: mockCost }));
+  process.exit(0);
+}
+
 // PO_ARCHITECT mode: echo back the task list embedded in charter.md as "PO_JSON {...}" (one line).
 if (prompt.startsWith('[HARNESS PO_ARCHITECT]')) {
   fs.appendFileSync(path.join(MP, 'po-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);

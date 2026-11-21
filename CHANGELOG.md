@@ -10,6 +10,22 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.36 — 2026-11-21
+
+- **New: `feature` — a big feature from a short goal.** `npm run feature -- "login"` (or `/harness:feature login` in
+  Claude Code): BA_ANALYST, read-only, grows the goal into the whole user workflow (for "login": sign up, log in, wrong
+  password, forgot password, staying logged in, reload, log out, permissions). Each step lists what the user does, screen
+  states, validation, reload, permissions, acceptance criteria, size and which steps come first; guessed business rules
+  are marked 🟡 as questions for you. The steps and a spec page (`docs/features/<name>.md`) are a DRAFT: **nothing is
+  built until you keep steps** with `feature approve F1 --keep 1,2,5` (or `--all`). Kept steps become READY backlog
+  items that autopilot builds on `uat` as usual.
+- Every step's workers are checked like a PO task before you see the draft (role scopes, charter paths, no overlap). In
+  a feature, test files belong to QA_AUDITOR in every step. At most 12 steps per feature (`--max`, never above 20).
+- **Backlog items can wait for others:** an item with `"dependsOn": ["F1-S1"]` starts only when those items are DONE
+  (feature steps run in journey order). Items without `dependsOn` are unchanged.
+- *Affects:* nobody until you use it. *Config:* none. Features are stored in `backlog.json` under `"features"`. New
+  command `/harness:feature` and script `npm run feature`.
+
 ## 1.0.35 — 2026-11-21
 
 - **Remember only five commands.** `npm start`, `npm run run`, `npm run auto`, `npm run status -- --full` and

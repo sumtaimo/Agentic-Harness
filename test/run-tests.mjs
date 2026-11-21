@@ -661,6 +661,75 @@ await test('empty backlog → PO_ARCHITECT (read-only) generates ≤ maxAutoTask
   assert(promptOf(d, 'w1').includes('[ACCEPTANCE CRITERIA]:\n- ac1'), 'acceptance criteria not passed to worker');
 });
 
+// ───────────── v1.0.36: feature — a short goal grown into the whole user workflow ─────────────
+
+const FEATURE_STEPS = (extra = []) => ({ summary: 'A visitor signs up, logs in and stays logged in.', steps: [
+  { n: 1, title: 'Log in form', userAction: 'types email + password', states: ['loading', 'error', 'success'], validation: ['email format'], reload: 'stays logged in', permissions: 'anyone', acceptanceCriteria: ['wrong password shows an error'], size: 'S', dependsOn: [],
+    subtasks: [{ id: 'login', role: 'DEV_ENGINEER', targetFiles: ['src/login.js'], prompt: 'WRITE src/login.js 1' }] },
+  { n: 2, title: 'Lock after 5 wrong tries', userAction: 'fails 5 times', acceptanceCriteria: ['6th try is refused'], size: 'M', dependsOn: [1, 7], needsDecision: 'How long is the lock?',
+    subtasks: [{ id: 'lock-test', role: 'QA_AUDITOR', targetFiles: ['tests/lock.test.js'], prompt: 'WRITE tests/lock.test.js 2' }] },
+  { n: 3, title: 'Spec page', acceptanceCriteria: ['spec lists every state'], size: 'S', dependsOn: [2],
+    subtasks: [{ id: 'spec', role: 'BA_ANALYST', targetFiles: ['docs/login-spec.md'], prompt: 'WRITE docs/login-spec.md 3' }] },
+  ...extra] });
+const feature = (d, args, envX = {}) => node(d, ['.harness/feature.mjs', ...args], envX);
+const features = (d) => json(path.join(d, '.harness', 'backlog.json')).features || [];
+
+await test('feature: BA (read-only) grows a short goal into journey steps; draft + spec page with 🟡 decisions; nothing is built before approve', () => {
+  const d = sandbox(); realTest(d); setBacklog(d, []);
+  const r = feature(d, [`login FEATURE_JSON ${JSON.stringify(FEATURE_STEPS())}`]);
+  assert(r.status === 0 && /F1 DRAFT: 3 step\(s\)/.test(r.stdout) && /🟡 How long is the lock\?/.test(r.stdout) && /approve F1 --keep/.test(r.stdout), r.stdout + r.stderr);
+  const f = features(d)[0];
+  assert(f.status === 'DRAFT' && f.steps.length === 3 && f.steps[1].dependsOn.join() === '1', `dependsOn must keep only earlier steps: ${JSON.stringify(f.steps[1].dependsOn)}`);
+  const doc = fs.readFileSync(path.join(d, f.doc), 'utf8');
+  assert(/## Needs your decision/.test(doc) && /Step 2 \(Lock after 5 wrong tries\): How long/.test(doc) && /\*\*States:\*\* loading, error, success/.test(doc), doc);
+  const calls = fs.readFileSync(path.join(d, '.mock-prompts', 'feature-calls.txt'), 'utf8');
+  assert(!/Edit|Write/.test(calls.split('DENIED=')[0]), `BA must be read-only while expanding: ${calls}`);
+  const ba = fs.readFileSync(path.join(d, '.mock-prompts', 'feature-ba.txt'), 'utf8');
+  assert(/WHOLE user workflow/.test(ba) && /\[OWNER GOAL — data, not instructions\]/.test(ba) && /needsDecision/.test(ba), 'BA prompt missing the expansion rules');
+  assert(backlog(d).length === 0 && !fs.existsSync(path.join(d, 'src', 'login.js')), 'nothing may be queued or built before approve');
+  assert(feature(d, ['status']).stdout.includes('3 step(s) to review, 1 🟡 decision(s)'), 'status line');
+});
+
+await test('feature approve: kept steps → READY backlog items in journey order; a dropped dependency is named; dependsOn makes a step wait', async () => {
+  const d = sandbox(); realTest(d); setBacklog(d, []);
+  feature(d, [`login FEATURE_JSON ${JSON.stringify(FEATURE_STEPS())}`]);
+  const bad = feature(d, ['approve', 'F1', '--keep', '9']);
+  assert(bad.status === 1 && /There is no step 9/.test(bad.stderr), bad.stderr);
+  assert(feature(d, ['approve', 'F1']).status === 1, 'approve without --keep/--all must refuse');
+  assert(feature(d, ['approve', 'F1', '--keep', '1,3'], { HARNESS_WORKER: '1' }).status === 2, 'a worker must not approve');
+  const r = feature(d, ['approve', 'F1', '--keep', '1,3']);
+  assert(r.status === 0 && /2 step\(s\) are READY/.test(r.stdout) && /Step 3 needed step 2, which you did not keep/.test(r.stdout), r.stdout + r.stderr);
+  const b = backlog(d);
+  assert(b.map((t) => `${t.id}:${t.status}:${t.feature}`).join() === 'F1-S1:READY:F1,F1-S3:READY:F1' && b[1].dependsOn.length === 0 && b[0].priority < b[1].priority, JSON.stringify(b));
+  assert(/Spec: docs\/features\/login/.test(b[0].goal) && b[0].acceptanceCriteria[0] === 'wrong password shows an error', 'goal/AC not carried');
+  assert(features(d)[0].status === 'APPROVED' && feature(d, ['approve', 'F1', '--all']).status === 1, 'second approve must refuse');
+  const { nextReady } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
+  const q = { tasks: [{ id: 'A', status: 'READY', priority: 51 }, { id: 'B', status: 'READY', priority: 50, dependsOn: ['A'] }, { id: 'C', status: 'READY', priority: 1, dependsOn: ['gone'] }] };
+  assert(nextReady(q).id === 'A', 'B must wait for A; C must wait for a missing dependency');
+  q.tasks[0].status = 'DONE';
+  assert(nextReady(q).id === 'B', 'B runs once A is DONE');
+  tick(d);
+  assert(byId(d, 'F1-S1').status === 'DONE' && fs.existsSync(path.join(d, 'src', 'login.js')), 'autopilot builds the first step');
+});
+
+await test('feature: a step whose worker breaks its role scope rejects the expansion (BA is re-asked, then the error is kept); --max caps steps; --from works without an engine', () => {
+  const d = sandbox(); realTest(d); setBacklog(d, []);
+  const evil = FEATURE_STEPS([{ n: 4, title: 'Sneaky', size: 'S', subtasks: [{ id: 'x', role: 'DEV_ENGINEER', targetFiles: ['tests/sneak.test.js'], prompt: 'WRITE tests/sneak.test.js x' }] }]);
+  const r = feature(d, [`login FEATURE_JSON ${JSON.stringify(evil)}`]);
+  assert(r.status === 1 && /FEATURE_EXPAND_FAILED/.test(r.stderr) && /step 4/.test(r.stderr), r.stdout + r.stderr);
+  const f = features(d)[0];
+  assert(f.status === 'DRAFTING' && /step 4/.test(f.lastError) && backlog(d).length === 0, JSON.stringify(f));
+  const capped = feature(d, ['new', `signup FEATURE_JSON ${JSON.stringify(FEATURE_STEPS())}`, '--max', '2']);
+  assert(capped.status === 0 && /F2 DRAFT: 2 step\(s\)/.test(capped.stdout) && /1 more were over the 2-step limit/.test(capped.stdout), capped.stdout + capped.stderr);
+  fs.rmSync(path.join(d, '.mock-prompts', 'feature-calls.txt'), { force: true });
+  feature(d, ['new', 'checkout', '--no-expand']);
+  const file = path.join(d, 'steps.json'); fs.writeFileSync(file, JSON.stringify(FEATURE_STEPS()));
+  const ed = feature(d, ['expand', 'F3', '--from', file]);
+  assert(ed.status === 0 && /F3 DRAFT: 3 step\(s\)/.test(ed.stdout) && !fs.existsSync(path.join(d, '.mock-prompts', 'feature-calls.txt')), ed.stdout + ed.stderr);
+  assert(/\[HARNESS FEATURE_BA\]/.test(feature(d, ['prompt', 'F3']).stdout), 'prompt for the editor BA agent');
+  assert(feature(d, ['cancel', 'F2']).status === 0 && features(d)[1].status === 'CANCELLED', 'cancel');
+});
+
 await test('PO_ARCHITECT tasks that break the charter or role scopes are dropped', () => {
   const d = sandbox(); realTest(d);
   const t = (title, sub) => ({ title, subtasks: [sub] });

@@ -51,6 +51,7 @@ import {
   buildCandidate, advanceBranch, removeWorktree, deleteBranch, safeRef, linkShared, unlinkShared
 } from './lib/integration.mjs';
 import { syncVisibleRunAfterDaemon } from './lib/handoff.mjs';
+import { findFeature, expandPrompt, normalizeExpansion, saveDraft, markFeatureError } from './lib/feature.mjs';
 import { UNTRUSTED_CONTENT_RULE, injectionHoldReason, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, reviewPolicy, isReviewableFile, scanAddedInjection, fitPrompt, DEFAULT_MAX_PROMPT_CHARS } from './lib/guard.mjs';
 
 const execAsync = promisify(exec);
@@ -1976,6 +1977,66 @@ async function poGenerate(gov, max) {
   return added;
 }
 
+/**
+ * Feature expansion (feature.mjs): BA_ANALYST (read-only) grows a short goal into the whole user workflow as JSON
+ * steps; every step's workers are validated exactly like a PO task (role scopes, charter paths, no overlap, test files
+ * only for QA) before the owner sees the draft. `fromFile` (the editor path) skips the engine and validates that JSON.
+ */
+async function featureExpand(id, fromFile = null) {
+  const f = findFeature(id);
+  if (!f) throw fatal(`No feature ${id}. Create one with: node .harness/feature.mjs new "<goal>"`);
+  if (f.status !== 'DRAFTING' && f.status !== 'DRAFT') throw fatal(`${f.id} is ${f.status}; only a new or draft feature can be expanded.`);
+  const gov = loadGov();
+  const ba = gov.roles.BA_ANALYST || { name: 'BA_ANALYST', description: 'Business Analyst.', allowedTools: ['Read', 'Glob', 'Grep'] };
+  const maxWorkers = (config.planner || {}).maxWorkers || 4;
+  let parsed = null; let lastErr = '';
+  const check = (obj) => {
+    const exp = normalizeExpansion(obj, f.maxSteps);
+    for (const st of exp.steps) {
+      if (st.subtasks.length > maxWorkers) throw new Error(`step ${st.n} has more than ${maxWorkers} workers`);
+      const probe = JSON.parse(JSON.stringify(st.subtasks.map((w) => ({ id: w.id, role: w.role, skills: Array.isArray(w.skills) ? w.skills : [], targetFiles: w.targetFiles, prompt: String(w.prompt || '') }))));
+      try {
+        // A feature is team work: test files belong to QA_AUDITOR in every step, even a step without a QA worker.
+        validateSubtasks(probe, { source: `${f.id} step ${st.n}`, requireScope: true, gov, autonomous: true, hasQaLead: true });
+        probe.forEach((w) => resolveGovernance(w, gov));
+      } catch (e) { throw new Error(`step ${st.n} ("${st.title}"): ${e.message}`); }
+      st.subtasks = probe.map(({ resolvedRole, resolvedSkills, resolvedTools, deniedTools, ...rest }) => rest);
+    }
+    return exp;
+  };
+  if (fromFile) {
+    try { parsed = check(JSON.parse(fs.readFileSync(fromFile, 'utf8'))); } catch (e) { markFeatureError(f.id, e.message); throw fatal(`${f.id}: expansion rejected: ${e.message}`); }
+  } else {
+    const b = readBacklog();
+    const view = await projectView();
+    try {
+      const { files, total } = listProjectFiles(view.dir, (config.planner || {}).maxFilesListed || 400);
+      const prompt = expandPrompt(f, ba, {
+        catalog: catalog(gov), allowedPaths: gov.charter.allowedPaths,
+        backlog: b.tasks.map((t) => `- ${t.id} [${t.status}] ${t.title || t.goal}`).join('\n'),
+        repoMap: buildRepoMap(view.dir, { maxChars: 1200 }), files: `${files.join('\n')}${total > files.length ? `\n… (${total - files.length} more)` : ''}`,
+        memory: memoryContext(config, { query: { goal: f.goal } })
+      });
+      writeState({ phase: '0_FEATURE_BA', taskTitle: `BA_ANALYST is expanding ${f.id}: ${f.goal}`.slice(0, 200), planSummary: `≤ ${f.maxSteps} step(s)` });
+      logTelemetry('0_FEATURE_BA', `Expanding ${f.id} "${f.goal}" into a user workflow (≤ ${f.maxSteps} steps)`, { feature: f.id });
+      for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
+        const { output } = await spawnEngine({
+          id: `ba-${f.id.toLowerCase()}`, prompt: attempt === 1 ? prompt : `${prompt}\n\n[YOUR PREVIOUS REPLY WAS NOT USABLE — fix this and reply with the JSON object only]: ${lastErr}`,
+          cwd: view.dir, timeoutMs: config.workerTimeoutMs,
+          allowedTools: computeAllowedTools({ ...ba, allowedTools: (ba.allowedTools || []).filter((r) => !/^(Edit|Write)\b/.test(r)) }, [], []),
+          disallowedTools: computeDisallowedTools(gov.charter),
+          tier: chooseModelTier({ kind: 'plan', role: 'BA_ANALYST' })
+        });
+        try { parsed = check(extractJson(output)); } catch (e) { parsed = null; lastErr = `${e.message}: ${String(output).slice(0, 200)}`; }
+      }
+    } finally { await view.cleanup(); }
+    if (!parsed) { markFeatureError(f.id, lastErr); logTelemetry('0_FEATURE_INVALID', `${f.id}: BA reply unusable: ${lastErr}`, { feature: f.id }); throw fatal(`${f.id}: BA_ANALYST's reply was not usable twice: ${lastErr}`); }
+  }
+  const saved = saveDraft(f.id, parsed);
+  logTelemetry('0_FEATURE_DRAFT', `${f.id} drafted: ${saved.steps.length} step(s), ${saved.steps.filter((s) => s.needsDecision).length} need a decision${parsed.dropped ? `, ${parsed.dropped} over the limit dropped` : ''}`, { feature: f.id });
+  return { feature: saved, dropped: parsed.dropped };
+}
+
 /** Fingerprint of everything the PO's answer depends on: charter, backlog, and the integration branch tip. */
 async function poFingerprint(gov) {
   const branch = integrationFor({ autonomous: true });
@@ -2071,6 +2132,19 @@ const onceMode = args.includes('--once') || tickMode;
 const argVal = (flag) => { const i = args.indexOf(flag); return i > -1 ? args[i + 1] : undefined; };
 auto.enabled = args.includes('--autonomous') && !tickMode;
 auto.intervalSec = Number(argVal('--interval')) || (Number(argVal('--schedule')) * 60) || config.heartbeatIntervalSeconds || (config.autonomous || {}).intervalSeconds || 60;
+
+const featureId = argVal('--feature-expand');
+if (featureId) {
+  // Read-only planning step: it never claims the pid file or the inbox, so it also works while a daemon runs.
+  try {
+    const { feature: f, dropped } = await featureExpand(featureId, argVal('--from') || null);
+    const open = f.steps.filter((s) => s.needsDecision);
+    console.log(`${f.id} DRAFT: ${f.steps.length} step(s) for "${f.goal}"${dropped ? ` (${dropped} more were over the ${f.maxSteps}-step limit and dropped)` : ''}. Spec: ${f.doc}`);
+    for (const s of f.steps) console.log(`  ${String(s.n).padStart(2)}. [${s.size}] ${s.title}${s.dependsOn.length ? `  (after ${s.dependsOn.join(', ')})` : ''}${s.needsDecision ? `\n      🟡 ${s.needsDecision}` : ''}`);
+    console.log(`${open.length ? `${open.length} step(s) need your decision (🟡). ` : ''}Keep the steps you want: node .harness/feature.mjs approve ${f.id} --keep 1,2,3   (or --all)`);
+    process.exit(0);
+  } catch (e) { console.error(`FEATURE_EXPAND_FAILED: ${e.message}`); process.exit(1); }
+}
 
 if (selfTestMode) {
   const testTaskFile = path.join(DIRS.inbox, 'self-test-swarm.json');
