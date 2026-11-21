@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { ROOT, HARNESS_DIR, DIRS, FILES, atomicWriteJson, readJsonSafe, ensureDirs, LESSONS_HEADER, AUTO_LESSONS_HEADER, normalizeTarget, loadConfig, memberModels } from './common.mjs';
+import { ROOT, HARNESS_DIR, DIRS, FILES, atomicWriteJson, readJsonSafe, ensureDirs, LESSONS_HEADER, AUTO_LESSONS_HEADER, normalizeTarget, loadConfig, memberModels, workerName } from './common.mjs';
 
 export const GOV = {
   charter: path.join(HARNESS_DIR, 'charter.md'),
@@ -698,7 +698,7 @@ export function itemToJob(item, { autonomous = false } = {}) {
   if (Array.isArray(item.subtasks) && item.subtasks.length) job.subtasks = item.subtasks;
   else if (item.hierarchy) Object.assign(job, { goal: item.goal || item.title, targetFiles: item.targetFiles || [] });
   else if (item.autoPlan) Object.assign(job, { autoPlan: true, goal: item.goal || item.title, targetFiles: item.targetFiles || [] });
-  else job.subtasks = [{ id: 'worker-main', role: item.role, skills: item.skills, targetFiles: item.targetFiles || [], prompt: item.goal || item.title }];
+  else job.subtasks = [{ id: workerName({ role: item.role, goal: item.goal || item.title, files: item.targetFiles }), role: item.role, skills: item.skills, targetFiles: item.targetFiles || [], prompt: item.goal || item.title }];
   return job;
 }
 

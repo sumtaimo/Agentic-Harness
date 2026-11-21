@@ -22,7 +22,10 @@ and `.windsurfrules` only point here.
 - **In the template repository itself** (it has `install.mjs` and `docs/MAINTAINING.md`): you MAINTAIN the harness. Its
   `lab` branch is the LAB (built and tried for real here); the `release` branch is the TEMPLATE users install and the
   landing page shows. Follow `docs/MAINTAINING.md`: every change passes `npm test` and `npm run audit`; the owner decides
-  each push, and only the owner's "release" copies `lab` to `release`.
+  each push, and only the owner's "release" copies `lab` to `release`. A change to what the skill library reads or
+  provides (skills, skill pointers, roles, the skill capability flags, how `install.mjs` calls it, `skillFetch`) is
+  risk-checked with the skill library's maintainers before it ships; when the owner mentions the skill library, read the
+  owner's local coordination notes first.
 
 ---
 

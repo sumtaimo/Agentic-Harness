@@ -54,7 +54,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline/promises';
-import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, clipErrorTrace, costlyRunReasons, engineUsable, detectEngines, compatibleModelFor, aiUsageSince, usageLine, usageTodayLine, quotaWarnings, formatQuotaWarning, MODEL_TIERS, isSameDir, validateExternalWorkRoot, harnessPidAlive } from './lib/common.mjs';
+import { ROOT, DIRS, ensureDirs, loadConfig, readJsonSafe, detectVerifyCmd, clipErrorTrace, costlyRunReasons, engineUsable, detectEngines, compatibleModelFor, aiUsageSince, usageLine, usageTodayLine, quotaWarnings, formatQuotaWarning, MODEL_TIERS, isSameDir, validateExternalWorkRoot, harnessPidAlive, workerName } from './lib/common.mjs';
 import { askEngineConsent } from './lib/consent.mjs';
 import { loadTeam, loadRoles } from './lib/governance.mjs';
 import { RESUMABLE_STATUSES, VISIBLE_TERMINAL, editorDisplayName, listVisibleRuns, readVisibleRun, writeVisibleRun, inspectVisibleRun } from './lib/handoff.mjs';
@@ -143,7 +143,7 @@ for (let i = 0; i < args.length; i++) {
     explicitMode = true;
     const [id, filesCsv, ...promptParts] = args[++i].split(':');
     subtasks.push({
-      id: id || `worker-${subtasks.length + 1}`,
+      id: id || workerName({ role, goal: promptParts.join(':').trim() || title, files: (filesCsv || '').split(','), index: subtasks.length + 1 }),
       targetFiles: (filesCsv || '').split(',').map((f) => f.trim()).filter(Boolean),
       prompt: promptParts.join(':').trim() || title
     });
@@ -369,7 +369,7 @@ const job = {
     : {
         subtasks: subtasks.length > 0
           ? subtasks
-          : [{ id: 'worker-main', ...(engine ? { engine } : {}), ...(role ? { role } : {}), targetFiles: files, prompt: goal }]
+          : [{ id: workerName({ role, goal, files }), ...(engine ? { engine } : {}), ...(role ? { role } : {}), targetFiles: files, prompt: goal }]
       })
 };
 

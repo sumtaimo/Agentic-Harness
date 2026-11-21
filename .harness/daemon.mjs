@@ -33,7 +33,7 @@ import {
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd, buildRepoMap, clipErrorTrace, diagnoseVerifyFailure, formatDiagnosis,
   listProjectFiles, safeTarget, normalizeTarget, isSecretFile, isSameDir, validateExternalWorkRoot,
   winQuote, winCommandLine, needsWinShell, MODEL_TIERS, chooseModelTier, resolveModel, compatibleModelFor, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
-  harnessPidAlive
+  harnessPidAlive, workerName
 } from './lib/common.mjs';
 helpIfAsked(import.meta.url); // "--help" prints the usage; it must never start the controller
 
@@ -793,7 +793,7 @@ function validateSubtasks(subtasks, { source = 'task', allowed = [], requireScop
   const ids = new Set();
   const teamHasQa = hasQaLead || subtasks.some((s) => String(s.role || '').toUpperCase() === 'QA_AUDITOR');
   for (const sub of subtasks) {
-    sub.id = String(sub.id || `worker-${subtasks.indexOf(sub) + 1}`).replace(/[^\w.-]/g, '-').slice(0, 40);
+    sub.id = String(sub.id || workerName({ role: sub.role, goal: sub.prompt, files: sub.targetFiles || (sub.targetFile ? [sub.targetFile] : []), index: subtasks.indexOf(sub) + 1 })).replace(/[^\w.-]/g, '-').slice(0, 40);
     if (ids.has(sub.id)) sub.id = `${sub.id}-${subtasks.indexOf(sub) + 1}`;
     ids.add(sub.id);
     const raw = sub.targetFiles || (sub.targetFile ? [sub.targetFile] : []);
@@ -1073,8 +1073,10 @@ async function hierDecompose(task, gov, workRoot = ROOT) {
   const teamPlan = { orchestrator: orch.id, hasQaLead, assignments: [] };
   plan.assignments.forEach((a, i) => {
     const lead = leads.find((l) => l.id === a.lead);
-    const mine = settled[i].value.map((s) => ({
-      id: `${lead.id}.${s.id}`, lead: lead.id, role: lead.role, skills: Array.isArray(s.skills) ? s.skills : (lead.skills && lead.skills.length ? lead.skills : undefined),
+    // A lead's plan often names its workers w1, worker-2: name those after their task instead (lead-dev.dev-login-route).
+    const generic = (x) => !x || /^(w|wk|worker|task|t)[-_]?\d*$/i.test(String(x));
+    const mine = settled[i].value.map((s, k) => ({
+      id: `${lead.id}.${generic(s.id) ? workerName({ role: lead.role, goal: s.prompt, files: s.targetFiles, index: k + 1 }) : s.id}`, lead: lead.id, role: lead.role, skills: Array.isArray(s.skills) ? s.skills : (lead.skills && lead.skills.length ? lead.skills : undefined),
       targetFiles: s.targetFiles, prompt: String(s.prompt).trim(), engine: task.engine || lead.engine, model: lead.model, modelSourceEngine: lead.engine || null, goal: a.goal,
       timeoutMs: minutesToMs(lead.budget?.maxMinutes, undefined), maxCostUsd: lead.budget?.maxCostUsd
     }));
@@ -1128,7 +1130,7 @@ async function runPlanner(task, errorTrace = null, previous = null, workRoot = R
     planSummary = `AI planner → ${subtasks.length} worker(s): ${subtasks.map((s) => `${s.resolvedRole ? `${s.resolvedRole}:` : ''}${s.id}[${s.targetFiles.join(',')}]`).join('  ')}`;
   } else {
     subtasks = validateSubtasks([{
-      id: 'worker-primary', engine: task.engine, role: task.role, skills: task.skills, targetFiles: task.targetFiles || [],
+      id: workerName({ role: task.role, goal: task.goal || task.prompt || task.title, files: task.targetFiles }), engine: task.engine, role: task.role, skills: task.skills, targetFiles: task.targetFiles || [],
       prompt: task.goal || task.prompt || null, cliCommand: task.cliCommand || (task.goal || task.prompt ? null : 'node -v')
     }], vOpts);
     subtasks.forEach((sub) => resolveGovernance(sub, gov));
@@ -1945,7 +1947,7 @@ async function poGenerate(gov, max) {
   const added = [];
   for (const [i, t] of parsed.tasks.slice(0, max).entries()) {
     const subs = Array.isArray(t.subtasks) && t.subtasks.length ? t.subtasks
-      : [{ id: 'worker-main', role: t.role, skills: t.skills, targetFiles: t.targetFiles || [], prompt: t.goal || t.title }];
+      : [{ id: workerName({ role: t.role, goal: t.goal || t.title, files: t.targetFiles }), role: t.role, skills: t.skills, targetFiles: t.targetFiles || [], prompt: t.goal || t.title }];
     const prio = t.priority !== undefined && t.priority !== null && t.priority !== '' && Number.isFinite(Number(t.priority)) ? Number(t.priority) : i + 1;
     const item = {
       id: `AUTO-${stamp}-${i + 1}`, title: String(t.title || t.goal || '').slice(0, 200), priority: prio,

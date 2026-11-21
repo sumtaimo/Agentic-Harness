@@ -10,6 +10,18 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.33 — 2026-11-21
+
+- **Worker names say what the worker does.** `worker-main`, `worker-primary` and `worker-1` said nothing in the live
+  feed, the log, session notes and reports. A worker without a given name is now named after its role and task:
+  `dev-login-endpoint-token`, `qa-plan-regression-tests`, `ba-spec-acceptance-criteria`. File names are left out of
+  the words; a task written without Latin letters (for example in Khmer) is named after its first file
+  (`dev-login-js`), then the role alone. Team workers that a lead called `w1` become `lead-dev.dev-login-route`.
+  Names you give yourself (`--worker api:…`, a plan's own ids) are kept.
+- Leads are shown with their task: the editor-run report and `assign` say `lead-dev · Build the login form: …`.
+- *Affects:* anyone reading logs, notes or reports. *Config:* none. Scripts that searched the log for
+  `worker-main` should match the new names.
+
 ## 1.0.32 — 2026-11-21
 
 - **Skill Foundry skills arrive one by one, when a task needs them** (owner's decision: a small core set at install,

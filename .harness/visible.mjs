@@ -131,7 +131,9 @@ function reportText(run, v) {
   for (const a of run.assignments) {
     const lead = leads.find((l) => l.id === a.lead);
     const mine = v.changes.filter((f) => { const p = f.replace(/^[+~-] /, ''); return inside(p, a.files) && (!lead || !leads.length || leadOwns(lead, p, leads)); });
-    L.push(`  • ${a.lead}: ${mine.length ? mine.join(', ') : 'no file changes'}${v.reports?.[a.lead] ? `\n      says: ${v.reports[a.lead]}` : ''}`);
+    // Who did what: the lead, its task in a few words, then its files.
+    const job = String(a.goal || '').replace(/\s+/g, ' ').trim();
+    L.push(`  • ${a.lead}${job ? ` · ${job.length > 60 ? `${job.slice(0, 57)}…` : job}` : ''}: ${mine.length ? mine.join(', ') : 'no file changes'}${v.reports?.[a.lead] ? `\n      says: ${v.reports[a.lead]}` : ''}`);
   }
   L.push('', `Check:   ${run.check.cmd}  (${run.check.source})`, `         → ${v.checkResult}`);
   if (v.testsChangedAfterFail?.length) L.push(`  ⚠ After the last failed check, ${v.testsChangedAfterFail.length} test file(s) were changed (${v.testsChangedAfterFail.slice(0, 4).join(', ')}${v.testsChangedAfterFail.length > 4 ? ', …' : ''}).`,
@@ -344,7 +346,8 @@ function assign() {
   run.assignments = plan.assignments.map((a) => ({ lead: a.lead, goal: a.goal.trim(), files: a.files }));
   run.status = 'DELEGATED'; run.delegatedAt = new Date().toISOString();
   saveRun(run);
-  console.log(`DELEGATION OK for run ${id}: ${run.assignments.map((a) => `${a.lead} → ${a.files.join(', ')}`).join('  |  ')}\n`);
+  const short = (g) => { const t = String(g || '').replace(/\s+/g, ' ').trim(); return t.length > 40 ? `${t.slice(0, 37)}…` : t; };
+  console.log(`DELEGATION OK for run ${id}: ${run.assignments.map((a) => `${a.lead}${a.goal ? ` · ${short(a.goal)}` : ''} → ${a.files.join(', ')}`).join('  |  ')}\n`);
   console.log(`Start these ${run.assignments.length} agent(s) NOW, all in ONE message (Agent tool, parallel). Use exactly these prompts:\n`);
   for (const a of run.assignments) {
     const lead = leads.find((l) => l.id === a.lead);

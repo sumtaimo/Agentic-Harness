@@ -1353,6 +1353,28 @@ export function formatDiagnosis(diag) {
   return lines.join('\n');
 }
 
+// ───────────────────────────── worker names that say what the worker does ─────────────────────────────
+// "worker-main" / "worker-1" said nothing in logs, the live feed and reports. A worker is now named after its role and
+// its task: dev-login-endpoint, qa-checkout-tests, ba-onboarding-spec. Task text without Latin words (e.g. Khmer) falls
+// back to the first file's name (dev-login-js), then to the role alone. Names stay short, ASCII and safe as ids.
+const ROLE_SHORT = { DEV_ENGINEER: 'dev', QA_AUDITOR: 'qa', BA_ANALYST: 'ba', UX_DESIGNER: 'ux', PO_ARCHITECT: 'po', REVIEWER: 'review', SECURITY: 'sec', COORDINATOR: 'coord' };
+const NAME_STOP = new Set('a an the to of for in on at by with and or from into onto this that these those it its be is are was were please make create write add build implement update change fix new use using so then than as all any each every some my our your their only also just exactly file files code function page module containing contains return returns'.split(' '));
+
+/** A short, readable worker id from its role and task: "dev-login-endpoint". `index` breaks ties ("dev-2"). */
+export function workerName({ role, goal, files, index } = {}) {
+  const head = ROLE_SHORT[String(role || '').toUpperCase()] || 'work';
+  // File names and paths in the text ("src/login.js") say less than the words around them: leave them out here.
+  const text = String(goal || '').toLowerCase().replace(/[`'"]/g, '').replace(/\S*[/\\]\S*|\S+\.[a-z0-9]{1,5}\b/g, ' ');
+  const words = [...new Set(text.split(/[^a-z0-9]+/).filter((w) => w.length > 1 && !NAME_STOP.has(w) && !/^\d+$/.test(w)))];
+  let tail = words.slice(0, 3).join('-');
+  if (!tail) {
+    const f = [].concat(files || []).find(Boolean);
+    tail = f ? String(f).replace(/\/+$/, '').split('/').pop().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : '';
+  }
+  const name = [head, tail || (index ? String(index) : '')].filter(Boolean).join('-').slice(0, 40).replace(/-+$/, '');
+  return name || 'worker';
+}
+
 // ───────────────────────────── is the daemon in daemon.pid really ours? ─────────────────────────────
 // process.kill(pid, 0) only says SOME process has that id. After a crash, Windows soon gives the id to another program
 // (explorer.exe, a browser), and the harness then waited forever for a daemon that does not exist. The daemon is always

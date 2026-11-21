@@ -1483,7 +1483,7 @@ await test('editor workflow: brief → assign → agents work → verify → rep
   assert(/no shell/.test(ba) && !/Code Craft/.test(ba) && /ONLY these files\/folders: docs\/a\.md/.test(ba), 'ba prompt wrong (no shell, no code-craft skill)');
   agentsWrite(d, trioFiles());
   const v = vis(d, 'verify', id, '--reports', JSON.stringify({ 'lead-dev': 'wrote src/a.js' }));
-  assert(v.status === 0 && /PASSED ✔/.test(v.stdout) && /lead-dev: \+ src\/a\.js/.test(v.stdout) && /says: wrote src\/a\.js/.test(v.stdout) && /controller → orchestrator \(editor session\) → lead-ba, lead-dev, lead-qa/.test(v.stdout), v.stdout);
+  assert(v.status === 0 && /PASSED ✔/.test(v.stdout) && /lead-dev( · [^\n]*)?: \+ src\/a\.js/.test(v.stdout) && /says: wrote src\/a\.js/.test(v.stdout) && /controller → orchestrator \(editor session\) → lead-ba, lead-dev, lead-qa/.test(v.stdout), v.stdout);
   assert(byId(d, 'T1').status === 'DONE' && runJson(d, id).status === 'PASSED', 'backlog/run not DONE/PASSED');
   assert(!fs.existsSync(path.join(d, '.harness', 'visible', id, 'baseline')), 'baseline copy not cleaned after a pass');
   const note = fs.readdirSync(path.join(d, '.harness', 'memory', 'sessions')).map((f) => read(d, `.harness/memory/sessions/${f}`)).join('');
@@ -1990,7 +1990,7 @@ await test('model tiers (multi-engine): each engine gets its own alias, an engin
   const d2 = sandbox();
   withProfiles(d2, { mock: tieredProfile() });
   const r = node(d2, ['.harness/dispatch.mjs', '--goal', 'WRITE a.txt hi', '--files', 'a.txt', '--model', 'fable', '--check', PASS, '--wait']);
-  assert(r.status === 0 && modelArg(d2, 'worker-main') === 'fable', `--model: ${modelArg(d2, 'worker-main')} ${r.stdout}`);
+  assert(r.status === 0 && modelArg(d2, 'work-hi') === 'fable', `--model: ${modelArg(d2, 'work-hi')} ${r.stdout}`);
   t.members[1].model = 'bad model!';
   fs.writeFileSync(path.join(d, '.harness', 'team.json'), JSON.stringify(t, null, 2));
   assert(node(d, ['.harness/team.mjs', 'validate']).status === 1, 'an invalid model must be rejected');
@@ -2500,6 +2500,24 @@ process.exit(2);`);
   assert(note.length && /Skills added from Skill Foundry: design-system: the task mentions "design tokens"; role DEV_ENGINEER/.test(fs.readFileSync(path.join(g, '.harness', 'memory', 'sessions', note[0]), 'utf8')), 'the person is not told in the session note');
 });
 
+await test('v1.0.33 worker names say what the worker does (role + task words); Khmer/no-Latin text falls back to the file name; dispatch uses them', async () => {
+  const c = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);
+  const cases = [
+    [{ role: 'DEV_ENGINEER', goal: 'Write src/login.js: a login endpoint that returns a token' }, 'dev-login-endpoint-token'],
+    [{ role: 'QA_AUDITOR', goal: 'Plan the regression tests for the checkout flow' }, 'qa-plan-regression-tests'],
+    [{ role: 'BA_ANALYST', goal: 'Write the spec and acceptance criteria for onboarding' }, 'ba-spec-acceptance-criteria'],
+    [{ role: 'DEV_ENGINEER', goal: 'បង្កើតទំព័រចូលប្រើ', files: ['src/login.js'] }, 'dev-login-js'],
+    [{ role: 'UX_DESIGNER', goal: '', files: ['src/styles/'] }, 'ux-styles'],
+    [{ role: 'DEV_ENGINEER', goal: '', index: 2 }, 'dev-2']
+  ];
+  for (const [input, want] of cases) assert(c.workerName(input) === want, `workerName(${JSON.stringify(input)}) = ${c.workerName(input)}, want ${want}`);
+  assert(cases.every(([i]) => /^[a-z0-9-]{1,40}$/.test(c.workerName(i))), 'names must be short, lowercase ASCII ids');
+  // End to end: a direct dispatch with a role is named after its task in the live log.
+  const d = sandbox();
+  const r = node(d, ['.harness/dispatch.mjs', '--goal', 'Fix the checkout total rounding\nWRITE total.txt 3', '--files', 'total.txt', '--role', 'DEV_ENGINEER', '--check', PASS, '--wait']);
+  assert(r.status === 0 && log(d).some((e) => e.worker === 'dev-checkout-total-rounding'), 'dispatch did not use the task name: ' + [...new Set(log(d).map((e) => e.worker).filter(Boolean))].join(', '));
+});
+
 await test('update check: an installed project is told when a newer harness is released (session start, doctor, menu); never in the template, never when off, never blocking', async () => {
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-update '));
   assert(spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj], { encoding: 'utf8', env: { ...env, HARNESS_OFFLINE: '1' } }).status === 0, 'install');
@@ -3001,8 +3019,8 @@ await test('Windows backslash paths & cross-engine model guards: docs\\ trailing
   const idH = runIdOf(vis(dH, 'brief', '--goal', hGoal, '--check', existsCheck('src/h2.js')));
   const rH = node(dH, ['.harness/dispatch.mjs', '--resume-visible', idH, '--engine', 'antigravity', '--wait']);
   assert(rH.status === 0 && read(dH, 'src/h2.js') === 'ok', rH.stdout + rH.stderr);
-  assert(modelArg(dH, 'orchestrator') === 'ag-high' && modelArg(dH, 'lead-dev') === 'ag-med' && modelArg(dH, 'lead-dev.w') === 'ag-fast',
-    `hierDecompose leaked claude alias: orch=${modelArg(dH, 'orchestrator')} lead=${modelArg(dH, 'lead-dev')} worker=${modelArg(dH, 'lead-dev.w')}`);
+  assert(modelArg(dH, 'orchestrator') === 'ag-high' && modelArg(dH, 'lead-dev') === 'ag-med' && modelArg(dH, 'lead-dev.dev-ok') === 'ag-fast',
+    `hierDecompose leaked claude alias: orch=${modelArg(dH, 'orchestrator')} lead=${modelArg(dH, 'lead-dev')} worker=${modelArg(dH, 'lead-dev.dev-ok')}`);
 
   // ENGINE_FALLBACK without --engine: unavailable lead.engine drops incompatible lead.model alias when falling back to auto
   const dFb = sandbox();
