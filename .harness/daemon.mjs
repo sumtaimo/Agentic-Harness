@@ -511,6 +511,19 @@ function autoLoadedMemory(profile, cwd) {
   return skip;
 }
 
+/**
+ * The shell commands this worker may run, said up front (found in a real run: workers spent turns on `cd`, `node -e`,
+ * pipes and temp scripts their role denies). Only for a role-scoped worker; '' when its tools are not restricted.
+ */
+function shellLine(tools) {
+  if (!Array.isArray(tools) || !tools.length) return '';
+  const bash = tools.filter((t) => /^Bash\(/.test(t)).map((t) => t.slice(5, -1).replace(/:\*$/, ' …'));
+  if (tools.includes('Bash')) return '';
+  return bash.length
+    ? `[SHELL]: you may run ONLY these commands: ${bash.join(' · ')}. Run them from your working folder as they are: no cd, no pipes or &&, no node -e, no temp scripts, no other command — anything else is denied and wastes your turn.`
+    : '[SHELL]: you may not run shell commands. Use the file tools only.';
+}
+
 function buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov = {}, cycle = 1, diagnosis = null) {
   let skip = [];
   try { skip = autoLoadedMemory(config.profiles[profileName] || {}, cwd); } catch { /* inject everything */ }
@@ -536,6 +549,7 @@ function buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov = {}, cy
     scoped
       ? `[SCOPED TARGET FILES: ${subtask.targetFiles.join(', ')}]\n[STRICT CONSTRAINT: Only modify your scoped target files. Do not touch unrelated files.${role ? ' Your engine permissions are limited to these paths; other edits will be denied.' : ''}]`
       : '[SCOPE: whole project — change only what the task needs.]',
+    shellLine(subtask.resolvedTools),
     gov.skills?.length ? `[INJECTED SKILL CONTRACTS — mandatory rules for this task]:\n${gov.skills.map((s) => `### Skill: ${s.name}\n${s.body}`).join('\n\n')}` : '',
     // A worktree starts from the last commit: a skill added since (e.g. fetched for this task) is only in the main folder.
     gov.skills?.length && cwd && !isSameDir(cwd, ROOT) ? `[SKILL FILES]: you work in a separate worktree. When a skill above says to read .claude/skills/<name>/, read it from the main project folder instead: ${path.join(ROOT, '.claude', 'skills').replace(/\\/g, '/')}/<name>/ (read only; never edit it).` : '',

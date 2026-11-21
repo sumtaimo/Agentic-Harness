@@ -862,6 +862,20 @@ await test('v1.0.39 feature BA and hunt QA get matching skills (role + keywords,
   assert(/RULE-OF-journey-mapper/.test(editor.stdout) && /Skills for BA: [^\n]*journey-mapper/.test(editor.stderr), 'editor prompt must carry the same skills');
 });
 
+await test('v1.0.39 workers are told their exact shell commands up front; doctor says how to let workers open a browser (playwright MCP off by default)', () => {
+  const d = sandbox(); realTest(d);
+  drop(d, { id: 'sh', title: 'sh', verifyCmd: PASS, subtasks: [
+    { id: 'qa1', role: 'QA_AUDITOR', targetFiles: ['tests/a.test.js'], prompt: 'WRITE tests/a.test.js a' },
+    { id: 'dev1', role: 'DEV_ENGINEER', targetFiles: ['src/a.js'], prompt: 'WRITE src/a.js a' },
+    { id: 'ba1', role: 'BA_ANALYST', targetFiles: ['docs/a.md'], prompt: 'WRITE docs/a.md a' }] });
+  runOnce(d);
+  assert(/\[SHELL\]: you may run ONLY these commands: npm test … · npm run test …\. [^\n]*no cd/.test(promptOf(d, 'qa1')), promptOf(d, 'qa1').split('[SHELL]')[1]?.slice(0, 200));
+  assert(/\[SHELL\]: you may run ONLY these commands: [^\n]*node …/.test(promptOf(d, 'dev1')) && /\[SHELL\]: you may run ONLY these commands: git status\./.test(promptOf(d, 'ba1')), 'DEV/BA shell lines');
+  fs.mkdirSync(path.join(d, 'src'), { recursive: true }); fs.writeFileSync(path.join(d, 'src', 'index.html'), '<p>x</p>');
+  const doc = node(d, ['.harness/doctor.mjs']).stdout;
+  assert(/cannot open the app in a browser themselves: the playwright MCP preset is off/.test(doc), doc.split('Browser testing')[1]?.slice(0, 600));
+});
+
 await test('PO_ARCHITECT tasks that break the charter or role scopes are dropped', () => {
   const d = sandbox(); realTest(d);
   const t = (title, sub) => ({ title, subtasks: [sub] });

@@ -161,6 +161,14 @@ if (uiFiles.length) {
       r.status === 0 ? ok('a real browser launches') : warn(`${found} is installed but the browser did not launch (${(r.stderr || 'timeout').trim().split('\n')[0]}). Try: npx playwright install chromium`);
     } else note('To prove a real browser launches (takes a few seconds): node .harness/doctor.mjs --deep');
   }
+  // Workers can drive a browser themselves only through the playwright MCP preset (QA and UX may not run node scripts).
+  // Off by default (owner's decision: a download per project); say how to turn it on, never turn it on here.
+  try {
+    const mcp = JSON.parse(fs.readFileSync(path.join(ROOT, '.harness', 'mcp.json'), 'utf8'));
+    const prof = (config.profiles || {})[config.activeProfile && config.activeProfile !== 'auto' ? config.activeProfile : (config.autoOrder || ['claude'])[0]] || {};
+    if (mcp.mcpServers?.playwright && prof.useMcp) ok('workers can open the app in a browser (playwright MCP preset is on)');
+    else note(`Workers (QA, UX, DEV) cannot open the app in a browser themselves: the playwright MCP preset is off. To turn it on: copy "playwright" from "_optionalPresets" into "mcpServers" in .harness/mcp.json and set "useMcp": true for your engine in .harness/config.json (each run then downloads a browser once).`);
+  } catch (e) { note(`could not read .harness/mcp.json (${e.message})`); }
 }
 
 console.log('\nGovernance (v2: charter, backlog, roles, skills)');

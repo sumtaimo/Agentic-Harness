@@ -17,6 +17,10 @@ the entries newer than the version you had.
   plus your text), at most 2, a fitting skill that is not installed yet is fetched from Skill Foundry first (controller
   only; off with `"skillFetch": false`). They arrive by keyword, so they bring rules and never take a tool away. The
   editor path (`feature.mjs prompt`, `hunt.mjs prompt`) prints the same skills. Logged as `1_ROLE_SKILL_MATCH`.
+- **Workers are told their exact shell commands** up front (`[SHELL]: you may run ONLY …`, from their role and skills;
+  no cd, pipes, `node -e` or temp scripts). In a real trial workers spent turns on commands their role denies.
+- **`doctor` says how to let workers open the app in a browser** when the project has UI files and the `playwright`
+  MCP preset is off (it stays off by default — owner's decision; QA and UX keep no `node`).
 - *Affects:* every `feature` / `hunt` run when a matching skill exists (today: `spec-writer` for BA, `test-champion`
   and `security-guard` for QA, by keyword). *Config:* none.
 
