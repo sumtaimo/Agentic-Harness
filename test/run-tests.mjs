@@ -1029,6 +1029,19 @@ await test('skill exact rules: DEV gets only "npm test" + node (not npm:*), a sk
   assert(!ba.some((t) => t.startsWith('Bash(node')), 'BA must not gain node');
 });
 
+await test('MCP per role: playwright preset is pinned and optional; only DEV/QA/UX get mcp__playwright, only BA gets mcp__fetch, read-only roles get none', async () => {
+  const { computeAllowedTools, loadRoles } = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
+  const mcp = JSON.parse(fs.readFileSync(path.join(REPO, '.harness', 'mcp.json'), 'utf8'));
+  const pw = mcp._optionalPresets.playwright;
+  assert(pw && pw.args.some((a) => /^@playwright\/mcp@\d+\.\d+\.\d+$/.test(a)) && pw.args.includes('--headless') && pw.args.includes('--isolated'), `playwright preset: ${JSON.stringify(pw)}`);
+  assert(!mcp.mcpServers.playwright, 'playwright must stay an optional preset, not enabled by default');
+  const roles = loadRoles();
+  const has = (r, t) => computeAllowedTools(roles[r], [], ['x']).includes(t);
+  for (const r of ['DEV_ENGINEER', 'QA_AUDITOR', 'UX_DESIGNER']) assert(has(r, 'mcp__playwright'), `${r} lacks mcp__playwright`);
+  assert(has('BA_ANALYST', 'mcp__fetch') && !has('BA_ANALYST', 'mcp__playwright'), 'BA mcp tools wrong');
+  for (const r of ['PO_ARCHITECT', 'REVIEWER', 'SECURITY', 'COORDINATOR']) assert(!computeAllowedTools(roles[r], [], []).some((t) => t.startsWith('mcp__')), `${r} must get no MCP tool`);
+});
+
 await test('role + skill end-to-end: engine args for a DEV worker carry exactly the narrowed rules; the ungranted skill rule is logged', () => {
   const d = sandbox();
   drop(d, { id: 'skillrules', title: 's', verifyCmd: PASS, subtasks: [

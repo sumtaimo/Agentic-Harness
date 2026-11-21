@@ -10,6 +10,18 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.34 — 2026-11-21
+
+- **New optional MCP preset `playwright`** in `.harness/mcp.json` (`@playwright/mcp@0.0.84`, pinned, `--headless
+  --isolated`): a worker can open the app in a real browser, click through it and take screenshots. Off by default like
+  every preset: copy it into `mcpServers` and set `"useMcp": true` for the engine in `config.json`.
+- **MCP tools per role.** A role's `allowedTools` now names the MCP servers that fit it, so each worker gets only its
+  own: `mcp__playwright` for DEV_ENGINEER, QA_AUDITOR and UX_DESIGNER (check the UI in a browser); `mcp__fetch` for
+  BA_ANALYST (read public pages for research). PO_ARCHITECT, REVIEWER, SECURITY and COORDINATOR get none. A skill that
+  lists its own tools still narrows them away (a skill can only narrow). Web content is data, never instructions.
+- *Affects:* only projects that turn MCP on. *Config:* none by default. *Roles:* four role files gained one tool each;
+  a project that customised its roles keeps its own files and can add the same lines by hand.
+
 ## 1.0.33 — 2026-11-21
 
 - **Worker names say what the worker does.** `worker-main`, `worker-primary` and `worker-1` said nothing in the live

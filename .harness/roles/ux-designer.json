@@ -8,7 +8,8 @@
     "Grep",
     "Edit({targetFiles})",
     "Write({targetFiles})",
-    "Bash(git status)"
+    "Bash(git status)",
+    "mcp__playwright"
   ],
   "writablePaths": [
     "src/**/*.css",

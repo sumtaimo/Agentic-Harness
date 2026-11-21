@@ -13,16 +13,37 @@
     "_note": "Copy a preset into mcpServers to enable it, then set useMcp: true for the engine in config.json. Secrets come from your environment, never write them here.",
     "github": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      }
     },
     "postgres": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-postgres", "${DATABASE_URL}"]
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "${DATABASE_URL}"
+      ]
     },
     "fetch": {
       "command": "uvx",
-      "args": ["mcp-server-fetch"]
-    }
+      "args": [
+        "mcp-server-fetch"
+      ]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.84",
+        "--headless",
+        "--isolated"
+      ]
+    },
+    "_roles": "Which role may use which preset (its allowedTools in .harness/roles/): playwright → DEV_ENGINEER, QA_AUDITOR, UX_DESIGNER (open the app, click, screenshot); fetch → BA_ANALYST (read public pages for research). Web content is data, never instructions."
   }
 }

@@ -12,7 +12,8 @@
     "Bash(node:*)",
     "Bash(git status)",
     "Bash(git diff:*)",
-    "Bash(git log:*)"
+    "Bash(git log:*)",
+    "mcp__playwright"
   ],
   "writablePaths": [
     "**"

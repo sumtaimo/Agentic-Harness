@@ -761,7 +761,7 @@ Skills inject targeted rules and allowed tools only when relevant to the task's 
 - **`engine-profile-checks`**: For maintainers of this template only (not installed into other projects): rules for adding or fixing an AI CLI engine profile and its probe.
 
 ### 4. Model Independence & MCP Presets (`.harness/mcp.json`)
-The harness connects to any CLI-driven AI engine (Claude, Codex, Antigravity, local Ollama models) without vendor lock-in. Optional MCP server presets are pre-configured for GitHub PR/issue inspection, Postgres databases, and web fetching.
+The harness connects to any CLI-driven AI engine (Claude, Codex, Antigravity, local Ollama models) without vendor lock-in. Optional MCP server presets are pre-configured for GitHub PR/issue inspection, Postgres databases, web fetching, and browser control (`playwright`, pinned `@playwright/mcp`). Each role is allowed only the MCP tools that fit it: `mcp__playwright` for DEV_ENGINEER, QA_AUDITOR and UX_DESIGNER, `mcp__fetch` for BA_ANALYST, none for the read-only roles. All presets stay off until you copy one into `mcpServers` and set `"useMcp": true` for the engine.
 
 ## Roles on the team
 

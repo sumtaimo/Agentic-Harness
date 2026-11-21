@@ -9,7 +9,8 @@
     "Edit({targetFiles})",
     "Write({targetFiles})",
     "Bash(npm test:*)",
-    "Bash(npm run test:*)"
+    "Bash(npm run test:*)",
+    "mcp__playwright"
   ],
   "writablePaths": [
     "tests/**",
