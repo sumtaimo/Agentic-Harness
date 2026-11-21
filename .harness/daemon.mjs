@@ -561,6 +561,13 @@ function resolveGovernance(sub, gov) {
   const m = matchSkills(sub, roleName || 'NONE', gov.skills);
   if (m.unknown.length) throw fatal(`Worker '${sub.id}' asks for unknown skill(s): ${m.unknown.join(', ')} (installed: ${Object.keys(gov.skills).join(', ') || 'none'}).`);
   if (m.mismatched.length) logTelemetry('SKILL_ROLE_MISMATCH', `Skill(s) ${m.mismatched.join(', ')} not allowed for role ${roleName || '(none)'}; not injected`, { worker: sub.id });
+  if (!roleName) {
+    // A role is always required for a skill, so a role-less worker gets none. Name what the task text matched, so the
+    // user sees why and which --role would bring them in (was silent up to v1.0.28).
+    const text = String(sub.prompt || '').toLowerCase();
+    const missed = Object.values(gov.skills).filter((s) => s.roles.length && s.keywords.some((k) => k && text.includes(String(k).toLowerCase())));
+    if (missed.length) logTelemetry('SKILL_NEEDS_ROLE', `${sub.id}: no role, so no skills; the task matches ${missed.map((s) => `${s.name} (${s.roles.join('/')})`).join(', ')}. Add --role to dispatch.`, { worker: sub.id, skills: missed.map((s) => s.name) });
+  }
   sub.resolvedRole = role ? role.name : null;
   sub.resolvedSkills = m.chosen.map((s) => s.name);
   sub.resolvedTools = role ? computeAllowedTools(role, m.chosen, sub.targetFiles, { explicit: Array.isArray(sub.skills) ? sub.skills : [] }) : (sub.allowedTools || null);

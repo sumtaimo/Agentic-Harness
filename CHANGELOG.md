@@ -10,6 +10,16 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## Unreleased
+
+- **Fix: a direct (`--mode normal` / `npm run run`) or swarm task could never get a skill.** A skill needs the worker's
+  role, and `dispatch.mjs` had no way to give one: `--role` was silently ignored. `dispatch --role <ROLE>` now sets the
+  role of the direct worker and of every `--worker` without one (unknown roles are refused). Found with a real Codex run
+  in a demo project: with `--role DEV_ENGINEER` the worker got `copy-tight` and answered in its format; without, none.
+- A role-less worker whose task text matches a skill keyword now logs `SKILL_NEEDS_ROLE` with the skills and their roles,
+  so the missing role is visible instead of silent. The rule "a role is always required for a skill" is unchanged.
+- `dispatch.mjs` warns on an option it does not know instead of ignoring it.
+- *Affects:* headless direct and swarm tasks. *Config / permissions:* none.
 ## 1.0.30 — 2026-11-21
 
 - **Fix (lost commit): `sessions merge` could drop a commit that landed on the base during the check.** When the base
