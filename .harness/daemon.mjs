@@ -606,6 +606,20 @@ function runWorker(subtask, cwd, errorContext, { cycle = 1, model = null, diagno
 
 // ───────────────────────────── git helpers ─────────────────────────────
 
+/**
+ * Worktree mode: each worker starts from the last commit, so it cannot see uncommitted edits in your folder, and copying
+ * its result back would overwrite them. Before any worker starts, refuse when a file the workers may change has
+ * uncommitted edits (git status, untracked files included). Nothing is touched; commit or stash first.
+ */
+async function refuseDirtyWorktreeScope(plan, root = ROOT) {
+  const targets = [...new Set(plan.subtasks.filter((s) => s.prompt).flatMap((s) => s.targetFiles || []))];
+  if (!targets.length) return;
+  let out = '';
+  try { out = (await execFileAsync('git', ['status', '--porcelain', '--untracked-files=all', '--', ...targets], { cwd: root })).stdout; } catch { return; } // not a repo: the worktree check reports it
+  const dirty = out.split('\n').map((l) => l.slice(3).trim().replace(/^"|"$/g, '')).filter(Boolean);
+  if (dirty.length) throw fatal(`useGitWorktrees: ${dirty.length} file(s) the workers may change have uncommitted edits (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? ', …' : ''}). A worktree starts from the last commit, so its result would overwrite them. Nothing was changed. Commit or stash them first, then run the task again.`);
+}
+
 async function isGitRepo(root = ROOT) {
   try { await execFileAsync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: root }); return true; } catch { return false; }
 }
@@ -1585,6 +1599,7 @@ async function executeSquareCycle(taskFile) {
       plan = await runPlanner(task, lastErrorTrace, plan, workRoot, errorDiagnosis);
       plan.cycle = cycle; plan.model = task.model || null; // model tier: retries escalate; --model on the task overrides
       if (integration && !gitCtx) gitCtx = await startIntegration(task, integration);
+      if (cycle === 1 && !gitCtx && config.useGitWorktrees) await refuseDirtyWorktreeScope(plan, workRoot);
       if (cycle === 1 && !backup && !gitCtx) backup = backupScope(plan, workRoot);
       if (cycle === 1 && !gitCtx && preRunFiles === null) preRunFiles = snapshotScopeHashes(plan, workRoot);
       if (cycle > 1) enforceBudget(task, `cycle ${cycle - 1}`); // never start another cycle once over budget

@@ -144,6 +144,9 @@ is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
   turns it into "Decisions by hat" so the AI can say who to ask. Contact details are refused; style, experience and
   personal skills stay in `me.md`. `node .harness/memory.mjs people` shows it; `me unshare` removes you.
 
+- **Worktree mode (`useGitWorktrees: true`):** commit or stash the files a task may change first. A worktree starts
+  from the last commit, so the harness refuses to start over uncommitted edits in those files instead of overwriting them.
+
 ## 4. What is NOT guaranteed (read this before trusting it with a real project)
 
 - **The judge and the injection scanner are AI- and pattern-based.** A judge can miss a bug and the scanner can miss a cleverly worded injection; the real check still decides PASSED, and the human still reviews the diff.

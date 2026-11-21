@@ -241,6 +241,25 @@ await test('v1.0.27 git worktree mode: a failed check restores the folder (worke
   assert(git('worktree', 'list').toString().trim().split('\n').length === 1, 'worktree not cleaned up');
 });
 
+await test('v1.0.28 git worktree mode: uncommitted edits in a scoped file stop the task before any worker runs (never overwritten)', () => {
+  const d = sandbox({ worktrees: true });
+  const git = (...a) => execFileSync('git', a, { cwd: d, stdio: 'pipe' });
+  fs.writeFileSync(path.join(d, 'a.txt'), 'COMMITTED');
+  git('init', '-q'); git('add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+  fs.writeFileSync(path.join(d, 'a.txt'), 'MY UNCOMMITTED WORK');
+  drop(d, { id: 'wtdirty', title: 'wtdirty', subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'WRITE a.txt FROM THE WORKER' }] });
+  runOnce(d);
+  assert(fs.readFileSync(path.join(d, 'a.txt'), 'utf8') === 'MY UNCOMMITTED WORK', 'uncommitted work was overwritten');
+  const failed = fs.readdirSync(path.join(d, '.harness', 'failed')).filter((f) => f.endsWith('.json'));
+  assert(failed.length === 1 && /uncommitted edits \(a\.txt\)/.test(fs.readFileSync(path.join(d, '.harness', 'failed', failed[0]), 'utf8')), 'no clear refusal recorded');
+  assert(!log(d).some((e) => e.phase === 'ENGINE_SPAWN'), 'a worker was started anyway');
+  // Once committed, the same task runs and its result lands.
+  git('add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'mine');
+  drop(d, { id: 'wtclean', title: 'wtclean', subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'WRITE a.txt FROM THE WORKER' }] });
+  runOnce(d);
+  assert(fs.readFileSync(path.join(d, 'a.txt'), 'utf8') === 'FROM THE WORKER', 'a clean scope should run normally');
+});
+
 await test('dispatch --wait with no daemon running processes the job and reports COMMITTED', () => {
   const d = sandbox();
   const r = node(d, ['.harness/dispatch.mjs', '--goal', 'WRITE hello.txt hi', '--files', 'hello.txt', '--check', 'node -e "process.exit(require(\'fs\').existsSync(\'hello.txt\')?0:1)"', '--wait']);

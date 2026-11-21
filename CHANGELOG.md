@@ -10,6 +10,14 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.28 — 2026-11-21
+
+- **Fix (data loss): git worktree mode could overwrite your uncommitted work.** A worktree starts from the last commit,
+  so a worker never saw uncommitted edits in your folder, and copying its result back overwrote them, also when the
+  task succeeded. With `useGitWorktrees: true`, a task whose scoped files have uncommitted edits (or untracked files)
+  now stops before any worker starts, names the files and changes nothing: commit or stash them, then run it again.
+- *Affects:* projects with `useGitWorktrees: true`. *Config / permissions:* none.
+
 ## 1.0.27 — 2026-11-21
 
 - **Fix (data loss): git worktree mode never rolled back a failed task.** With `useGitWorktrees: true` each worker's
