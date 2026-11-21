@@ -21,6 +21,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log('hook-guard.mjs — Claude Code PreToolUse guard (configured in .claude/settings.json). Reads a tool call as JSON on stdin; exit 2 = blocked, 0 = allowed.\nBlocks: edits to .env*, .git/**, .harness/releases/** (and the harness core in installed projects); git reset --hard, git clean -f, force pushes, pushes to protected branches.');
@@ -65,6 +66,10 @@ function stripDataHeredocs(cmd) {
  * argument is kept (still checked) when it runs as shell code (bash -c "…", powershell -Command "…", cmd /c "…",
  * eval "…") or is an argument of git push (git push origin "main").
  */
+// git's own options may come before the subcommand: git -C dir push, git -c k=v reset, git --git-dir=x push.
+const GIT = String.raw`\bgit(?:\.exe)?(?:\s+(?:-C\s+\S+|-c\s+\S+|--(?:git-dir|work-tree|namespace|exec-path)(?:=\S+|\s+\S+)|--no-pager|--paginate|--bare|--no-replace-objects|-P|-p))*\s+`;
+const gitCmd = (sub, rest = '', flags = '') => new RegExp(`${GIT}${sub}\\b${rest}`, flags);
+
 function stripDataQuotes(cmd) {
   let out = ''; let i = 0;
   while (i < cmd.length) {
@@ -75,19 +80,34 @@ function stripDataQuotes(cmd) {
     const quoted = cmd.slice(i, j + 1);
     const segment = out.slice(Math.max(out.lastIndexOf(';'), out.lastIndexOf('&'), out.lastIndexOf('|'), out.lastIndexOf('\n')) + 1);
     const runsAsShell = /\b(?:sh|bash|zsh|dash|pwsh|powershell|cmd)(?:\.exe)?\b[^"']*(?:\s-c|\s-Command|\s\/c|\s-EncodedCommand)\b[^"']*$|\beval\s*$|\bInvoke-Expression\s*$|\biex\s*$/i.test(segment);
-    const gitArg = /\bgit\s+push\b[^"']*$/.test(segment); // a quoted branch name still counts; a commit message does not
+    const gitArg = gitCmd('push', `[^"']*$`).test(segment); // a quoted branch name still counts; a commit message does not
     out += runsAsShell || gitArg ? ` ${quoted.slice(1, -1)} ` : '""'; // checked without its quote marks: git push "main" = git push main
     i = j + 1;
   }
   return out;
 }
 
-function commandBlockReason(cmd, branches = protectedBranches()) {
+/** The branch checked out in the project (for a push that names no branch); '' when unknown or detached. */
+function currentBranch(root = ROOT) {
+  try {
+    const r = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 3000 });
+    const b = r.status === 0 ? r.stdout.trim() : '';
+    return b === 'HEAD' ? '' : b;
+  } catch { return ''; }
+}
+
+function commandBlockReason(cmd, branches = protectedBranches(), current = currentBranch) {
   const c = stripDataQuotes(stripDataHeredocs(String(cmd || '')));
-  if (/\bgit\s+reset\b[^;&|\n]*--hard\b/.test(c)) return 'git reset --hard throws away work';
-  if (/\bgit\s+clean\b[^;&|\n]*\s-[a-z]*f/i.test(c)) return 'git clean -f deletes untracked files';
-  for (const m of c.matchAll(/\bgit\s+push\b([^;&|\n]*)/g)) {
+  if (gitCmd('reset', String.raw`[^;&|\n]*--hard\b`).test(c)) return 'git reset --hard throws away work';
+  if (gitCmd('clean', String.raw`[^;&|\n]*\s-[a-z]*f`, 'i').test(c)) return 'git clean -f deletes untracked files';
+  for (const m of c.matchAll(gitCmd('push', String.raw`([^;&|\n]*)`, 'g'))) {
     const args = m[1];
+    // No branch named (git push, git push origin, git push origin HEAD): git pushes the CURRENT branch.
+    const positional = args.trim().split(/\s+/).filter((a) => a && !a.startsWith('-'));
+    if (positional.length <= 1 || positional.slice(1).every((r) => r === 'HEAD')) {
+      const cur = current();
+      if (cur && branches.includes(cur)) return `push of the current branch '${cur}', which is protected`;
+    }
     if (/(?:^|\s)(?:--force(?:-with-lease)?|-f|-[a-z]*f[a-z]*)(?=\s|=|$)/.test(args) || /(?:^|\s)\+\S/.test(args)) return 'force push';
     if (/(?:^|\s)--(?:all|mirror)\b/.test(args)) return 'git push --all/--mirror reaches protected branches';
     for (const b of branches) {

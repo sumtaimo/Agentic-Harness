@@ -139,6 +139,10 @@ is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
   skills, so a check gives the same result whoever runs it.
 - One `me.md` per person and machine: git worktrees (Claude Code worktree sessions, `/harness:sessions` children) use
   the main checkout's file. Personal skills live in your own `~/.claude/skills/<name>/`; `doctor` checks each one.
+- **Team page** `.harness/memory/people.md` (committed): each person shares their own name, hats, what to ask them about and,
+  if they want, languages and git name (`node .harness/memory.mjs me share --ask "…" --language --git`). Session start
+  turns it into "Decisions by hat" so the AI can say who to ask. Contact details are refused; style, experience and
+  personal skills stay in `me.md`. `node .harness/memory.mjs people` shows it; `me unshare` removes you.
 
 ## 4. What is NOT guaranteed (read this before trusting it with a real project)
 

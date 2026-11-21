@@ -112,7 +112,14 @@ contract, stay inside your scoped files, and **never** run `.harness/dispatch.mj
 4. If the session start says there is no personal profile (or that `profile.md` belongs to someone else), ask the user
    a few at a time, in simple words: name, language, coding experience, how they like answers, and their hats. Save them
    with `node .harness/memory.mjs me set --name "…" --language "…" --experience "…" --style "…" --hats "po,qa"`.
-   Never write one person's preferences into the shared `profile.md`.
+   Never write one person's preferences into the shared `profile.md`: it describes only the project. When the session
+   start says an older `profile.md` still holds personal lines, offer `node .harness/memory.mjs me from-profile` (it
+   moves them into `me.md`; ask first, because it edits the shared file).
+5. **The team page** `.harness/memory/people.md` (committed) lists what each person chose to share: name, hats, what to
+   ask them about, languages for handoffs, git name. Session start shows it as "Decisions by hat". When a decision needs
+   a hat the current person does not wear (for example a scope decision needs `po`), say who on the team page to ask.
+   A person adds or updates only their own section with `node .harness/memory.mjs me share [--ask "…"] [--language] [--git]`
+   (offer it; never share for them). It never holds answer style, experience, personal skills or contact details.
 
 ## 2. Learning from mistakes and from the user (the "memory" rules)
 

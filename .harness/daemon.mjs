@@ -26,13 +26,14 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { exec, execFile, spawn } from 'node:child_process';
+import { exec, execFile, spawn, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which, engineBinary,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd, buildRepoMap, clipErrorTrace, diagnoseVerifyFailure, formatDiagnosis,
   listProjectFiles, safeTarget, normalizeTarget, isSecretFile, isSameDir, validateExternalWorkRoot,
   winQuote, winCommandLine, needsWinShell, MODEL_TIERS, chooseModelTier, resolveModel, compatibleModelFor, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
+  harnessPidAlive
 } from './lib/common.mjs';
 helpIfAsked(import.meta.url); // "--help" prints the usage; it must never start the controller
 
@@ -384,13 +385,17 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
     let stdout = ''; let stderr = ''; let settled = false; let pending = '';
     const done = (fn, v) => { if (!settled) { settled = true; clearTimeout(timer); dropPromptFile(); fn(v); } };
     const ms = timeoutMs || config.workerTimeoutMs || 300000;
+    let timedOut = null;
     const timer = setTimeout(() => {
+      // Report the timeout only once the engine has really stopped (or after a short cap): rejecting at once let the
+      // rollback start while a still-running engine could write over the restored files.
+      timedOut = new Error(`${id} (${profile.name}) timed out after ${ms}ms`);
       if (process.platform === 'win32' && child.pid) {
-        try { spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => {}); } catch { /* ignore */ }
+        try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 10000 }); } catch { /* ignore */ }
       }
       child.kill('SIGTERM');
       setTimeout(() => child.kill('SIGKILL'), 5000).unref();
-      done(reject, new Error(`${id} (${profile.name}) timed out after ${ms}ms`));
+      setTimeout(() => done(reject, timedOut), 8000).unref(); // the engine never closed: give up waiting
     }, ms);
 
     child.stdout.on('data', (c) => {
@@ -410,6 +415,7 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
 
     child.on('error', (err) => done(reject, Object.assign(new Error(`Failed to start '${profile.binary}': ${err.message}`), { fatal: ['ENOENT', 'E2BIG', 'ENAMETOOLONG'].includes(err.code) })));
     child.on('close', (code) => {
+      if (timedOut) return done(reject, timedOut); // killed for taking too long: the engine is gone now
       let usage = null; try { usage = summarizeOutput(stdout); } catch { /* error output: no usage */ }
       logTelemetry('AGENT_USAGE', `${id}: ${profile.name} ${pick.model || 'default'} [${pick.tier}] ${code === 0 ? 'ok' : `exit ${code}`}`, { worker: id, engine: profile.name, model: pick.model, tier: pick.tier, ok: code === 0, tokens: usage?.tokens ?? null, usd: usage?.cost ?? null, ms: Date.now() - startedAt });
       if (live && pending.trim() && !stream) livePrint(id, oneLine(pending, 200));
@@ -651,10 +657,22 @@ function backupScope(plan, workRoot = ROOT) {
     return { unavailable: true };
   }
   const dir = path.join(DIRS.staging, plan.taskId.replace(/[^\w.-]/g, '_'));
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(path.join(dir, 'files'), { recursive: true });
+  // A backup left by an interrupted run of THIS task (daemon killed mid-task, job still in the inbox) holds the only
+  // copy of the files as they were before the first attempt. Keep it: backing up again would save the dead agent's
+  // half-done edits and a later "restore" would bring those back instead of the originals.
+  let previous = null;
+  try { previous = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')); } catch { previous = null; }
   const manifest = [];
+  if (previous && Array.isArray(previous.entries) && isSameDir(previous.workRoot || ROOT, workRoot)) {
+    manifest.push(...previous.entries);
+    logTelemetry('STAGING_REUSED', `Kept the backup from an interrupted run of this task (${previous.createdAt || 'earlier'}): restoring brings back the files from before the first attempt`, { taskId: plan.taskId });
+  } else {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  fs.mkdirSync(path.join(dir, 'files'), { recursive: true });
+  const covered = new Set(manifest.map((m) => m.path));
   for (const t of [...new Set(aiWorkers.flatMap((s) => s.targetFiles))]) {
+    if (covered.has(t)) continue;
     const abs = path.join(workRoot, t);
     if (fs.existsSync(abs)) {
       fs.cpSync(abs, path.join(dir, 'files', t), { recursive: true });
@@ -1740,7 +1758,7 @@ const scanInbox = () => fs.readdirSync(DIRS.inbox).filter((f) => f.endsWith('.js
 function daemonAlive() {
   const pid = Number(fs.existsSync(FILES.pid) && fs.readFileSync(FILES.pid, 'utf8'));
   if (!pid || pid === process.pid) return 0;
-  try { process.kill(pid, 0); return pid; } catch { return 0; }
+  return harnessPidAlive(pid) ? pid : 0; // a reused pid (another program) is not a running daemon
 }
 
 // ───────────────────────────── autonomous controller ("act as me") ─────────────────────────────
@@ -1956,7 +1974,7 @@ if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must no
 const args = process.argv.slice(2);
 const selfTestMode = args.includes('--self-test');
 if (args.includes('--status')) { // convenience alias for status.mjs (read-only)
-  const { spawnSync } = await import('node:child_process');
+  // spawnSync is imported at the top
   const r = spawnSync(process.execPath, [path.join(ROOT, '.harness', 'status.mjs'), '--log', '8'], { stdio: 'inherit' });
   process.exit(r.status ?? 0);
 }

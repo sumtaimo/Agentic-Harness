@@ -13,12 +13,20 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 try {
   const {
     FILES, DIRS, ROOT, readJsonSafe, loadConfig, listLessons, loadApprovals,
-    probeEngine, engineConsent, ROUTABLE_ENGINES, checkCore, usageTodayLine, helpIfAsked, personStatus, ME_SETUP_CMD, HATS
+    probeEngine, engineConsent, ROUTABLE_ENGINES, checkCore, usageTodayLine, helpIfAsked, personStatus, ME_SETUP_CMD, HATS, teamLine
   } = await import('./lib/common.mjs');
+  // More than one git author: people work together here, so the team page is worth offering. Cheap and never blocks.
+  const gitIsShared = () => {
+    try {
+      const r = spawnSync('git', ['log', '-n', '200', '--format=%an'], { cwd: ROOT, encoding: 'utf8', timeout: 3000 });
+      return r.status === 0 && new Set(r.stdout.split('\n').map((s) => s.trim()).filter((s) => s && s !== 'Agentic Harness')).size > 1;
+    } catch { return false; }
+  };
   helpIfAsked(import.meta.url);
   if (process.env.HARNESS_WORKER === '1') process.exit(0);
   const brief = process.argv.includes('--brief');
@@ -195,10 +203,16 @@ try {
     for (const f of person.me.fields) if (!['name', 'hats', 'personal skills'].includes(f.key)) lines.push(`  - ${f.label}: ${f.value}`);
     if (person.me.skills.length) lines.push(`- Personal skills of this person (chat only, never for harness workers): ${person.me.skills.join(', ')}`);
   } else if (person.kind === 'missing') {
-    lines.push(`- No personal profile on this machine yet (.harness/memory/me.md, git-ignored). Ask the user, a few at a time in simple words: name, language for answers, coding experience, how they like answers, and their hats (${HATS.join(', ')}; combinable, e.g. "po, qa"). Then save: ${ME_SETUP_CMD}`);
+    lines.push(`- No personal profile on this machine yet (.harness/memory/me.md, git-ignored). Ask the user, a few at a time in simple words: name, what they do, language for answers, coding experience, how they like answers, and their hats (${HATS.join(', ')}; combinable, e.g. "po, qa"). Then save: ${ME_SETUP_CMD}`);
   } else if (person.kind === 'other-person') {
-    lines.push(`- profile.md describes ${person.name}, but the git user here is ${person.gitName}. If this is a different person, ask their name, language, answer style and hats (${HATS.join(', ')}) and save them in their own me.md: ${ME_SETUP_CMD}. Do not edit profile.md for this.`);
+    lines.push(`- profile.md describes ${person.name}, but the git user here is ${person.gitName}${person.known ? ` (${person.known} on the team page)` : ''}. If this is a different person, ask their name, language, answer style and hats (${HATS.join(', ')}) and save them in their own me.md: ${ME_SETUP_CMD}. Do not edit profile.md for this.`);
   }
+  // Older projects keep personal lines in the shared profile.md. Offer once per session to move them (owner's yes).
+  if (person.legacy && person.kind !== 'other-person') lines.push('- profile.md still holds personal lines (name, language, answer style…). Since 1.0.26 it describes only the project and each person keeps those in their own me.md. Offer to move them (ask first; it edits the shared profile.md): node .harness/memory.mjs me from-profile');
+  // The shared team page (people.md, committed): who wears which hat. Only what each person chose to share.
+  const team = (() => { try { return teamLine(); } catch { return ''; } })();
+  if (team) lines.push(`- Team (people.md): ${team}. When a decision needs a hat this person does not wear, say who to ask.`);
+  else if (person.kind === 'me' && gitIsShared()) lines.push('- No team page yet. To let teammates see your name, hats and what to ask you about, offer: node .harness/memory.mjs me share --ask "…" --language --git (it never shares answer style, experience or personal skills).');
 
   // Editor workflow state: unfinished runs need a decision; AUTO MODE starts the workflow by itself.
   if (newestOpen) {

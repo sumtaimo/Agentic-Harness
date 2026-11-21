@@ -311,6 +311,81 @@ await test('dirty-file rollback: 3-cycle failure restores edited files, removes 
   assert(log(d).some((e) => e.phase === 'ROLLBACK_DONE'), 'no ROLLBACK_DONE event');
 });
 
+await test('v1.0.26 interrupted task: a re-run keeps the backup from before the first attempt, so a later failure restores the ORIGINAL files, not the dead agent\'s edits', () => {
+  const d = sandbox();
+  // State a killed daemon leaves behind: the job is still in the inbox, its staging backup holds the originals,
+  // and the working files already carry the dead agent's half-done edits.
+  const st = path.join(d, '.harness', 'staging', 'interrupted');
+  fs.mkdirSync(path.join(st, 'files'), { recursive: true });
+  fs.writeFileSync(path.join(st, 'files', 'a.txt'), 'ORIGINAL');
+  fs.writeFileSync(path.join(st, 'manifest.json'), JSON.stringify({ taskId: 'interrupted', workRoot: d, createdAt: '2026-11-21T00:00:00Z', entries: [{ path: 'a.txt', existed: true }, { path: 'new.txt', existed: false }] }));
+  fs.writeFileSync(path.join(d, 'a.txt'), 'HALF-DONE BY A DEAD AGENT');
+  fs.writeFileSync(path.join(d, 'new.txt'), 'LEFT BY A DEAD AGENT');
+  drop(d, { id: 'interrupted', title: 'interrupted', verifyCmd: FAIL_VERIFY, subtasks: [{ id: 'w', targetFiles: ['a.txt', 'new.txt'], prompt: 'WRITE a.txt BROKEN' }] });
+  runOnce(d);
+  assert(log(d).some((e) => e.phase === 'STAGING_REUSED'), 'the earlier backup was not reused');
+  assert(fs.readFileSync(path.join(d, 'a.txt'), 'utf8') === 'ORIGINAL', `restored the wrong version: ${fs.readFileSync(path.join(d, 'a.txt'), 'utf8')}`);
+  assert(!fs.existsSync(path.join(d, 'new.txt')), 'a file that did not exist before the first attempt was kept');
+});
+
+await test('v1.0.26 reused pid: a daemon.pid that now belongs to another program is not a running daemon (no endless --wait)', async () => {
+  const common = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'common.mjs')).href);
+  const other = process.platform === 'win32'
+    ? spawn('cmd', ['/c', 'ping -n 6 127.0.0.1 >NUL'], { stdio: 'ignore', windowsHide: true })
+    : spawn('sleep', ['5'], { stdio: 'ignore' });
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    assert(common.harnessPidAlive(other.pid) === false, `a ${process.platform === 'win32' ? 'cmd.exe' : 'sleep'} pid counted as the daemon`);
+    assert(common.harnessPidAlive(process.pid) === true && common.harnessPidAlive(999999) === false && common.harnessPidAlive('x') === false, 'basic cases');
+  } finally { try { other.kill(); } catch { /* already gone */ } }
+});
+
+await test('v1.0.26 worker timeout: the engine is stopped before the rollback, so it can never write over the restored files', async () => {
+  const d = sandbox();
+  const cfgPath = path.join(d, '.harness', 'config.json');
+  const cfg = json(cfgPath); cfg.workerTimeoutMs = 1500; cfg.maxCycles = 1; fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+  fs.writeFileSync(path.join(d, 'a.txt'), 'ORIGINAL');
+  drop(d, { id: 'slow', title: 'slow', subtasks: [{ id: 'w', targetFiles: ['a.txt'], prompt: 'SLEEP 4000\nWRITE a.txt WRITTEN AFTER THE TIMEOUT' }] });
+  runOnce(d);
+  assert(log(d).some((e) => /timed out after 1500ms/.test(e.message || '')) || /timed out/.test(fs.readdirSync(path.join(d, '.harness', 'failed')).map((f) => fs.readFileSync(path.join(d, '.harness', 'failed', f), 'utf8')).join('\n')), 'no timeout recorded');
+  await new Promise((r) => setTimeout(r, 4500)); // longer than the engine would have slept
+  assert(fs.readFileSync(path.join(d, 'a.txt'), 'utf8') === 'ORIGINAL', `the timed-out engine wrote after the restore: ${fs.readFileSync(path.join(d, 'a.txt'), 'utf8')}`);
+});
+
+await test('v1.0.26 one job per file: new profile.md is project-only, an old personal profile.md keeps working and moves into me.md on request', () => {
+  const d = sandbox();
+  const mem = (args) => spawnSync(process.execPath, ['.harness/memory.mjs', ...args], { cwd: d, env, encoding: 'utf8', input: '', timeout: 30000 });
+  const prof = path.join(d, '.harness', 'memory', 'profile.md');
+  // No git user here, whatever machine runs the tests (a different name would mean "another person", tested elsewhere).
+  const noGitUser = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-gitcfg-')), 'empty');
+  fs.writeFileSync(noGitUser, '');
+  const hook = () => spawnSync(process.execPath, ['.harness/hook-session.mjs', '--no-fetch'], { cwd: d, env: { ...env, GIT_CONFIG_GLOBAL: noGitUser, GIT_CONFIG_NOSYSTEM: '1' }, encoding: 'utf8', input: '', timeout: 30000 }).stdout;
+
+  // A fresh install: profile.md asks only about the project; the person is onboarded into me.md.
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-prof-'));
+  assert(spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj], { encoding: 'utf8', env: { ...env, HARNESS_OFFLINE: '1' } }).status === 0, 'install');
+  const fresh = fs.readFileSync(path.join(proj, '.harness', 'memory', 'profile.md'), 'utf8');
+  assert(/^# Project profile/.test(fresh) && /What this project is/.test(fresh) && !/^- (Name|Language I want answers in|How I like answers|Coding experience):/m.test(fresh), fresh);
+
+  // An older, filled personal profile.md (CRLF, as Git for Windows checks it out): still works, migration is offered.
+  fs.writeFileSync(prof, '# User profile\r\n\r\n- Name: Ada\r\n- Language I want answers in: Khmer\r\n- How I like answers: short\r\n- What this project is: a shop\r\n');
+  const before = hook();
+  assert(!/No personal profile on this machine/.test(before) && /me from-profile/.test(before), before);
+  assert(/Language I want answers in: Khmer/.test(mem(['context']).stdout), 'old personal profile no longer reaches workers');
+
+  // The move: personal lines go to me.md, project lines and line endings stay; workers still get the same values.
+  const mv = mem(['me', 'from-profile']);
+  assert(mv.status === 0 && /Moved Name, Language I want answers in, How I like answers/.test(mv.stdout), mv.stdout + mv.stderr);
+  const after = fs.readFileSync(prof, 'utf8');
+  assert(after === '# User profile\r\n\r\n- What this project is: a shop\r\n', JSON.stringify(after));
+  const me = fs.readFileSync(path.join(d, '.harness', 'memory', 'me.md'), 'utf8');
+  assert(/- Name: Ada/.test(me) && /- Language I want answers in: Khmer/.test(me) && /- How I like answers: short/.test(me), me);
+  const ctx = mem(['context']).stdout;
+  assert(/Language I want answers in: Khmer/.test(ctx) && /What this project is: a shop/.test(ctx), ctx);
+  assert(!/me from-profile/.test(hook()) && /Nothing to move|nothing to move/.test(mem(['me', 'from-profile']).stdout), 'offer or move repeated');
+  fs.rmSync(proj, { recursive: true, force: true });
+});
+
 await test('successful task keeps its changes and discards the staging backup', () => {
   const d = sandbox();
   fs.writeFileSync(path.join(d, 'a.txt'), 'ORIGINAL');
@@ -1410,6 +1485,9 @@ await test('editor workflow verify: a failing check is retried, and after 3 cycl
   assert(byId(d, 'H1').status === 'BLOCKED' && /HALTED_HITL_REQUIRED after 3 cycles/.test(byId(d, 'H1').blockedReason), byId(d, 'H1').blockedReason);
   assert(/halting task.*HALTED_HITL_REQUIRED/.test(read(d, '.harness/memory/auto-lessons.md')), 'no lesson recorded');
   assert(vis(d, 'verify', id).status === 1, 'a halted run cannot be verified again');
+  // v1.0.26: a manual rollback after the automatic one says so, instead of "the project was too large".
+  const again = vis(d, 'rollback', id);
+  assert(again.status === 1 && /already restored automatically/.test(again.stderr), again.stderr);
 });
 
 await test('editor workflow: only one open run at a time; rollback restores everything and ends the run; harness workers cannot use it', () => {
@@ -1423,6 +1501,15 @@ await test('editor workflow: only one open run at a time; rollback restores ever
   assert(rb.status === 0 && /Rolled back/.test(rb.stdout) && read(d, 'a.txt') === 'ORIGINAL' && !fs.existsSync(path.join(d, 'src', 'x.js')) && runJson(d, id).status === 'ROLLED_BACK', rb.stdout + rb.stderr);
   assert(vis(d, 'brief', '--goal', 'next', '--check', PASS).status === 0, 'a new run should be possible after rollback');
   assert(node(d, ['.harness/visible.mjs', 'status'], { HARNESS_WORKER: '1' }).status === 2, 'a harness worker must not use the editor workflow');
+  // v1.0.26: rolling back twice, or a PASSED run, never touches files; a run id is never a path.
+  fs.writeFileSync(path.join(d, 'src', 'later.js'), 'NEW HUMAN WORK');
+  const twice = vis(d, 'rollback', id);
+  assert(twice.status === 1 && /already rolled back/.test(twice.stderr) && read(d, 'src/later.js') === 'NEW HUMAN WORK', twice.stderr);
+  assert(/Not a run id/.test(vis(d, 'rollback', '../../x').stderr), 'path-like run id accepted');
+  const r = JSON.parse(fs.readFileSync(path.join(d, '.harness', 'visible', id, 'run.json'), 'utf8'));
+  r.status = 'PASSED'; r.baseline.rollbackAvailable = true; fs.writeFileSync(path.join(d, '.harness', 'visible', id, 'run.json'), JSON.stringify(r));
+  const passedRb = vis(d, 'rollback', id);
+  assert(passedRb.status === 1 && /PASSED/.test(passedRb.stderr) && read(d, 'src/later.js') === 'NEW HUMAN WORK', 'rollback of a PASSED run touched files: ' + passedRb.stderr);
 });
 
 await test('autonomous (editor): brief --next takes the highest-priority READY item; budget stops it; a failed run pauses it; off/empty/placeholder are refused', () => {
@@ -1533,7 +1620,7 @@ await test('documentation matches reality: every script, sub-command and slash c
     for (const m of t.matchAll(/visible\.mjs (brief|assign|verify|rollback|propose|status|report|[a-z]+)\b/g)) if (!new RegExp(`case '${m[1]}'`).test(sources.visible)) problems.push(`${f}: visible.mjs has no sub-command "${m[1]}"`);
     for (const m of t.matchAll(/team\.mjs (show|validate|sync-agents|[a-z-]+)\b/g)) if (!sources.team.includes(`'${m[1]}'`)) problems.push(`${f}: team.mjs has no "${m[1]}"`);
     for (const m of t.matchAll(/\/harness:([a-z]+)/g)) if (!cmdFiles.has(m[1])) problems.push(`${f}: slash command /harness:${m[1]} does not exist`);
-    for (const m of t.matchAll(/`(\.harness\/(?:[a-z-]+\/)*[A-Za-z0-9_.-]+\.(?:mjs|json|md))`/g)) if (!/<|\*/.test(m[1]) && !fs.existsSync(path.join(REPO, m[1])) && !/live\.log|state\.json|telemetry|daemon\.pid|auto-state|engine-probe|auto-lessons|memory\/me\.md|approvals.json|MANIFEST.json|report\.md|run\.json|failed\/|completed\/|visible\/|releases\/|sessions\/|inbox\//.test(m[1])) problems.push(`${f}: mentions ${m[1]}, which does not exist`);
+    for (const m of t.matchAll(/`(\.harness\/(?:[a-z-]+\/)*[A-Za-z0-9_.-]+\.(?:mjs|json|md))`/g)) if (!/<|\*/.test(m[1]) && !fs.existsSync(path.join(REPO, m[1])) && !/live\.log|state\.json|telemetry|daemon\.pid|auto-state|engine-probe|auto-lessons|memory\/me\.md|memory\/people\.md|approvals.json|MANIFEST.json|report\.md|run\.json|failed\/|completed\/|visible\/|releases\/|sessions\/|inbox\//.test(m[1])) problems.push(`${f}: mentions ${m[1]}, which does not exist`);
   }
   assert(problems.length === 0, problems.slice(0, 12).join('\n      '));
   assert(fs.existsSync(path.join(REPO, 'docs', 'WORKFLOW.md')) && /docs\/WORKFLOW\.md/.test(fs.readFileSync(path.join(REPO, 'README.md'), 'utf8')), 'README must link to docs/WORKFLOW.md');
@@ -6065,6 +6152,56 @@ await test('v1.0.25 me.md in worktrees: a git worktree uses the main checkout\'s
   assert(/me\.md comes from the main checkout/.test(doc), doc);
   assert(!/personal skill "my-own"/.test(doc) && /"spec-writer" as a personal skill, but it is a shared project skill/.test(doc) && /personal skill "typo-skill", but .* does not exist/.test(doc), doc);
   g(['worktree', 'remove', '--force', wt]);
+});
+
+await test('v1.0.26 team page: me share puts only chosen fields on people.md, refuses contact details, session start shows who wears which hat; CRLF me.md/profile.md parse; hook-guard catches git global options and a bare push of a protected branch', () => {
+  const d = sandbox();
+  const mem = (args, extra = {}) => spawnSync(process.execPath, ['.harness/memory.mjs', ...args], { cwd: d, env: { ...env, ...extra }, encoding: 'utf8', input: '', timeout: 30000 });
+  const people = path.join(d, '.harness', 'memory', 'people.md');
+
+  // CRLF (Notepad, core.autocrlf) must not lose the lines.
+  fs.writeFileSync(path.join(d, '.harness', 'memory', 'me.md'), '- Name: Sum\r\n- Language I want answers in: Khmer\r\n- How I like answers: short\r\n- Hats: po, qa\r\n- Personal skills: secret-skill\r\n');
+  fs.writeFileSync(path.join(d, '.harness', 'memory', 'profile.md'), '# User profile\r\n- Language I want answers in: English\r\n- What this project is: a shop\r\n');
+  const ctx = mem(['context']).stdout;
+  assert(/Language I want answers in: Khmer/.test(ctx) && !/Language I want answers in: English/.test(ctx) && /Hats: po, qa/.test(ctx), 'CRLF files not parsed:\n' + ctx);
+
+  // Share: name + hats from me.md, plus only what is chosen. Style, experience and personal skills never go out.
+  assert(mem(['me', 'share', '--ask', 'mail me at sum@example.com']).status === 1, 'an e-mail address was shared');
+  assert(!fs.existsSync(people), 'refused share still wrote people.md');
+  const s1 = mem(['me', 'share', '--ask', 'releases, acceptance', '--language']);
+  assert(s1.status === 0, s1.stderr);
+  const page = fs.readFileSync(people, 'utf8');
+  assert(/## Sum\n- Hats: po, qa\n- Ask me about: releases, acceptance\n- Languages for handoffs: Khmer/.test(page), page);
+  assert(!/short|secret-skill|How I like/.test(page), 'private fields leaked to the team page:\n' + page);
+
+  // A second person; sharing again updates in place (one section each).
+  fs.appendFileSync(people, '\n## Dara\n- Hats: dev\n- Ask me about: the API\n');
+  assert(mem(['me', 'share', '--ask', 'scope']).status === 0);
+  const page2 = fs.readFileSync(people, 'utf8');
+  assert((page2.match(/^## Sum$/gm) || []).length === 1 && /Ask me about: scope/.test(page2) && /## Dara/.test(page2), page2);
+  assert(/Sum\s+\[po, qa\]/.test(mem(['people']).stdout), 'people command');
+
+  // Session start: who wears which hat, so the AI can say who to ask.
+  const hk = spawnSync(process.execPath, ['.harness/hook-session.mjs', '--no-fetch'], { cwd: d, env, encoding: 'utf8', input: '', timeout: 30000 }).stdout;
+  assert(/Team \(people\.md\): Sum \(po, qa\): ask about scope \| Dara \(dev\): ask about the API\. Decisions by hat: po → Sum; dev → Dara; qa → Sum/.test(hk), hk);
+  // Doctor: stale hats on the page, contact details, duplicates.
+  fs.writeFileSync(path.join(d, '.harness', 'memory', 'me.md'), '- Name: Sum\n- Hats: po\n');
+  fs.appendFileSync(people, '\n## Dara\n- Ask me about: +855 12 345 678\n');
+  const doc = node(d, ['.harness/doctor.mjs']).stdout;
+  assert(/shows your hats as "po, qa", your me\.md says "po"/.test(doc) && /e-mail address or phone number/.test(doc) && /lists dara more than once/.test(doc), doc);
+  // Workers may not change the team page; unshare removes only this person.
+  assert(mem(['me', 'share'], { HARNESS_WORKER: '1' }).status === 2, 'a worker changed people.md');
+  assert(mem(['me', 'unshare']).status === 0 && !/## Sum/.test(fs.readFileSync(people, 'utf8')) && /## Dara/.test(fs.readFileSync(people, 'utf8')), 'unshare');
+
+  // hook-guard: git global options before the subcommand, and a bare push while a protected branch is checked out.
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-guard-'));
+  fs.cpSync(path.join(d, '.harness'), path.join(repo, '.harness'), { recursive: true });
+  const g = (args) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+  g(['init', '-q', '-b', 'main']); g(['-c', 'user.name=T', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'x']);
+  const guard = (command) => spawnSync(process.execPath, ['.harness/hook-guard.mjs'], { cwd: repo, input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }), encoding: 'utf8' }).status;
+  for (const c of ['git -C . push origin main', 'git -C . reset --hard', 'git -c a=b clean -fd', 'git --git-dir=.git push origin master', 'git push', 'git push origin', 'git push origin HEAD']) assert(guard(c) === 2, `not blocked: ${c}`);
+  g(['checkout', '-q', '-b', 'feature']);
+  for (const c of ['git push', 'git push -u origin feature', 'git status', 'git commit -m "git push origin main"', 'node -e "git -C . reset --hard"']) assert(guard(c) === 0, `blocked by mistake: ${c}`);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

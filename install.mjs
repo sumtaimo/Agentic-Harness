@@ -46,23 +46,20 @@ const report = [];
 const RUNTIME = new Set(['state.json', 'telemetry.log', 'daemon.pid', 'engine-probe.json', 'auto-lessons.md', 'live.log', 'auto-state.json', 'approvals.json', 'MANIFEST.json']);
 // The target project's own data wins: memory, config, charter, backlog, roles, skills, team.
 // A new project gets a blank profile, never the profile of whoever owns this template copy.
-const PROFILE_TEMPLATE = `# User profile
+const PROFILE_TEMPLATE = `# Project profile
 
-This file tells every AI (the editor chat AND the harness workers) who you are and how you
-like to work. Replace each "(fill me)". You can also just tell your editor AI:
-"Read AGENTS.md and fill in my profile" — it will ask you a few questions and write this file.
+This file describes the PROJECT for every AI (the editor chat AND the harness workers). It is shared (committed), so
+it holds nothing personal. Replace each "(fill me)", or tell your editor AI: "Read AGENTS.md and fill in the project
+profile".
 
-Working with other people on this repository? This file is shared (committed). Each person keeps their own name,
-language, answer style and hats (po, ba, ux, dev, qa) in .harness/memory/me.md, which is git-ignored and wins over
-this file: node .harness/memory.mjs me set --name "…" --language "…" --hats "dev"
+Your own name, language, answer style and hats (po, ba, ux, dev, qa) go in .harness/memory/me.md, which is
+git-ignored and yours only: node .harness/memory.mjs me set --name "…" --language "…" --hats "dev"
+(your AI asks you the first time). To let teammates see your name and hats: node .harness/memory.mjs me share
 
-- Name: (fill me)
-- Role / what I do: (fill me)
-- Coding experience: (fill me — e.g. "I don't code; explain everything in plain words")
-- Language I want answers in: (fill me)
 - What this project is: (fill me)
-- How I like answers: (fill me — e.g. "short, step by step, one command at a time")
-- Things the AI must always ask me before doing: (fill me — e.g. "deleting files, pushing to GitHub, paying for anything")
+- Who it is for: (fill me)
+- Things the AI must always ask before doing: (fill me — e.g. "deleting files, pushing to GitHub, paying for anything")
+- House rules for every answer (optional): (fill me — e.g. "cite file:line for every claim")
 `;
 // A new project starts with no taught rules, never the rules of whoever owns this template copy.
 const LESSONS_TEMPLATE = `# Lessons the user taught
@@ -143,6 +140,7 @@ function copyDir(from, to, rel = '.harness') {
       if (up && up.added.length) { fs.writeFileSync(d, up.text); report.push(`update ${relPath} (your settings kept; engine profile changes: ${up.added.join(', ')})`); continue; }
     }
     if (relPath === path.join('.harness', 'memory', 'me.md')) continue; // a person's own profile (git-ignored) never travels and is never touched
+    if (relPath === path.join('.harness', 'memory', 'people.md')) continue; // the template team's page never travels; a project's own is kept
     if (fs.existsSync(d) && KEEP_IF_PRESENT.test(relPath)) { report.push(`kept   ${relPath} (already existed)`); continue; }
     if (relPath === path.join('.harness', 'memory', 'lessons.md')) { // the template owner's taught rules never travel
       fs.writeFileSync(d, LESSONS_TEMPLATE);
@@ -195,6 +193,9 @@ if (RESET) {
     fs.writeFileSync(f, after);
     console.log(`  reset  .harness/${rel} (${what})`); done.push(`.harness/${rel}`);
   }
+  // The template owner's team page lists their people: a template copy starts with nobody on it (git can undo this).
+  const people = path.join(H, 'memory', 'people.md');
+  if (fs.existsSync(people)) { fs.rmSync(people); console.log('  reset  .harness/memory/people.md (removed: the new team adds itself with memory.mjs me share)'); done.push('.harness/memory/people.md'); }
   console.log(done.length
     ? `\nReset ${done.length} file(s) in ${target}. Undo (if this folder is in git): git checkout -- ${done.join(' ')}\nNext: fill in .harness/memory/profile.md and the "Project objectives" in .harness/charter.md, then run: node .harness/doctor.mjs`
     : `\nNothing to reset in ${target}: it already has the clean defaults.`);

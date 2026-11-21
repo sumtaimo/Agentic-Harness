@@ -15,7 +15,8 @@ You need **Node.js 18+** and **git**. The harness has no packages to install.
 1. On this repo's GitHub page, click **Use this template** → **Create a new repository**.
 2. Clone your new repo.
 3. A template copy is an exact copy of this repo, including its owner's settings. Reset them before you start:
-   - `.harness/memory/profile.md`: replace the answers with your own (or tell your AI "Read AGENTS.md and fill in my profile").
+   - `.harness/memory/profile.md`: describe YOUR project (or run `node install.mjs --reset .`, then tell your AI "Read AGENTS.md and fill in the project profile").
+   - `.harness/memory/people.md` (if there is one): it lists the template owner's team; `--reset` removes it.
    - `.harness/memory/lessons.md`: remove rules you don't want, with `node .harness/memory.mjs forget L1`.
    - `.harness/charter.md`: write your own "Project objectives" and choose `- autonomous: on` or `off`.
 
@@ -159,6 +160,17 @@ Each team then makes it theirs by editing plain files: `.harness/team.json` (who
 
 One developer and a team of people get the same harness: the full AI agent team (`orchestrator`, `lead-ba`, `lead-dev`, `lead-qa`, `lead-ux`, plus read-only `reviewer` and `security`), in manual tasks and in autonomous mode (`auto`). The only difference is how people share the repo.
 
+**Who is described where (one job per file, nothing twice):**
+
+| File | Its one job | In git? | One developer | A team |
+|---|---|---|---|---|
+| `.harness/memory/profile.md` | the **project**: what it is, who it is for, what the AI must ask before doing | yes | used | used, shared |
+| `.harness/memory/me.md` | **you**: name, what you do, language, answer style, hats, personal skills | **no**, private | used | one per person |
+| `.harness/memory/people.md` | the **team page**: who wears which hat, who to ask about what | yes | not created | only after `memory.mjs me share` |
+
+Your AI asks for `me.md` the first time. An older `profile.md` that still holds personal lines keeps working; your AI
+offers to move them into `me.md` once (`node .harness/memory.mjs me from-profile`).
+
 **Shared in Git** (everyone's agents follow the same rules):
 - `.harness/charter.md`: objectives, allowed and forbidden paths, autonomous on/off
 - `.harness/backlog.json`: the task list
@@ -173,6 +185,13 @@ One developer and a team of people get the same harness: the full AI agent team 
   `profile.md`. Your AI asks you a few questions the first time; or run
   `node .harness/memory.mjs me set --name "…" --language "…" --hats "po,qa"`. Hats shape how the AI talks to you; they
   are not AI agent roles (`team.json`) and never change a permission.
+
+**Shared with the team (your choice):**
+- `.harness/memory/people.md`, the team page (committed): your name, hats, what to ask you about, and optionally your
+  languages and git name. Add or update your own section with
+  `node .harness/memory.mjs me share --ask "releases, acceptance" --language --git`, see everyone with
+  `node .harness/memory.mjs people`, remove yourself with `node .harness/memory.mjs me unshare`. Your AI then knows who to
+  ask for a decision ("scope needs po → Sum"). Answer style, experience, personal skills and contact details never go there.
 - your own CLI logins and subscriptions (`claude`, `agy`, `codex`); tokens are spent on your own account
 
 **Team rules:**
@@ -197,8 +216,8 @@ One developer and a team of people get the same harness: the full AI agent team 
    The harness screen now opens by itself every time you open the folder.
 5. Command Palette (**Ctrl+Shift+P** / **Cmd+Shift+P**) → **Tasks: Run Task** → **Harness: Doctor (check my setup)**.
    Fix anything marked ✖. Doctor probes installed AI CLIs' command-line flags and prints a non-blocking 1-line notice if an `*_API_KEY` env var is active in your shell when you meant to use a subscription.
-6. Recommended: let your AI fill in your profile. In your editor's AI chat, type:
-   > Read AGENTS.md and fill in my profile.
+6. Recommended: let your AI set you up. In your editor's AI chat, type:
+   > Read AGENTS.md, fill in the project profile, and set up my me.md.
 
 ## 3. Everyday use — no coding needed
 
@@ -475,6 +494,7 @@ All memory is plain text in `.harness/memory/`, which you can open and edit your
 |---|---|---|---|
 | `profile.md` | you / your AI | the shared project profile (and your preferences if you work alone) | yes (generic starter) |
 | `me.md` | each person (`memory.mjs me set`) | your name, language, answer style, hats; wins over `profile.md` | **no**: personal |
+| `people.md` | each person, own section only (`memory.mjs me share`) | the team page: who wears which hat, who to ask about what | yes (shared on purpose) |
 | `lessons.md` | **you** (`remember`, `/harness:teach`, `promote`) | permanent rules every AI must follow across machines/sessions, highest priority | yes (generic starter) |
 | `auto-lessons.md` | the harness (`daemon`, `visible`) & `memory.mjs learn` | failures, retry recoveries, scope violations & local technical lessons | **no**: personal history |
 | `sessions/*.md` | the harness | one record per task: plan, check, errors, result, rollback | **no**: personal history |

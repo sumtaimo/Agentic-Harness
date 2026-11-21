@@ -15,7 +15,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DIRS, FILES, readJsonSafe, helpIfAsked } from './lib/common.mjs';
+import { DIRS, FILES, readJsonSafe, helpIfAsked, harnessPidAlive } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 
 const args = process.argv.slice(2);
@@ -48,7 +48,7 @@ function drain() {
 }
 
 function daemonRunning() {
-  try { process.kill(Number(fs.readFileSync(FILES.pid, 'utf8')), 0); return true; } catch { return false; }
+  try { return harnessPidAlive(Number(fs.readFileSync(FILES.pid, 'utf8'))); } catch { return false; }
 }
 
 if (job) console.log(`[watch] following job ${job} (the controller must be running: node .harness/daemon.mjs)`);

@@ -194,7 +194,9 @@ test('install.mjs --reset cleans a template copy: owner profile, rules, objectiv
   const r = spawnSync(process.execPath, [installer, '--reset'], { cwd: copy, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const read = (f) => fs.readFileSync(path.join(H, f), 'utf8');
-  assert.match(read('memory/profile.md'), /- Name: \(fill me\)/);
+  // Since 1.0.26 the reset profile describes only the project; the owner's personal lines are gone (they belong in me.md).
+  assert.match(read('memory/profile.md'), /^# Project profile[\s\S]*- What this project is: \(fill me\)/);
+  assert.doesNotMatch(read('memory/profile.md'), /^- Name:/m);
   assert.doesNotMatch(read('memory/lessons.md'), /\[L1\]/);
   assert.match(read('charter.md'), /^- autonomous: on$/m);
   assert.match(read('charter.md'), /describe your product goals here/);

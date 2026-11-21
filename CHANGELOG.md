@@ -10,6 +10,54 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.26 — 2026-11-21
+
+- **One job per file, nothing twice.** `profile.md` now describes only the **project** (what it is, who it is for,
+  what the AI must ask before doing, house rules). Everything about a **person** lives in their private `me.md`, and
+  the **team page** `people.md` exists only when people share. One developer uses `profile.md` + `me.md`; a team adds
+  `people.md`. New installs get the project-only template.
+  - Older projects whose `profile.md` still holds personal lines (name, role, language, experience, answer style) keep
+    working unchanged. Session start offers once to move them: `node .harness/memory.mjs me from-profile` copies them
+    into your `me.md` (values already there win) and removes them from `profile.md`, keeping every other line.
+  - `me.md` gains "Role / what I do".
+- **Team page `.harness/memory/people.md` (committed).** Teammates know who wears which hat and who to ask about
+  what, while personal preferences stay private in `me.md`.
+  - `node .harness/memory.mjs me share [--ask "releases, acceptance"] [--language ["…"]] [--git]` adds or updates
+    only your own section: name and hats from your `me.md`, plus what you choose (what to ask you about, languages for
+    handoffs, your git name). `me unshare` removes you; `node .harness/memory.mjs people` shows the page.
+  - Answer style, coding experience and personal skills are never shared. E-mail addresses, phone numbers and links
+    are refused (the page is committed). Harness workers may not change it.
+  - Session start gives the chat AI the page as "Decisions by hat" (`po → Sum; dev → Dara`), so it can say who to ask
+    when a decision needs a hat you do not wear. With several git authors and no page yet, it offers `me share`.
+  - `doctor`: duplicate sections, contact details on the page, and your hats on the page differing from your `me.md`.
+  - A teammate on a new machine who is already on the page is recognised by their git name at session start.
+  - Installer: a project's own `people.md` is kept; the template's never travels; `--reset` removes it from a
+    "Use this template" copy.
+- **Fix (Windows): CRLF files lost every line.** `me.md` saved by Notepad, or `profile.md` checked out with
+  `core.autocrlf` (the Git for Windows default), parsed as empty: preferences and hats were ignored and a partial
+  `me set` could wipe the other fields. Line endings are now handled.
+- **Fix: hook-guard missed git options before the subcommand.** `git -C <dir> push origin main`,
+  `git -C . reset --hard`, `git -c k=v clean -fd` and `git --git-dir=… push` are now blocked like the plain forms.
+- **Fix: a bare `git push` (or `git push origin`, `git push origin HEAD`) while a protected branch is checked out**
+  was allowed because no branch name was written; it is now blocked. Pushing other branches is unchanged.
+- **Fix: `visible.mjs rollback` could delete newer work.** It restored files before checking that a baseline copy
+  existed, so rolling back a PASSED run (its copy is already removed) deleted every file created since the run. It now
+  decides first and touches nothing when it cannot restore: a PASSED run points to git, a second rollback says
+  "already rolled back", a run that was restored automatically when it halted says so (instead of "the project was
+  too large"), and a run id can no longer be a path.
+- **Fix (data loss): a task re-run after a killed daemon overwrote its own backup.** The job stays in the inbox and its
+  backup in `.harness/staging/` holds the only copy of the original files. The re-run backed up again, saving the dead
+  agent's half-done edits, so a failure "restored" those and the originals were gone. The re-run now keeps the first
+  backup (`STAGING_REUSED`), and a failure brings back the files from before the first attempt.
+- **Fix (Windows): `dispatch --wait` could wait forever.** After a crash Windows soon reuses the daemon's process id
+  for another program; the harness took that program for a running daemon (`daemon --once` refused to start,
+  `dispatch --wait` and `watch` waited for nothing). A pid whose program is not node now counts as not running.
+- **Fix: a timed-out worker could write after the rollback.** The timeout was reported (and the files restored) right
+  after the kill was sent, while the engine could still be running. The harness now waits until the engine has
+  stopped (at most 8 seconds) before it restores anything; on Windows the process tree is killed first.
+- *Affects:* every project; Windows users and anyone using the PreToolUse guard. *Config / permissions:* none.
+  *After updating:* optional, each person can run `node .harness/memory.mjs me share` once.
+
 ## 1.0.25 — 2026-11-20
 
 - **One repository, several people: `me.md`.** Each person keeps their own name, language, coding experience, answer

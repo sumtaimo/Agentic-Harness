@@ -59,6 +59,8 @@ const strip = stripSlash;
 const inside = insideTargets;
 
 function loadRun(id) {
+  // A run id is a single folder name made by brief (V-…); never a path, so it can never reach outside .harness/visible/.
+  if (id && !/^[\w.-]+$/.test(String(id))) die(`Not a run id: ${id}. See: node .harness/visible.mjs status`);
   const f = path.join(runDir(String(id || '')), 'run.json');
   if (!id || !fs.existsSync(f)) die(`No such run: ${id || '(none given)'}. See: node .harness/visible.mjs status`);
   return JSON.parse(fs.readFileSync(f, 'utf8'));
@@ -523,7 +525,7 @@ function verify() {
   }
   if (run.baseline.dir && ((passed && !needJudge) || (halted && autoRolledBack)) && fs.existsSync(path.join(ROOT, run.baseline.dir))) {
     fs.rmSync(path.join(ROOT, run.baseline.dir), { recursive: true, force: true });
-    if (halted && autoRolledBack) { run.baseline.rollbackAvailable = false; saveRun(run); }
+    if (halted && autoRolledBack) { run.baseline.rollbackAvailable = false; run.baseline.autoRolledBack = true; saveRun(run); }
   }
   console.log(text);
   process.exit(passed ? 0 : 1);
@@ -569,6 +571,12 @@ function judge() {
 
 function rollback() {
   const run = loadRun(positional[0]);
+  // Decide BEFORE touching any file: a restore without the baseline copy cannot bring changed files back, but it would
+  // still delete every file created since the run (newer human work included).
+  if (run.status === 'ROLLED_BACK') die(`Run ${run.id} was already rolled back (${run.rolledBackAt || 'earlier'}). Nothing to do.`);
+  if (run.baseline?.autoRolledBack) die(`Run ${run.id} was already restored automatically when it halted. Nothing to do.`);
+  if (run.status === 'PASSED') die(`Run ${run.id} PASSED, so its baseline copy was removed and newer work may be on top of it. Rolling back now could delete files. Undo it with git instead: git status / git log / git checkout -- <file>.`);
+  if (!run.baseline?.rollbackAvailable || !run.baseline.dir || !fs.existsSync(path.join(ROOT, run.baseline.dir))) die(`Run ${run.id} has no baseline copy (${run.baseline?.rollbackAvailable ? 'it was removed' : 'the project was too large to copy'}). Nothing was changed. Use git to undo: git status / git checkout -- <file>.`);
   const scopeGlobs = run.userAllowed?.length ? run.userAllowed : (run.charter?.allowedPaths || []);
   const d = diffSnapshots(run.baseline.files, snapshot(scopeGlobs, run.baseline.files).map);
   const r = restoreFiles(run, d.all);
@@ -576,6 +584,7 @@ function rollback() {
   run.status = 'ROLLED_BACK'; run.rolledBackAt = new Date().toISOString(); saveRun(run);
   if (run.backlogId) updateBacklogItem(run.backlogId, { status: 'BLOCKED', blockedReason: 'ROLLED_BACK by a human. Set it READY again when it should be retried.' });
   if (fs.existsSync(path.join(ROOT, run.baseline.dir))) fs.rmSync(path.join(ROOT, run.baseline.dir), { recursive: true, force: true });
+  run.baseline.rollbackAvailable = false; saveRun(run);
   console.log(`Rolled back run ${run.id}: ${r.restored.length} file(s) restored to how they were before the run.`);
 }
 
