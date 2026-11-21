@@ -171,6 +171,10 @@ One developer and a team of people get the same harness: the full AI agent team 
 Your AI asks for `me.md` the first time. An older `profile.md` that still holds personal lines keeps working; your AI
 offers to move them into `me.md` once (`node .harness/memory.mjs me from-profile`).
 
+**Skills, one by one:** a new project starts with a small set of skills (one per role). When a task
+needs another one, the harness adds it by itself before the agents start and tells you which and why. Each agent gets at
+most 2 skills, the best match first. Turn fetching off with `"skillFetch": false`.
+
 **New versions:** session start, `doctor` and the menu tell you when a newer harness is released (they read the
 version of the `release` branch about twice a day; nothing about you is sent). Update with
 `npx github:sumtaimo/Agentic-Harness#release .`. Turn the check off with `HARNESS_OFFLINE=1` or `"updateCheck": false`.

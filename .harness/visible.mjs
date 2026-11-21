@@ -28,6 +28,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, listProjectFiles, detectVerifyCmd, buildRepoMap, memoryContext, recordSession, remember, normalizeTarget, clipErrorTrace, diagnoseVerifyFailure, formatDiagnosis, helpIfAsked, pendingCostReasons, aiUsageSince, usageTodayLine } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
+import { fetchSkillsOnDemand } from './lib/skill-fetch.mjs';
 import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor, runsNode, ENGINE_SCRIPTS, isTestFilePath, auditPatchSignals, scanPatchSafety } from './lib/governance.mjs';
 import { JUDGE_AGENTS, JUDGE_DEFAULT_MIN_SCORE, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, UNTRUSTED_CONTENT_RULE, scanInjection, taskText, injectionHoldReason, isReviewableFile, reviewPolicy, judgeApproved, scanAddedInjection } from './lib/guard.mjs';
 import { VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, listVisibleRuns, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
@@ -124,6 +125,7 @@ function reportText(run, v) {
   const sessionLabel = run.editor && run.editor !== 'claude-code' ? `${editorDisplayName(run.editor)} editor session` : 'editor session';
   L.push(`HARNESS REPORT — run ${run.id} — ${head}${noSignal ? ' (NO REAL TEST SIGNAL: the check cannot fail)' : ''}${visual ? ' — NEEDS A VISUAL REVIEW' : ''}`, '', `Task:    ${run.title}`, `Source:  ${run.source === 'backlog' ? `backlog item ${run.backlogId}` : 'goal given by the human'}${run.autonomous ? ' (autonomous mode)' : ''}`,
     `Flow:    controller → orchestrator (${sessionLabel}) → ${run.assignments.map((a) => a.lead).join(', ')} → controller verify → this report`, '');
+  if (run.skillsFetched?.length) L.push(`Skills added from Skill Foundry for this task: ${run.skillsFetched.join(' | ')}`, '');
   L.push('What each agent did:');
   const leads = run.leads || [];
   for (const a of run.assignments) {
@@ -231,6 +233,13 @@ function brief() {
   if (auto && charter.requireRealCheck && !check.real) die('This project has no real check (add a project test/check script or a "verifyCmd" to the task). Autonomous work needs one (charter requireRealCheck).', 1);
 
   const id = `V-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${Math.random().toString(36).slice(2, 5)}`;
+  // Skill Foundry on demand, BEFORE the baseline: a skill this goal needs for a lead's role is added now (at most 2), so
+  // verify never sees the added skill files as an agent's edit. "Automatic, then tell": printed below and in the report.
+  const fetchedSkills = (() => {
+    const r = fetchSkillsOnDemand(leads.map((l) => ({ id: l.id, role: l.role, prompt: String(goal || '') })), loadSkills(), { root: ROOT });
+    const lines = r.wanted.filter((w) => r.fetched.includes(w.name)).map((w) => `${w.name}: the task mentions "${w.keyword || 'its subject'}"; role ${w.role} (${w.worker})`);
+    return { lines, failed: !r.fetched.length && r.wanted.length ? `${r.wanted.map((w) => w.name).join(', ')} not added (${r.skipped})` : '' };
+  })();
   const scopeGlobs = userAllowed.length ? userAllowed : charter.allowedPaths;
   const snap = snapshot(scopeGlobs);
   const rollbackAvailable = snap.bytes <= MAX_BASELINE_BYTES;
@@ -243,6 +252,7 @@ function brief() {
     ...(bugfix ? { bugfix: true } : {}),
     title: item?.title || String(goal).slice(0, 80), goal, userAllowed, acceptanceCriteria: item?.acceptanceCriteria || [], interfaceContract: item?.interfaceContract || '',
     check, cycles: 0, assignAttempts: 0, assignments: [],
+    ...(fetchedSkills.lines.length ? { skillsFetched: fetchedSkills.lines } : {}), ...(fetchedSkills.failed ? { skillsFetchFailed: fetchedSkills.failed } : {}),
     charter: { allowedPaths: charter.allowedPaths, forbiddenPaths: charter.forbiddenPaths },
     orchestrator: orch.id, delegable: orch.canDelegateTo?.length ? orch.canDelegateTo : leads.map((l) => l.id),
     leads: leads.map((l) => ({ id: l.id, role: l.role, scope: l.scope, maxWorkers: l.maxWorkers ?? 3, skills: l.skills || [] })),
@@ -257,6 +267,8 @@ function brief() {
   console.log(`\nORCHESTRATOR BRIEF — run ${id}${auto ? ' (autonomous mode)' : ''}${run.bugfix ? ' (bugfix)' : ''}`);
   if (editor !== 'claude-code') console.log(`Editor: ${editorDisplayName(editor)}`);
   console.log(`\nTask: ${run.title}\nGoal: ${goal}`);
+  if (run.skillsFetched) console.log(`Skills added from Skill Foundry for this task (tell the human): ${run.skillsFetched.join(' | ')}`);
+  if (run.skillsFetchFailed) console.log(`Skills not added: ${run.skillsFetchFailed}`);
   if (run.acceptanceCriteria.length) console.log(`Acceptance criteria:\n${run.acceptanceCriteria.map((c) => `  - ${c}`).join('\n')}`);
   if (run.interfaceContract) console.log(`Interface contract:\n${run.interfaceContract}`);
   console.log(`\nCheck (run by the controller after the agents finish): ${check.cmd}  [${check.source}]${check.real ? '' : '\n  ⚠ NO REAL CHECK: any result would pass. Tell the human and propose a check.'}`);

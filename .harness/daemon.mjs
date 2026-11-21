@@ -535,6 +535,8 @@ function buildWorkerPrompt(subtask, profileName, cwd, errorContext, gov = {}, cy
       ? `[SCOPED TARGET FILES: ${subtask.targetFiles.join(', ')}]\n[STRICT CONSTRAINT: Only modify your scoped target files. Do not touch unrelated files.${role ? ' Your engine permissions are limited to these paths; other edits will be denied.' : ''}]`
       : '[SCOPE: whole project — change only what the task needs.]',
     gov.skills?.length ? `[INJECTED SKILL CONTRACTS — mandatory rules for this task]:\n${gov.skills.map((s) => `### Skill: ${s.name}\n${s.body}`).join('\n\n')}` : '',
+    // A worktree starts from the last commit: a skill added since (e.g. fetched for this task) is only in the main folder.
+    gov.skills?.length && cwd && !isSameDir(cwd, ROOT) ? `[SKILL FILES]: you work in a separate worktree. When a skill above says to read .claude/skills/<name>/, read it from the main project folder instead: ${path.join(ROOT, '.claude', 'skills').replace(/\\/g, '/')}/<name>/ (read only; never edit it).` : '',
     memory ? `[USER MEMORY — follow these preferences and rules]:\n${memory}` : '',
     subtask.goal ? `[OVERALL GOAL (other workers handle the other parts in parallel)]:\n${subtask.goal}` : '',
     subtask.interfaceContract ? `[SHARED INTERFACE CONTRACT — other workers build against exactly this; do not deviate]:\n${subtask.interfaceContract}` : '',
@@ -561,6 +563,7 @@ function resolveGovernance(sub, gov) {
   const m = matchSkills(sub, roleName || 'NONE', gov.skills);
   if (m.unknown.length) throw fatal(`Worker '${sub.id}' asks for unknown skill(s): ${m.unknown.join(', ')} (installed: ${Object.keys(gov.skills).join(', ') || 'none'}).`);
   if (m.mismatched.length) logTelemetry('SKILL_ROLE_MISMATCH', `Skill(s) ${m.mismatched.join(', ')} not allowed for role ${roleName || '(none)'}; not injected`, { worker: sub.id });
+  if (m.notLoaded?.length) logTelemetry('SKILL_NOT_LOADED', `${sub.id}: also matched ${m.notLoaded.join(', ')}, not loaded (at most ${m.chosen.length} skills per worker, best match first)`, { worker: sub.id, skills: m.notLoaded });
   if (!roleName) {
     // A role is always required for a skill, so a role-less worker gets none. Name what the task text matched, so the
     // user sees why and which --role would bring them in (was silent up to v1.0.28).
@@ -1134,6 +1137,23 @@ async function runPlanner(task, errorTrace = null, previous = null, workRoot = R
   for (const sub of subtasks) { // task-level contract + acceptance criteria reach every worker
     if (interfaceContract && !sub.interfaceContract) sub.interfaceContract = interfaceContract;
     if (task.acceptanceCriteria && !sub.acceptanceCriteria) sub.acceptanceCriteria = task.acceptanceCriteria;
+  }
+  // Skill Foundry on demand: a skill that is not installed yet but fits a worker's role and task is fetched now (at most
+  // 2 per task, controller only), then the workers' skills are resolved again so they get it. Never blocks the task.
+  {
+    const { fetchSkillsOnDemand } = await import('./lib/skill-fetch.mjs');
+    const r = fetchSkillsOnDemand(subtasks, gov.skills, { root: ROOT });
+    const said = (w) => `${w.name}: the task mentions "${w.keyword || 'its subject'}"; role ${w.role}`;
+    if (r.fetched.length) {
+      gov.skills = loadSkills();
+      subtasks.forEach((sub) => resolveGovernance(sub, gov));
+      // "Automatic, then tell": the person sees it in the result, the session note and the live feed, not only in the log.
+      task.skillsFetched = r.wanted.filter((w) => r.fetched.includes(w.name)).map(said);
+      logTelemetry('SKILL_FETCHED', `Added ${r.fetched.length} skill(s) from Skill Foundry for this task: ${task.skillsFetched.join(' | ')}`, { skills: r.fetched, wanted: r.wanted });
+    } else if (r.wanted.length) {
+      task.skillsFetchFailed = `${r.wanted.map((w) => w.name).join(', ')} not added (${r.skipped}); the task ran without them`;
+      logTelemetry('SKILL_FETCH_FAILED', task.skillsFetchFailed, { wanted: r.wanted });
+    }
   }
   if (subtasks.some((s) => s.resolvedRole)) planSummary += `  | roles: ${subtasks.map((s) => s.resolvedRole || '-').join(', ')}`;
 
@@ -1776,6 +1796,7 @@ function finishSession(task, plan, result, cycles, errors, outputs, rollback = n
         taskId: task.id || 'task', title, result, cycles, maxCycles: MAX_CYCLES, goal: task.goal,
         engine: plan?.engine || task.engine || '-', verifyCmd: plan?.verifyCmd || task.verifyCmd || '-', verifySource: plan?.verifySource,
         verifySuggestion: plan?.verifySuggestion, planner: plan?.planSummary, rollback, git: gitResult,
+        skillsFetched: task.skillsFetched, skillsFetchFailed: task.skillsFetchFailed, outOfScopeMoved: task.outOfScopeMoved,
         ...(externalCwd ? { cwd: externalCwd } : {}),
         team: plan?.team, costUsd: Math.round(taskCost.usd * 10000) / 10000, costByAgent: { ...taskCost.agents },
         subtasks: plan?.subtasks || task.subtasks || [], errors, outputs, finishedAt: new Date().toISOString()

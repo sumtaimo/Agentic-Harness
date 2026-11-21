@@ -6,6 +6,8 @@
 .harness/engine-probe.json
 .harness/foundry-check.json
 .harness/update-check.json
+.harness/skill-registry.json
+.harness/skill-fetch.lock
 .harness/auto-state.json
 .harness/approvals.json
 .harness/live.log

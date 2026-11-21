@@ -10,6 +10,28 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.32 — 2026-11-21
+
+- **Skill Foundry skills arrive one by one, when a task needs them** (owner's decision: a small core set at install,
+  then "find the skill that matches the task and call it, one by one, not all at the same time", automatically).
+  - Before a task's workers start, the controller (and `visible.mjs brief` in the editor workflow) looks at Skill
+    Foundry's list of skills (`list --json`, cached 24 h in `.harness/skill-registry.json`). A skill that is not
+    installed yet, whose roles include the worker's role and whose keyword appears in the task, is added with
+    `add <name> --quiet`. No command for the user to type.
+  - **Automatic, then tell:** the result of `dispatch --wait`, the session note, the brief and the run report say
+    which skill was added and why ("design-system: the task mentions \"design tokens\"; role DEV_ENGINEER").
+  - It happens before the backup and the run's baseline, so a failed task, its rollback and the out-of-scope mover
+    never remove a fetched skill. One fetch at a time (lock file); at most 90 s; offline, a timeout or an older Skill
+    Foundry without `list --json` just means the task runs without it. Off with `HARNESS_SKILL_FETCH=0` or
+    `"skillFetch": false`. Workers never fetch.
+- **At most 2 skills per worker** (capability flag `SKILL_LIMIT_PER_WORKER = 2`): the explicit list first, then the most
+  keyword hits, then the longest matched phrase. Any other matching skill is named in the log (`SKILL_NOT_LOADED`),
+  not loaded, so the context stays small. Only a skill that makes a worker's top 2 is ever fetched.
+- A worker in a git worktree is told where a skill's files are in the main folder (a worktree starts from the last
+  commit, so a skill added since is not in it).
+- *Needs:* Skill Foundry with `list --json` for fetching (older versions: nothing is fetched, everything else works).
+  *Affects:* every task with a role. *Config:* optional `"skillFetch": false`.
+
 ## 1.0.31 — 2026-11-21
 
 - **New: your project is told when a newer harness is released.** Projects installed from an old release never learned

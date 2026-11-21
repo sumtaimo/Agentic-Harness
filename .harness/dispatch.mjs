@@ -423,8 +423,11 @@ for (;;) {
     const strayLine = Array.isArray(body.outOfScopeMoved) && body.outOfScopeMoved.length
       ? `\nMoved aside (created outside the assigned files, not kept): ${body.outOfScopeMoved.slice(0, 8).join(', ')}${body.outOfScopeMoved.length > 8 ? ', …' : ''} → .harness/staging/${String(job.id).replace(/[^\w.-]/g, '_')}-out-of-scope/`
       : '';
-    if (done) { console.log(`RESULT: COMMITTED ✔  (session note: ${note})\n${aiLine}${strayLine}`); process.exit(0); }
-    console.log(`RESULT: NOT DONE ✖  ${body.haltReason || ''}\nSession note: ${note}\n${aiLine}${strayLine}`);
+    // "Automatic, then tell": skills the harness added from Skill Foundry for this task, and why.
+    const skillLine = (Array.isArray(body.skillsFetched) && body.skillsFetched.length ? `\nSkills added from Skill Foundry for this task: ${body.skillsFetched.join(' | ')}` : '')
+      + (body.skillsFetchFailed ? `\nSkills not added: ${body.skillsFetchFailed}` : '');
+    if (done) { console.log(`RESULT: COMMITTED ✔  (session note: ${note})\n${aiLine}${strayLine}${skillLine}`); process.exit(0); }
+    console.log(`RESULT: NOT DONE ✖  ${body.haltReason || ''}\nSession note: ${note}\n${aiLine}${strayLine}${skillLine}`);
     process.exit(1);
   }
   if (!daemonAlive() && fs.existsSync(inboxPath)) {

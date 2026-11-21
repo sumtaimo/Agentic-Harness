@@ -283,7 +283,10 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
   narrows on its own and the worker gets the union (never more than the role). A lead's `skills` list in `team.json`
   is added to: every skill for its role with `autoApply: true`, and every skill for its role whose `keywords` appear in
   the task as whole words or phrases (a plural is fine; "token" does not match "tokenizer"). A worker without a role gets
-  no skills: give headless tasks one with `dispatch --role <ROLE>`. A skill whose `roles` exclude the worker's role is never injected. Only skills in the explicit list may
+  no skills: give headless tasks one with `dispatch --role <ROLE>`. At most 2 skills reach one worker (best match first). A
+  skill from the skill library that is not installed yet but fits a worker's role and task is added by the controller before the
+  workers start ("automatic, then tell": the result names it and why); when you report a run, tell the user which
+  skills were added. A skill whose `roles` exclude the worker's role is never injected. Only skills in the explicit list may
   narrow a worker's tools; a skill added by keyword or `autoApply` brings its rules, never takes a tool away.
 - One step now: `node .harness/daemon.mjs --tick`. Scheduled: `node .harness/daemon.mjs --autonomous`
   (only one daemon per folder). When READY items run out, the PO_ARCHITECT proposes new ones

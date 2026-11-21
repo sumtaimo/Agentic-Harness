@@ -2407,6 +2407,99 @@ await test('v1.0.31 out-of-scope new files: moved aside (never deleted) after ea
   assert(json(path.join(d, '.harness', 'failed', failedJob)).outOfScopeMoved.includes('design-tokens.json'), 'not recorded on the task');
 });
 
+await test('v1.0.32 Skill Foundry on demand: the controller fetches only the not-installed skills a worker\'s role and task need (max 2), the worker gets them; never role-less, never when off, never blocking', async () => {
+  const d = sandbox();
+  const fake = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'harness-foundry-')), 'foundry.mjs');
+  const calls = path.join(path.dirname(fake), 'calls.log');
+  fs.writeFileSync(fake, `
+import fs from 'node:fs'; import path from 'node:path';
+const REG = [
+  { name: 'design-system', roles: ['DEV_ENGINEER', 'UX_DESIGNER'], keywords: ['design tokens', 'palette'], description: 'tokens' },
+  { name: 'copy-tight', roles: ['DEV_ENGINEER'], keywords: ['copy', 'error message'], description: 'copy' },
+  { name: 'a11y-audit', roles: ['QA_AUDITOR'], keywords: ['accessibility', 'design tokens'], description: 'a11y' },
+  { name: 'kube-helper', roles: ['DEV_ENGINEER'], keywords: ['kubernetes'], description: 'k8s' },
+  { name: 'tone-check', roles: ['DEV_ENGINEER'], keywords: ['copy'], description: 'tone' }
+];
+const [cmd, ...rest] = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)}, [cmd, ...rest].join(' ') + '\\n');
+if (process.env.FAKE_BROKEN === '1') process.exit(1);
+if (cmd === 'list' && rest[0] === '--json') { console.log(JSON.stringify(REG)); process.exit(0); }
+if (cmd === 'add') {
+  for (const n of rest.filter((a) => !a.startsWith('--'))) {
+    const s = REG.find((x) => x.name === n); if (!s) continue;
+    const dir = path.join('.harness', 'skills', n); fs.mkdirSync(dir, { recursive: true });
+    const body = path.join('.claude', 'skills', n); fs.mkdirSync(body, { recursive: true }); fs.writeFileSync(path.join(body, 'SKILL.md'), '# ' + n + ' body\\n'); fs.appendFileSync('AGENTS.md', '\\n- skill ' + n + '\\n');
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\\nname: ' + n + '\\ndescription: ' + s.description + '\\nroles: ' + JSON.stringify(s.roles) + '\\nkeywords: ' + JSON.stringify(s.keywords) + '\\nautoApply: false\\n---\\n# ' + n + '\\nFOLLOW-' + n.toUpperCase() + '\\n');
+  }
+  process.exit(0);
+}
+process.exit(2);`);
+  const run = (extra = {}) => node(d, ['.harness/daemon.mjs', '--once'], { HARNESS_FOUNDRY_CMD: fake, ...extra });
+  const matched = () => log(d).filter((e) => e.phase === '1_ROLE_SKILL_MATCH').pop();
+
+  // A DEV task that needs design tokens and error-message copy: exactly those two (max 2), not QA's a11y-audit, not
+  // the unrelated kube-helper; "copy" also matches tone-check, but the limit keeps the two with the most keyword hits.
+  drop(d, { id: 'needs', title: 'needs', subtasks: [{ id: 'w', role: 'DEV_ENGINEER', targetFiles: ['src/'], prompt: 'Create design tokens for the palette and tighten the error message copy.\nWRITE src/a.txt x' }] });
+  run();
+  const f = log(d).find((e) => e.phase === 'SKILL_FETCHED');
+  assert(f && JSON.stringify(f.skills.sort()) === JSON.stringify(['copy-tight', 'design-system']), 'fetched: ' + JSON.stringify(f));
+  assert(!fs.existsSync(path.join(d, '.harness', 'skills', 'a11y-audit')) && !fs.existsSync(path.join(d, '.harness', 'skills', 'kube-helper')) && !fs.existsSync(path.join(d, '.harness', 'skills', 'tone-check')), 'fetched more than the task needs');
+  const m = matched();
+  assert(m.skills.includes('design-system') && m.skills.includes('copy-tight'), 'the worker did not get the fetched skills: ' + JSON.stringify(m.skills));
+  assert(/add copy-tight design-system --quiet|add design-system copy-tight --quiet/.test(fs.readFileSync(calls, 'utf8')), 'one add call with only those names');
+
+  // Already installed now: a second task fetches nothing (cached registry, no add).
+  const before = fs.readFileSync(calls, 'utf8').split('\n').filter(Boolean).length;
+  drop(d, { id: 'again', title: 'again', subtasks: [{ id: 'w', role: 'DEV_ENGINEER', targetFiles: ['src/'], prompt: 'Change the palette in the design tokens.\nWRITE src/b.txt x' }] });
+  run();
+  assert(fs.readFileSync(calls, 'utf8').split('\n').filter(Boolean).length === before, 'called Skill Foundry again although nothing was missing and the registry was cached');
+
+  // No role: nothing is fetched. Off: nothing is fetched. Broken Skill Foundry: the task still runs.
+  fs.rmSync(path.join(d, '.harness', 'skill-registry.json'));
+  drop(d, { id: 'norole', title: 'norole', subtasks: [{ id: 'w', targetFiles: ['src/'], prompt: 'Set up kubernetes.\nWRITE src/c.txt x' }] });
+  run();
+  drop(d, { id: 'off', title: 'off', subtasks: [{ id: 'w', role: 'DEV_ENGINEER', targetFiles: ['src/'], prompt: 'Set up kubernetes.\nWRITE src/d.txt x' }] });
+  run({ HARNESS_SKILL_FETCH: '0' });
+  assert(!fs.existsSync(path.join(d, '.harness', 'skills', 'kube-helper')), 'fetched for a role-less or switched-off task');
+  drop(d, { id: 'broken', title: 'broken', subtasks: [{ id: 'w', role: 'DEV_ENGINEER', targetFiles: ['src/'], prompt: 'Set up kubernetes.\nWRITE src/e.txt x' }] });
+  run({ FAKE_BROKEN: '1' });
+  assert(fs.existsSync(path.join(d, 'src', 'e.txt')) && fs.readdirSync(path.join(d, '.harness', 'completed')).some((x) => x.startsWith('broken')), 'a broken Skill Foundry blocked the task');
+
+  // A team task: every worker gets ITS OWN best skills (the limit is per worker, not per task), a skill two workers
+  // need is fetched once, and the task-wide safety cap is 2 per worker.
+  const t = sandbox();
+  const sf = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'skill-fetch.mjs')).href);
+  const gv = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'governance.mjs')).href);
+  const team = [
+    { id: 'dev', role: 'DEV_ENGINEER', prompt: 'Create design tokens for the palette and tighten the error message copy.' },
+    { id: 'qa', role: 'QA_AUDITOR', prompt: 'Run an accessibility audit of the new screens.' },
+    { id: 'ux', role: 'UX_DESIGNER', prompt: 'Choose the palette for the design tokens.' }
+  ];
+  const tr = sf.fetchSkillsOnDemand(team, {}, { root: t, env: { ...env, HARNESS_FOUNDRY_CMD: fake, HARNESS_OFFLINE: '1' } });
+  assert(JSON.stringify([...tr.fetched].sort()) === JSON.stringify(['a11y-audit', 'copy-tight', 'design-system']), 'team fetch: ' + JSON.stringify(tr));
+  assert(tr.wanted.find((w) => w.name === 'a11y-audit')?.worker === 'qa', 'the QA worker did not get its own skill');
+  assert(sf.taskCap(team) === 6 && sf.taskCap([team[0]]) === 2, 'task cap is 2 per worker');
+  const qaGets = gv.matchSkills(team[1], 'QA_AUDITOR', Object.fromEntries(['a11y-audit', 'copy-tight', 'design-system'].map((n) => [n, { name: n, roles: n === 'a11y-audit' ? ['QA_AUDITOR'] : n === 'copy-tight' ? ['DEV_ENGINEER'] : ['DEV_ENGINEER', 'UX_DESIGNER'], keywords: n === 'a11y-audit' ? ['accessibility', 'design tokens'] : n === 'copy-tight' ? ['copy', 'error message'] : ['design tokens', 'palette'], autoApply: false }])));
+  assert(qaGets.chosen.map((s) => s.name).join() === 'a11y-audit', 'QA worker skills: ' + qaGets.chosen.map((s) => s.name));
+
+  // A fetched skill survives a FAILED task in a git repository: it is fetched before the backup and the out-of-scope
+  // snapshot, so neither the rollback nor the out-of-scope mover touches it; and the person is told.
+  const g = sandbox();
+  const git = (...a) => execFileSync('git', a, { cwd: g, stdio: 'pipe' });
+  git('init', '-q'); git('add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+  drop(g, { id: 'failfetch', title: 'failfetch', verifyCmd: 'node -e "process.exit(1)"', subtasks: [{ id: 'w', role: 'DEV_ENGINEER', targetFiles: ['src/'], prompt: 'Create design tokens for the palette.\nWRITE src/t.txt x' }] });
+  node(g, ['.harness/daemon.mjs', '--once'], { HARNESS_FOUNDRY_CMD: fake });
+  assert(fs.readdirSync(path.join(g, '.harness', 'failed')).some((x) => x.startsWith('failfetch')), 'the task should have failed');
+  for (const p of ['.harness/skills/design-system/SKILL.md', '.claude/skills/design-system/SKILL.md']) assert(fs.existsSync(path.join(g, p)), 'a fetched skill was removed or moved by the failed task: ' + p);
+  assert(/skill design-system/.test(fs.readFileSync(path.join(g, 'AGENTS.md'), 'utf8')), 'the AGENTS.md skill line was rolled back');
+  // (the fake engine's own .mock-prompts/ files ARE out of scope and are moved aside; no skill file may be among them)
+  const walk = (p) => (fs.existsSync(p) ? (fs.statSync(p).isDirectory() ? fs.readdirSync(p).flatMap((x) => walk(path.join(p, x))) : [p]) : []);
+  const moved = walk(path.join(g, '.harness', 'staging', 'failfetch-out-of-scope')).map((p) => p.split(path.sep).join('/'));
+  assert(!moved.some((p) => /\/(\.claude\/skills|\.harness\/skills)\/|\/AGENTS\.md$/.test(p)), 'fetched skill files were treated as out-of-scope work: ' + moved.join(', '));
+  const note = fs.readdirSync(path.join(g, '.harness', 'memory', 'sessions')).filter((x) => x.includes('failfetch'));
+  assert(note.length && /Skills added from Skill Foundry: design-system: the task mentions "design tokens"; role DEV_ENGINEER/.test(fs.readFileSync(path.join(g, '.harness', 'memory', 'sessions', note[0]), 'utf8')), 'the person is not told in the session note');
+});
+
 await test('update check: an installed project is told when a newer harness is released (session start, doctor, menu); never in the template, never when off, never blocking', async () => {
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-update '));
   assert(spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj], { encoding: 'utf8', env: { ...env, HARNESS_OFFLINE: '1' } }).status === 0, 'install');
@@ -4147,7 +4240,10 @@ await test('SKILL_MATCH matchSkills: explicit + keyword, explicit only, keyword 
   };
   const pick = (sub, role) => g.matchSkills(sub, role, all);
   const names = (m) => m.chosen.map((s) => s.name).sort().join();
-  assert(names(pick({ skills: ['code-craft'], prompt: 'Fix the CONTRAST of the button' }, 'DEV_ENGINEER')) === 'always,code-craft,contrast', 'explicit + keyword');
+  // Since 1.0.32 at most SKILL_LIMIT_PER_WORKER (2) skills reach one worker: the explicit list first, then the best
+  // keyword match; an autoApply skill without a keyword hit ranks last and is named in notLoaded.
+  const both = pick({ skills: ['code-craft'], prompt: 'Fix the CONTRAST of the button' }, 'DEV_ENGINEER');
+  assert(g.SKILL_LIMIT_PER_WORKER === 2 && names(both) === 'code-craft,contrast' && both.notLoaded.join() === 'always', 'explicit + keyword: ' + names(both) + ' / not loaded ' + both.notLoaded);
   assert(names(pick({ skills: ['code-craft'], prompt: 'rename a variable' }, 'DEV_ENGINEER')) === 'always,code-craft', 'explicit, no keyword');
   assert(names(pick({ prompt: 'check accessibility' }, 'DEV_ENGINEER')) === 'always,contrast', 'no list + keyword');
   assert(names(pick({ prompt: 'rename a variable' }, 'DEV_ENGINEER')) === 'always', 'no list + no keyword');

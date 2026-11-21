@@ -316,13 +316,24 @@ export function matchSkills(sub, roleName, allSkills) {
     }
   }
   const text = String(sub.prompt || '').toLowerCase();
+  const scored = [];
   for (const s of Object.values(allSkills)) {
     if (chosen.includes(s) || !fits(s) || s.roles.length === 0) continue;
     // added to the explicit list: autoApply skills, and skills whose keyword appears in the task (with or without a list)
-    if (s.autoApply || s.keywords.some((k) => keywordMatches(text, k))) chosen.push(s);
+    const hit = s.keywords.filter((k) => keywordMatches(text, k));
+    if (s.autoApply || hit.length) scored.push({ s, hits: hit.length, longest: Math.max(0, ...hit.map((k) => String(k).length)), keyword: hit.sort((a, b) => b.length - a.length)[0] || null });
   }
-  return { chosen, mismatched, unknown };
+  // Ranking: the explicit list first (in its order), then most keyword hits, then the longest matched phrase.
+  scored.sort((a, b) => b.hits - a.hits || b.longest - a.longest || a.s.name.localeCompare(b.s.name));
+  const why = new Map(scored.map((x) => [x.s.name, x.keyword]));
+  const ranked = [...chosen, ...scored.map((x) => x.s)];
+  // At most SKILL_LIMIT_PER_WORKER skills reach one worker (owner's decision: one by one, never many at once, so the
+  // context stays small); the rest are named, not loaded.
+  return { chosen: ranked.slice(0, SKILL_LIMIT_PER_WORKER), notLoaded: ranked.slice(SKILL_LIMIT_PER_WORKER).map((s) => s.name), why, mismatched, unknown };
 }
+
+/** Capability flag: the most skills one worker gets (explicit list first, then best keyword match); the rest are named, not loaded. */
+export const SKILL_LIMIT_PER_WORKER = 2;
 
 // ───────────────────────────── team hierarchy (orchestrator → leads → workers) ─────────────────────────────
 
