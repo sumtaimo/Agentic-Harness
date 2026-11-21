@@ -23,7 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { ROOT, HARNESS_DIR, ensureDirs, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readBacklog, writeBacklog, loadRoles } from './lib/governance.mjs';
-import { createFeature, findFeature, approveFeature, featureProgress, expandPrompt, renderFeatureDoc, readFeatures, FEATURE_MAX_STEPS } from './lib/feature.mjs';
+import { createFeature, findFeature, approveFeature, featureProgress, expandPrompt, renderFeatureDoc, readFeatures, FEATURE_MAX_STEPS, plannerSkills } from './lib/feature.mjs';
 
 ensureDirs();
 const argv = process.argv.slice(2);
@@ -59,7 +59,9 @@ switch (cmd) {
   case 'expand': { const f = need(); process.exit(expand(f, val('--from'))); }
   case 'prompt': {
     const f = need();
-    console.log(expandPrompt(f, loadRoles().BA_ANALYST, {}));
+    const ps = plannerSkills('BA_ANALYST', f.goal, { id: `${f.id.toLowerCase()}-planner` });
+    if (ps.skills.length) console.error(`Skills for BA: ${ps.skills.map((x) => x.name).join(', ')}${ps.fetched.length ? ` (added from Skill Foundry: ${ps.fetched.join(', ')})` : ''}`);
+    console.log(expandPrompt(f, loadRoles().BA_ANALYST, { skills: ps.block }));
     console.log(`\n[EDITOR NOTE] Give this to a read-only BA agent together with the project files. Save its JSON reply to a file, then: node .harness/feature.mjs expand ${f.id} --from <file>`);
     break;
   }

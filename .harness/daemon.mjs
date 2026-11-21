@@ -51,7 +51,7 @@ import {
   buildCandidate, advanceBranch, removeWorktree, deleteBranch, safeRef, linkShared, unlinkShared
 } from './lib/integration.mjs';
 import { syncVisibleRunAfterDaemon } from './lib/handoff.mjs';
-import { findFeature, expandPrompt, normalizeExpansion, saveDraft, markFeatureError } from './lib/feature.mjs';
+import { findFeature, expandPrompt, normalizeExpansion, saveDraft, markFeatureError, plannerSkills } from './lib/feature.mjs';
 import { findHunt, huntPrompt, normalizeFindings, saveHunt, markHuntError } from './lib/hunt.mjs';
 import { UNTRUSTED_CONTENT_RULE, injectionHoldReason, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, reviewPolicy, isReviewableFile, scanAddedInjection, fitPrompt, DEFAULT_MAX_PROMPT_CHARS } from './lib/guard.mjs';
 
@@ -2012,7 +2012,11 @@ async function featureExpand(id, fromFile = null) {
     const view = await projectView();
     try {
       const { files, total } = listProjectFiles(view.dir, (config.planner || {}).maxFilesListed || 400);
-      const prompt = expandPrompt(f, ba, {
+      const ps = plannerSkills('BA_ANALYST', f.goal, { id: `${f.id.toLowerCase()}-planner`, root: ROOT });
+      if (ps.fetched.length) logTelemetry('SKILL_FETCHED', `${f.id}: added ${ps.fetched.join(', ')} from Skill Foundry for BA_ANALYST`, { skills: ps.fetched });
+      else if (ps.note) logTelemetry('SKILL_FETCH_FAILED', `${f.id}: ${ps.note}`);
+      if (ps.skills.length) logTelemetry('1_ROLE_SKILL_MATCH', `${f.id} BA_ANALYST: skills [${ps.skills.map((x) => x.name).join(', ')}]`, { role: 'BA_ANALYST', skills: ps.skills.map((x) => x.name) });
+      const prompt = expandPrompt(f, ba, { skills: ps.block,
         catalog: catalog(gov), allowedPaths: gov.charter.allowedPaths,
         backlog: b.tasks.map((t) => `- ${t.id} [${t.status}] ${t.title || t.goal}`).join('\n'),
         repoMap: buildRepoMap(view.dir, { maxChars: 1200 }), files: `${files.join('\n')}${total > files.length ? `\n… (${total - files.length} more)` : ''}`,
@@ -2024,7 +2028,7 @@ async function featureExpand(id, fromFile = null) {
         const { output } = await spawnEngine({
           id: `ba-${f.id.toLowerCase()}`, prompt: attempt === 1 ? prompt : `${prompt}\n\n[YOUR PREVIOUS REPLY WAS NOT USABLE — fix this and reply with the JSON object only]: ${lastErr}`,
           cwd: view.dir, timeoutMs: config.workerTimeoutMs,
-          allowedTools: computeAllowedTools({ ...ba, allowedTools: (ba.allowedTools || []).filter((r) => !/^(Edit|Write)\b/.test(r)) }, [], []),
+          allowedTools: computeAllowedTools({ ...ba, allowedTools: (ba.allowedTools || []).filter((r) => !/^(Edit|Write)\b/.test(r)) }, ps.skills, [], { explicit: [] }),
           disallowedTools: computeDisallowedTools(gov.charter),
           tier: chooseModelTier({ kind: 'plan', role: 'BA_ANALYST' })
         });
@@ -2074,7 +2078,11 @@ async function huntRun(id, fromFile = null) {
     try {
       const { files, total } = listProjectFiles(view.dir, (config.planner || {}).maxFilesListed || 400);
       const det = detectVerifyCmd(view.dir, config);
-      const prompt = huntPrompt(h, qa, {
+      const ps = plannerSkills('QA_AUDITOR', h.scope, { id: `${h.id.toLowerCase()}-planner`, root: ROOT });
+      if (ps.fetched.length) logTelemetry('SKILL_FETCHED', `${h.id}: added ${ps.fetched.join(', ')} from Skill Foundry for QA_AUDITOR`, { skills: ps.fetched });
+      else if (ps.note) logTelemetry('SKILL_FETCH_FAILED', `${h.id}: ${ps.note}`);
+      if (ps.skills.length) logTelemetry('1_ROLE_SKILL_MATCH', `${h.id} QA_AUDITOR: skills [${ps.skills.map((x) => x.name).join(', ')}]`, { role: 'QA_AUDITOR', skills: ps.skills.map((x) => x.name) });
+      const prompt = huntPrompt(h, qa, { skills: ps.block,
         check: det.real ? det.cmd : '', catalog: catalog(gov),
         backlog: b.tasks.map((t) => `- ${t.id} [${t.status}] ${t.title || t.goal}`).join('\n'),
         repoMap: buildRepoMap(view.dir, { maxChars: 1200 }), files: `${files.join('\n')}${total > files.length ? `\n… (${total - files.length} more)` : ''}`,
@@ -2086,7 +2094,7 @@ async function huntRun(id, fromFile = null) {
         const { output } = await spawnEngine({
           id: `hunt-${h.id.toLowerCase()}`, prompt: attempt === 1 ? prompt : `${prompt}\n\n[YOUR PREVIOUS REPLY WAS NOT USABLE — reply with the JSON object only]: ${lastErr}`,
           cwd: view.dir, timeoutMs: config.workerTimeoutMs,
-          allowedTools: computeAllowedTools({ ...qa, allowedTools: (qa.allowedTools || []).filter((r) => !/^(Edit|Write)\b/.test(r)) }, [], []),
+          allowedTools: computeAllowedTools({ ...qa, allowedTools: (qa.allowedTools || []).filter((r) => !/^(Edit|Write)\b/.test(r)) }, ps.skills, [], { explicit: [] }),
           disallowedTools: computeDisallowedTools(gov.charter),
           tier: chooseModelTier({ kind: 'hunt', role: 'QA_AUDITOR' })
         });

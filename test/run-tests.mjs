@@ -842,6 +842,26 @@ await test('hunt approve: kept bugs → READY bugfix items (severity order, Red-
   assert(/\[HARNESS HUNTER\]/.test(hunt(d, ['prompt', 'H3']).stdout) && hunt(d, ['cancel', 'H3']).status === 0, 'prompt + cancel');
 });
 
+await test('v1.0.39 feature BA and hunt QA get matching skills (role + keywords, at most 2, never narrowing tools); other roles\' skills stay out', () => {
+  const d = sandbox(); realTest(d); setBacklog(d, []);
+  const mk = (name, roles, keywords, tools = ['Read']) => { const dir = path.join(d, '.harness', 'skills', name); fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: test skill\nroles: ${JSON.stringify(roles)}\nallowedTools: ${JSON.stringify(tools)}\nkeywords: ${JSON.stringify(keywords)}\nautoApply: false\n---\nRULE-OF-${name}\n`); };
+  mk('journey-mapper', ['BA_ANALYST'], ['journey']);
+  mk('bug-hunter', ['QA_AUDITOR'], ['bug hunt']);
+  mk('dev-only', ['DEV_ENGINEER'], ['journey', 'bug hunt']);
+  feature(d, [`login FEATURE_JSON ${JSON.stringify(FEATURE_STEPS())}`]);
+  const ba = fs.readFileSync(path.join(d, '.mock-prompts', 'feature-ba.txt'), 'utf8');
+  assert(/\[INJECTED SKILL CONTRACTS/.test(ba) && /RULE-OF-journey-mapper/.test(ba) && !/RULE-OF-dev-only|RULE-OF-bug-hunter/.test(ba), 'BA skills');
+  const calls = fs.readFileSync(path.join(d, '.mock-prompts', 'feature-calls.txt'), 'utf8');
+  assert(/mcp__fetch/.test(calls) && /Bash\(git status\)/.test(calls), `a keyword skill must not narrow BA's tools: ${calls}`);
+  hunt(d, [`checkout ${huntFile(d, FINDINGS)}`]);
+  const qa = fs.readFileSync(path.join(d, '.mock-prompts', 'hunter.txt'), 'utf8');
+  assert(/RULE-OF-bug-hunter/.test(qa) && !/RULE-OF-journey-mapper|RULE-OF-dev-only/.test(qa) && /Bash\(npm test:\*\)/.test(fs.readFileSync(path.join(d, '.mock-prompts', 'hunt-calls.txt'), 'utf8')), 'QA skills / tools');
+  assert(log(d).some((e) => e.phase === '1_ROLE_SKILL_MATCH' && /H1 QA_AUDITOR: skills \[[^\]]*bug-hunter/.test(e.message)), 'skill match not logged');
+  const editor = feature(d, ['prompt', 'F1']);
+  assert(/RULE-OF-journey-mapper/.test(editor.stdout) && /Skills for BA: [^\n]*journey-mapper/.test(editor.stderr), 'editor prompt must carry the same skills');
+});
+
 await test('PO_ARCHITECT tasks that break the charter or role scopes are dropped', () => {
   const d = sandbox(); realTest(d);
   const t = (title, sub) => ({ title, subtasks: [sub] });

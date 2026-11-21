@@ -12,7 +12,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT } from './common.mjs';
-import { readBacklog, writeBacklog } from './governance.mjs';
+import { readBacklog, writeBacklog, loadSkills, matchSkills } from './governance.mjs';
+import { fetchSkillsOnDemand } from './skill-fetch.mjs';
 
 export const FEATURE_MAX_STEPS = 12;      // default steps per feature (owner's decision for 1.0.36)
 export const FEATURE_HARD_MAX = 20;       // never more, whatever --max says
@@ -74,6 +75,7 @@ export function expandPrompt(f, ba, context = {}) {
     context.backlog ? `\n[CURRENT BACKLOG]:\n${context.backlog}` : '',
     context.repoMap ? `\n[REPO INTELLIGENCE]:\n${context.repoMap}` : '',
     context.files ? `\n[PROJECT FILES]:\n${context.files}` : '',
+    context.skills ? `\n${context.skills}` : '',
     context.memory ? `\n[USER MEMORY]:\n${context.memory}` : ''
   ].filter(Boolean).join('\n');
 }
@@ -226,4 +228,31 @@ export function featureProgress(b = readBacklog()) {
       kept: (f.kept || []).length, done: by('DONE'), ready: by('READY'), running: by('IN_PROGRESS'), blocked: by('BLOCKED'),
       decisions: f.steps.filter((s) => s.needsDecision).length, lastError: f.lastError, doc: f.doc };
   });
+}
+
+/** The words a planner call matches skills on: its job plus the owner's text (so a "journey" skill fits every feature). */
+export const PLANNER_TOPIC = {
+  BA_ANALYST: 'feature user workflow journey spec acceptance criteria',
+  QA_AUDITOR: 'bug hunt regression tests'
+};
+
+/**
+ * Skills for a read-only planner call (feature BA, hunt QA), the same way workers get them: fetch a fitting skill from
+ * Skill Foundry if it is not installed (controller only, never blocks), then match by role + keywords, at most 2.
+ * They come in by keyword/autoApply only, so they bring rules and never take a tool away.
+ * Returns { skills, block, fetched, note } — block is the prompt section ('' when none).
+ */
+export function plannerSkills(role, text, { id = 'planner', root = ROOT, fetch = true } = {}) {
+  const sub = { id, role, prompt: `${PLANNER_TOPIC[role] || ''}: ${text}` };
+  let installed = loadSkills();
+  let fetched = []; let note = '';
+  if (fetch) {
+    const r = fetchSkillsOnDemand([sub], installed, { root, max: 2 });
+    if (r.fetched.length) { fetched = r.fetched; installed = loadSkills(); }
+    else if (r.wanted.length) note = `${r.wanted.map((w) => w.name).join(', ')} not added (${r.skipped})`;
+  }
+  const m = matchSkills(sub, role, installed);
+  const skills = m.chosen;
+  const block = skills.length ? `[INJECTED SKILL CONTRACTS — mandatory rules for this task]:\n${skills.map((x) => `### Skill: ${x.name}\n${x.body}`).join('\n\n')}` : '';
+  return { skills, block, fetched, note };
 }

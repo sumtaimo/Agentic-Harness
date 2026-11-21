@@ -285,7 +285,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
   exact rules like `Bash(npm test:*)` are granted only if the role already covers them. With several skills, each
   narrows on its own and the worker gets the union (never more than the role). A lead's `skills` list in `team.json`
   is added to: every skill for its role with `autoApply: true`, and every skill for its role whose `keywords` appear in
-  the task as whole words or phrases (a plural is fine; "token" does not match "tokenizer"). A worker without a role gets
+  the task as whole words or phrases (a plural is fine; "token" does not match "tokenizer"). BA expanding a `feature` and QA running a `hunt` get skills the same way (role + keywords). A worker without a role gets
   no skills: give headless tasks one with `dispatch --role <ROLE>`. At most 2 skills reach one worker (best match first). A
   skill from the skill library that is not installed yet but fits a worker's role and task is added by the controller before the
   workers start ("automatic, then tell": the result names it and why); when you report a run, tell the user which

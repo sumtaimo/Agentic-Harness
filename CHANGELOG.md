@@ -10,6 +10,16 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.39 — 2026-11-21
+
+- **`feature` and `hunt` now use skills.** BA expanding a feature and QA hunting bugs get matching skills the same way
+  workers do: by role and keywords (the job — "feature user workflow journey spec …" or "bug hunt regression tests" —
+  plus your text), at most 2, a fitting skill that is not installed yet is fetched from Skill Foundry first (controller
+  only; off with `"skillFetch": false`). They arrive by keyword, so they bring rules and never take a tool away. The
+  editor path (`feature.mjs prompt`, `hunt.mjs prompt`) prints the same skills. Logged as `1_ROLE_SKILL_MATCH`.
+- *Affects:* every `feature` / `hunt` run when a matching skill exists (today: `spec-writer` for BA, `test-champion`
+  and `security-guard` for QA, by keyword). *Config:* none.
+
 ## 1.0.38 — 2026-11-21
 
 - **New: `hunt` — bug hunt with evidence.** `npm run hunt -- "checkout" --files src/cart/` (or `/harness:hunt`):

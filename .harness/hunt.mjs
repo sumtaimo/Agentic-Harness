@@ -23,6 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { ROOT, HARNESS_DIR, ensureDirs, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readBacklog, writeBacklog, loadRoles } from './lib/governance.mjs';
+import { plannerSkills } from './lib/feature.mjs';
 import { createHunt, findHunt, approveHunt, huntProgress, huntPrompt, renderHuntDoc, readHunts, HUNT_MAX_FINDINGS } from './lib/hunt.mjs';
 
 ensureDirs();
@@ -57,7 +58,9 @@ switch (cmd) {
   case 'run': { const h = need(); process.exit(run(h, val('--from'))); }
   case 'prompt': {
     const h = need();
-    console.log(huntPrompt(h, loadRoles().QA_AUDITOR, {}));
+    const ps = plannerSkills('QA_AUDITOR', h.scope, { id: `${h.id.toLowerCase()}-planner` });
+    if (ps.skills.length) console.error(`Skills for QA: ${ps.skills.map((x) => x.name).join(', ')}${ps.fetched.length ? ` (added from Skill Foundry: ${ps.fetched.join(', ')})` : ''}`);
+    console.log(huntPrompt(h, loadRoles().QA_AUDITOR, { skills: ps.block }));
     console.log(`\n[EDITOR NOTE] Give this to a QA agent that may read files and run the project's tests but writes nothing. Save its JSON reply to a file, then: node .harness/hunt.mjs run ${h.id} --from <file>`);
     break;
   }
