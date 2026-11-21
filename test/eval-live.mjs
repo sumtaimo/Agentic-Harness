@@ -22,10 +22,15 @@ import { fileURLToPath } from 'node:url';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RESULTS = path.join(REPO, 'test', 'evals', 'results');
 const arg = (n) => { const i = process.argv.indexOf(n); return i > -1 ? process.argv[i + 1] : undefined; };
-const engine = arg('--engine');
+// The profile name is what consent and routing use; agy is the Antigravity command's name (same alias as dispatch).
+const engineArg = arg('--engine');
+const engine = engineArg && engineArg.trim().toLowerCase() === 'agy' ? 'antigravity' : engineArg;
 const only = arg('--only');
+// --model <id>: every tier of this engine's profile uses that model in the throw-away projects (workers AND the judge),
+// e.g. when the default models' quota is used up, or to measure one model. The id is the engine's own model id.
+const modelOverride = arg('--model');
 if (process.argv.includes('--help') || !engine) {
-  console.log('Usage: npm run eval -- --engine <claude|agy|codex> [--only <task id>]\nRuns the live eval tasks with a REAL engine (spends quota). Nothing runs without --engine.');
+  console.log('Usage: npm run eval -- --engine <claude|agy|codex> [--only <task id>] [--model <engine model id>]\nRuns the live eval tasks with a REAL engine (spends quota). Nothing runs without --engine.');
   process.exit(engine ? 0 : 2);
 }
 
@@ -66,6 +71,11 @@ function project(task) {
   if (r.status !== 0) throw new Error(`install failed: ${r.stderr}`);
   // Running the eval with --engine is the person's consent to use that engine, in these throw-away projects only.
   fs.writeFileSync(path.join(d, '.harness', 'approvals.json'), JSON.stringify({ engines: { [engine]: true } }));
+  if (modelOverride) {
+    const cfgFile = path.join(d, '.harness', 'config.json'); const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+    const p = cfg.profiles?.[engine];
+    if (p) { p.models = Object.fromEntries(Object.keys(p.models || { fast: 1, medium: 1, high: 1 }).map((t) => [t, modelOverride])); fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2)); }
+  }
   fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name: `eval-${task.id}`, private: true }));
   for (const [f, body] of Object.entries(task.seed || {})) { fs.mkdirSync(path.dirname(path.join(d, f)), { recursive: true }); fs.writeFileSync(path.join(d, f), body); }
   git(d, 'init', '-q', '-b', 'main'); git(d, 'config', 'user.email', 'eval@test'); git(d, 'config', 'user.name', 'eval'); git(d, 'add', '-A'); git(d, 'commit', '-q', '-m', 'seed');
@@ -100,11 +110,12 @@ for (const task of TASKS) {
 }
 
 fs.mkdirSync(RESULTS, { recursive: true });
-const prevFile = fs.readdirSync(RESULTS).filter((f) => f.endsWith(`-${engine}.json`)).sort().pop();
+const runKey = modelOverride ? `${engine}@${modelOverride.replace(/[^w.-]/g, '_')}` : engine; // a different model is a different series
+const prevFile = fs.readdirSync(RESULTS).filter((f) => f.endsWith(`-${runKey}.json`)).sort().pop();
 const prev = prevFile ? JSON.parse(fs.readFileSync(path.join(RESULTS, prevFile), 'utf8')) : null;
 const version = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')).version;
-const out = { at: new Date().toISOString(), engine, version, score: results.reduce((n, r) => n + r.score, 0), of: results.length, results };
-fs.writeFileSync(path.join(RESULTS, `${out.at.replace(/[:.]/g, '-')}-${engine}.json`), `${JSON.stringify(out, null, 2)}\n`);
+const out = { at: new Date().toISOString(), engine, ...(modelOverride ? { model: modelOverride } : {}), version, score: results.reduce((n, r) => n + r.score, 0), of: results.length, results };
+fs.writeFileSync(path.join(RESULTS, `${out.at.replace(/[:.]/g, '-')}-${runKey}.json`), `${JSON.stringify(out, null, 2)}\n`);
 const regressions = prev ? results.filter((r) => r.score === 0 && (prev.results || []).some((p) => p.id === r.id && p.score === 1)).map((r) => r.id) : [];
 console.log(`\nScore: ${out.score}/${out.of} (harness ${version})${prev ? ` — previous ${prev.score}/${prev.of} (harness ${prev.version}, ${prev.at.slice(0, 10)})` : ' — first run for this engine'}`);
 if (regressions.length) console.log(`REGRESSION: ${regressions.join(', ')} passed last time and fail now.`);

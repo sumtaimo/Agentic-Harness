@@ -24,6 +24,8 @@ the entries newer than the version you had.
   Without worktrees, new untracked files outside every worker's files are now moved aside after each worker round, to
   `.harness/staging/<task>-out-of-scope/` (never deleted), and listed in the result. Files that existed before the task,
   git-ignored files and `.harness/` are left alone. Needs a git repository. Found in a real run.
+- `npm run eval`: `--engine agy` works (it gave its consent to the wrong name, so nothing ran), and `--model <id>` runs
+  workers and the judge on one model of that engine (results are kept as their own series).
 - **Existing projects now get narrower keywords for the built-in skills.** A project's `.harness/skills/` is kept on
   update, so the keyword fix below never reached them. A built-in skill you never edited (its keywords line is exactly
   an older shipped one) is now updated; any skill you changed is kept as it is.
