@@ -381,7 +381,7 @@ function cleanup(b, only = null) {
       notes.push(r.status === 0 ? `worktree removed (${w.path})` : `worktree NOT removed (${w.path}): ${(r.stderr || '').trim().split('\n')[0]}; it has changes or is in use, check it and remove it by hand`);
     }
     if (tip) {
-      if (gitOk(['branch', '-d', t.branch]) !== null) notes.push(`branch ${t.branch} deleted`);
+      if (gitOk(['branch', '-D', t.branch]) /* safe: checked above that every commit of it is in the base */ !== null) notes.push(`branch ${t.branch} deleted`);
       else { leftover = true; notes.push(`branch ${t.branch} NOT deleted (still checked out, or not merged)`); }
     }
     // Something is left (uncommitted files in its worktree, a branch still in use): keep the task on the board as
@@ -488,7 +488,10 @@ switch (cmd) {
     // Merge and check in a separate temporary worktree, so a conflict or a failing check never touches the base branch.
     const tmp = path.join(os.tmpdir(), `harness-merge-${t.id.toLowerCase()}-${Date.now()}`);
     const links = config.git?.linkIntoWorktrees || ['node_modules'];
-    git(['worktree', 'add', '-q', '--detach', tmp, base]);
+    // Remember where the base is NOW: the merge is built on this commit, and the base only moves if it is still here
+    // (compare-and-swap), so a commit that lands on the base while the check runs is never dropped.
+    const baseTip = git(['rev-parse', `refs/heads/${base}`]);
+    git(['worktree', 'add', '-q', '--detach', tmp, baseTip]);
     try {
       for (const d of links) { const src = path.join(p.path, d); if (fs.existsSync(src) && !fs.existsSync(path.join(tmp, d))) { try { fs.symlinkSync(src, path.join(tmp, d), 'junction'); } catch { /* the check may need its own install */ } } }
       const m = spawnSync('git', ['-c', 'user.name=harness', '-c', 'user.email=harness@local', 'merge', '--no-ff', '--no-edit', '-m', `merge ${t.id}: ${t.title}`, info.ref], { cwd: tmp, encoding: 'utf8' });
@@ -513,9 +516,13 @@ switch (cmd) {
               console.error(`${base} is checked out in ${other.path}, which has uncommitted changes; commit them there first. Nothing changed.`);
               process.exitCode = 1; throw Object.assign(new Error('dirty base worktree'), { handled: true });
             }
-            if (p.branch === base) git(['merge', '--ff-only', '-q', sha], p.path);
-            else if (other) git(['merge', '--ff-only', '-q', sha], other.path);
-            else git(['update-ref', `refs/heads/${base}`, sha, git(['rev-parse', base])]);
+            const ff = (dir) => { if (gitOk(['merge', '--ff-only', '-q', sha], dir) === null) { console.error(`${base} moved while ${t.id} was being checked. Nothing changed. Run the merge again.`); process.exitCode = 1; throw Object.assign(new Error('base moved'), { handled: true }); } };
+            if (p.branch === base) ff(p.path);
+            else if (other) ff(other.path);
+            else if (gitOk(['update-ref', `refs/heads/${base}`, sha, baseTip]) === null) {
+              console.error(`${base} moved while ${t.id} was being checked (it is no longer at ${baseTip.slice(0, 7)}). Nothing changed. Run the merge again.`);
+              process.exitCode = 1; throw Object.assign(new Error('base moved'), { handled: true });
+            }
             t.mergedAt = new Date().toISOString(); delete t.checkFailed; save(b);
             console.log(`MERGED ${t.id} into ${base} (${sha.slice(0, 7)}); check passed: ${v.cmd}${v.real ? '' : ' (WARNING: not a real check)'}`);
           }

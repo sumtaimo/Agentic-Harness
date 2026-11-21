@@ -1739,7 +1739,7 @@ await test('demo project (examples/make-demo.mjs): ready to try — harness inst
   const notDemo = path.join(base, 'mine'); fs.mkdirSync(notDemo); fs.writeFileSync(path.join(notDemo, 'important.txt'), 'keep me');
   assert(mk(notDemo, '--force').status === 1 && fs.readFileSync(path.join(notDemo, 'important.txt'), 'utf8') === 'keep me', '--force must never delete a folder that is not a demo');
   assert(mk(demo, '--force').status === 0 && !fs.existsSync(path.join(demo, 'src', 'slugify.js')) && json(path.join(demo, '.harness', 'backlog.json')).tasks[0].status === 'READY', '--force should recreate a clean demo');
-  assert(mk(REPO).status === 1 && mk(path.join(REPO, 'inside-the-template')).status === 0 && (fs.rmSync(path.join(REPO, 'inside-the-template'), { recursive: true, force: true }), true), 'the demo may not overwrite the template itself');
+  assert(mk(REPO).status === 1 && mk(path.join(REPO, 'inside-the-template')).status === 0 && (fs.rmSync(path.join(REPO, 'inside-the-template'), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }), true), 'the demo may not overwrite the template itself');
 });
 
 // ───────────────────────────── smart engine routing (team.mjs auto-assign) ─────────────────────────────
@@ -2366,6 +2366,38 @@ await test('v1.0.29 removeWorktree unlinks shared junctions first, so the projec
   await integ.removeWorktree(wt, root);
   assert(fs.readFileSync(path.join(root, 'node_modules', 'pkg', 'index.js'), 'utf8') === 'KEEP', 'the project node_modules was emptied through the junction');
   assert(!fs.existsSync(wt), 'the worktree was not removed');
+});
+
+await test('v1.0.30 session merge never drops a commit that lands on the base during the check; plans reject case-only and pattern clashes', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-race '));
+  const main = path.join(base, 'main'); fs.cpSync(sandbox(), main, { recursive: true });
+  // The project's check itself adds a commit to lab while the merge is being checked (as a teammate's push would).
+  fs.writeFileSync(path.join(main, 'race.js'), "const {execFileSync:x}=require('child_process');const g=(...a)=>x('git',['-c','user.name=r','-c','user.email=r@r',...a],{encoding:'utf8'}).trim();if(require('fs').existsSync('one.txt')&&!process.env.RACED){const c=g('commit-tree',g('rev-parse','refs/heads/lab^{tree}'),'-p','refs/heads/lab','-m','landed during the check');g('update-ref','refs/heads/lab',c);}");
+  fs.writeFileSync(path.join(main, 'package.json'), JSON.stringify({ name: 's', private: true, scripts: { test: 'node race.js' } }));
+  const G = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const gitEnv = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+  const S = (cwd, ...a) => node(cwd, ['.harness/sessions.mjs', ...a], { HARNESS_ROOT: cwd, ...gitEnv });
+  G(main, 'init', '-q', '-b', 'lab'); G(main, 'add', '-A'); G(main, 'commit', '-q', '-m', 'one');
+  assert(S(main, 'new', 'one', '--type', 'feat').status === 0, 'new');
+  const wt = path.join(base, 'child'); G(main, 'worktree', 'add', '-q', '-b', 'claude/c1', wt, 'lab');
+  assert(S(wt, 'start', 'FEAT-1').status === 0, 'start');
+  fs.writeFileSync(path.join(wt, 'one.txt'), 'x'); G(wt, 'add', '-A'); G(wt, 'commit', '-q', '-m', 'one');
+  assert(S(wt, 'report', 'FEAT-1', 'done').status === 0, 'done');
+  G(main, 'checkout', '-q', '-b', 'other'); // lab is checked out nowhere: the ref is moved directly
+  const r = S(main, 'merge', 'FEAT-1');
+  const landed = G(main, 'log', '--format=%s', '-1', 'lab');
+  assert(r.status === 1 && /moved while FEAT-1 was being checked/.test(r.stderr) && landed === 'landed during the check', `the concurrent commit was dropped (lab tip: "${landed}"):\n${r.stdout}${r.stderr}`);
+  const again = node(main, ['.harness/sessions.mjs', 'merge', 'FEAT-1'], { HARNESS_ROOT: main, ...gitEnv, RACED: '1' });
+  assert(again.status === 0 && G(main, 'log', '--format=%s', 'lab').includes('landed during the check') && G(main, 'cat-file', '-t', 'lab:one.txt') === 'blob', again.stdout + again.stderr);
+  assert(/branch task\/feat-1-one deleted/.test(again.stdout), 'cleanup should delete the merged branch even when the main folder is on another branch:\n' + again.stdout);
+
+  // Plans: case-only names and patterns are collisions before any worker starts.
+  const d = sandbox();
+  drop(d, { id: 'case', title: 'case', subtasks: [{ id: 'a', targetFiles: ['src/b.js'], prompt: 'WRITE src/b.js a' }, { id: 'b', targetFiles: ['src/B.js'], prompt: 'WRITE src/B.js b' }] });
+  drop(d, { id: 'glob', title: 'glob', subtasks: [{ id: 'a', targetFiles: ['src/*.js'], prompt: 'WRITE src/q.js a' }, { id: 'b', targetFiles: ['src/q.js'], prompt: 'WRITE src/q.js b' }] });
+  runOnce(d);
+  const collisions = log(d).filter((e) => /Swarm Lock Collision/.test(e.message || '')).length;
+  assert(collisions >= 2 && !log(d).some((e) => e.phase === 'ENGINE_SPAWN'), `collisions: ${collisions}; a worker started anyway`);
 });
 
 await test('v1.0.29 session merge guards: no real check refuses; base checked out in another dirty worktree refuses; leftovers stay HIGH RISK; node_modules survives', () => {

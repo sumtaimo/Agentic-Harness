@@ -501,7 +501,9 @@ export function validateDelegation(plan, { leads, delegable, userAllowed = [] })
       for (const [other, by] of claimed) {
         const fDir = f.endsWith('/') || f.endsWith('/**');
         const otherDir = other.endsWith('/') || other.endsWith('/**');
-        const overlaps = strip(f) === strip(other) || strip(f).startsWith(`${strip(other)}/`) || strip(other).startsWith(`${strip(f)}/`) || ((/[*?]/.test(f) || /[*?]/.test(other)) && globsOverlap(f, other));
+        // Without case: src/b.js and src/B.js are one file on Windows and macOS.
+        const lf = strip(f).toLowerCase(); const lo = strip(other).toLowerCase();
+        const overlaps = lf === lo || lf.startsWith(`${lo}/`) || lo.startsWith(`${lf}/`) || ((/[*?]/.test(f) || /[*?]/.test(other)) && globsOverlap(f.toLowerCase(), other.toLowerCase()));
         if (by !== lead.id && overlaps) {
           if (fDir !== otherDir) {
             const file = fDir ? other : f;

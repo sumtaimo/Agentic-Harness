@@ -44,7 +44,7 @@ const highAlwaysAllowed = () => (loadApprovals().alwaysAllow || []).includes('hi
 import {
   readCharter, loadRoles, loadSkills, matchSkills, computeAllowedTools, computeDisallowedTools,
   matchesAny, withinAll, skillRulesNotGranted, readBacklog, writeBacklog, updateBacklogItem, nextReady, backlogCounts, itemToJob,
-  loadTeam, validateTeam, leadOwns, validateDelegation, isTestFilePath, auditPatchSignals, scanPatchSafety
+  loadTeam, validateTeam, leadOwns, validateDelegation, isTestFilePath, auditPatchSignals, scanPatchSafety, globsOverlap
 } from './lib/governance.mjs';
 import {
   isRepoWithCommits, branchSha, ensureBranch, protectedShas, ensureWorkerWorktree, commitScoped,
@@ -825,8 +825,13 @@ function validateSubtasks(subtasks, { source = 'task', allowed = [], requireScop
     }
     for (const f of sub.targetFiles) {
       const key = f.replace(/\/$/, '').replace(/\/\*\*$/, '');
+      // Compared without case: on Windows and macOS src/b.js and src/B.js are the same file (two workers would write it,
+      // and git would keep both names). A pattern (src/*.js) also collides with any file or pattern it can match.
+      const k = key.toLowerCase();
       for (const [other, by] of owner) {
-        if (by !== sub.id && (key === other || key.startsWith(other + '/') || other.startsWith(key + '/'))) {
+        const o = other.toLowerCase();
+        const glob = /[*?]/.test(key) || /[*?]/.test(other);
+        if (by !== sub.id && (k === o || k.startsWith(o + '/') || o.startsWith(k + '/') || (glob && globsOverlap(k, o)))) {
           throw fatal(`Swarm Lock Collision: ${source === 'task' ? '' : `${source} produced overlapping targetFiles — `}'${sub.id}' and '${by}' both claim '${key === other ? key : `${other}' / '${key}`}'. Plan rejected before any worker started.`);
         }
       }

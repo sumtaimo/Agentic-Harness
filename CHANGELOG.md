@@ -10,6 +10,21 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.30 — 2026-11-21
+
+- **Fix (lost commit): `sessions merge` could drop a commit that landed on the base during the check.** When the base
+  branch is not checked out anywhere, its ref was moved with an "expected old value" read again at the end, so a commit
+  pushed or made on the base while the check ran was silently replaced. The merge is now built on the base tip taken at
+  the start and the base moves only if it is still there; otherwise nothing changes and you are told to run it again.
+- **Fix: two workers could own the same file on Windows and macOS.** `src/b.js` and `src/B.js` were different owners
+  for the plan check, but they are one file there. Ownership is now compared without case (workers and leads).
+- **A plan whose pattern (`src/*.js`) overlaps another worker's file is refused before any worker starts**, instead of
+  failing at merge time after the engines were already used.
+- `sessions cleanup` deletes a merged branch even when your main folder is on another branch (it already checks that
+  every commit is in the base), instead of reporting a misleading "NOT deleted … not merged".
+- **Verified on real tools:** a real task (`hello.txt` smoke) committed with Claude Code, Antigravity and Codex.
+- *Affects:* the session board, swarm/team plans on Windows and macOS. *Config / permissions:* none.
+
 ## 1.0.29 — 2026-11-21
 
 - **Fix: one backlog item could run twice.** `backlog.mjs ready`, `reset` and `approve` accepted an item whose job was

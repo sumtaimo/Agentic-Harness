@@ -26,7 +26,7 @@ if (path.resolve(target) === SRC || SRC.startsWith(`${target}${path.sep}`)) { co
 if (fs.existsSync(target) && fs.readdirSync(target).length) {
   if (!force) { console.error(`${target} already exists and is not empty. Use --force to recreate it (only works on a folder made by this script).`); process.exit(1); }
   if (!fs.existsSync(path.join(target, MARK))) { console.error(`${target} was not made by this script, so --force will not delete it.`); process.exit(1); }
-  fs.rmSync(target, { recursive: true, force: true });
+  fs.rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); // OneDrive and antivirus hold files briefly on Windows
 }
 fs.mkdirSync(target, { recursive: true });
 
