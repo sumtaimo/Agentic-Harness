@@ -17,6 +17,7 @@ import {
 helpIfAsked(import.meta.url);
 import { readCharter, readBacklog, backlogCounts, loadRoles, loadTeam, validateTeam, syncAgents } from './lib/governance.mjs';
 import { listVisibleRuns, VISIBLE_TERMINAL, editorDisplayName } from './lib/handoff.mjs';
+import { needsYou, formatNeedsYou } from './lib/waiting.mjs';
 
 const args = process.argv.slice(2);
 const wantJson = args.includes('--json');
@@ -149,6 +150,7 @@ if (wantJson) {
     coreModified,
     stagingLeftovers,
     configError,
+    needsYou: (() => { try { return needsYou(); } catch { return []; } })(),
     ...(logCount > 0 ? { events } : {})
   }, null, 2));
   process.exit(0);
@@ -172,6 +174,7 @@ if (s) {
 }
 console.log(`Inbox: ${inboxCount} waiting | Completed: ${completedCount} | Failed/halted: ${failedCount}`);
 console.log(`Backlog:    READY ${c.READY} | IN_PROGRESS ${c.IN_PROGRESS} | DONE ${c.DONE} | BLOCKED ${c.BLOCKED} | BACKLOG ${c.BACKLOG}`);
+{ let w = []; try { w = needsYou(); } catch (e) { w = [{ kind: 'failed', id: 'backlog', text: `backlog unreadable: ${e.message}`, next: 'node .harness/doctor.mjs' }]; } for (const l of formatNeedsYou(w)) console.log(l); }
 
 const visDiagText = (lv) => {
   if (!lv || lv.passed) return '';

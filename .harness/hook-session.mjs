@@ -100,6 +100,11 @@ try {
       briefLines.push(`- Status: idle, no unfinished editor runs (${taughtCount} taught rule(s), ${autoLessonsCount} auto-lesson(s) in memory)`);
     }
 
+    try {
+      const { needsYou } = await import('./lib/waiting.mjs');
+      const w = needsYou(bl).filter((x) => x.kind === 'feature' || x.kind === 'hunt');
+      if (w.length) briefLines.push(`! Waiting for you: ${w.slice(0, 2).map((x) => `${x.id} (${x.text.slice(0, 60)})`).join('; ')} — node .harness/status.mjs`);
+    } catch { /* the brief must never fail on this */ }
     if (held.length) {
       briefLines.push(`! Needs OK (${held.length} held): ${held.slice(0, 3).map((t) => `${t.id} ("${t.title || t.goal}")`).join(', ')} — approve: node .harness/backlog.mjs approve ${held[0].id}`);
     }
