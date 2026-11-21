@@ -69,10 +69,18 @@ export function linkShared(wtPath, names, root) {
   }
 }
 
+/**
+ * Remove a link (symlink or Windows junction) without touching what it points to. unlinkSync fails with EPERM on a
+ * directory junction on Windows; rmdirSync removes only the junction itself (never the target's contents).
+ */
+export function removeLink(p) {
+  try { if (!fs.lstatSync(p).isSymbolicLink()) return false; } catch { return false; }
+  try { fs.unlinkSync(p); return true; } catch { /* a directory junction */ }
+  try { fs.rmdirSync(p); return true; } catch { return false; }
+}
+
 export function unlinkShared(wtPath, names) {
-  for (const n of names || []) {
-    try { fs.unlinkSync(path.join(wtPath, n)); } catch { /* not linked */ }
-  }
+  for (const n of names || []) removeLink(path.join(wtPath, n));
 }
 
 /** Snapshot of protected branch tips, to prove afterwards that nothing wrote to them. */
@@ -159,6 +167,15 @@ export async function advanceBranch({ branch, newSha, expectedOld, root }) {
 }
 
 export async function removeWorktree(p, root) {
-  if (fs.existsSync(p)) await tryGit(['worktree', 'remove', '--force', p], root);
+  if (!fs.existsSync(p)) return;
+  // Unlink every top-level link first (node_modules and other shared folders are junctions to the PROJECT's own
+  // folders). `git worktree remove --force` on Windows follows a junction and empties the real folder.
+  try {
+    for (const name of fs.readdirSync(p)) {
+      const full = path.join(p, name);
+      removeLink(full);
+    }
+  } catch { /* unreadable: git reports it */ }
+  await tryGit(['worktree', 'remove', '--force', p], root);
 }
 export async function deleteBranch(name, root) { await tryGit(['branch', '-D', name], root); }

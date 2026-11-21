@@ -46,6 +46,8 @@ const COMMANDS: Command[] = [
   { cmd: 'node .harness/status.mjs --log 15', where: 'terminal', key: 'statusCli' },
   { cmd: 'node .harness/memory.mjs remember "<rule>"', where: 'terminal', key: 'remember' },
   { cmd: 'node .harness/memory.mjs context --goal "<goal>" --files "<paths>"', where: 'terminal', key: 'memoryContext' },
+  { cmd: 'node .harness/memory.mjs me set --name "<name>" --language "<language>" --hats "po,qa"', where: 'terminal', key: 'memoryMe' },
+  { cmd: 'node .harness/memory.mjs me share --ask "<topics>" --language --git', where: 'terminal', key: 'memoryShare' },
   { cmd: 'npm run audit', where: 'terminal', key: 'auditCli' },
   { cmd: 'npx github:sumtaimo/Agentic-Harness#release --reset', where: 'terminal', key: 'reset' },
 ];

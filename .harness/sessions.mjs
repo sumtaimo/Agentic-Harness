@@ -25,6 +25,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { ROOT, loadConfig, readJsonSafe, atomicWriteJson, detectVerifyCmd, helpIfAsked, isSecretFile } from './lib/common.mjs';
 import { usableEngines } from './lib/handoff.mjs';
+import { removeLink } from './lib/integration.mjs';
 helpIfAsked(import.meta.url);
 
 const config = (() => { try { return loadConfig(); } catch { return {}; } })();
@@ -125,7 +126,7 @@ function branchCommits(t, info) {
 /** Status of one task, from git. */
 function statusOf(t) {
   if (t.cleanedAt) return { status: 'CLEANED', risk: false, note: `merged and cleaned ${t.cleanedAt.slice(0, 10)}` };
-  if (t.mergedAt) return { status: 'MERGED', risk: false, note: `in ${t.base || baseBranch()}; ready for cleanup` };
+  if (t.mergedAt) return t.cleanupLeftover ? { status: 'MERGED', risk: true, note: `merged into ${t.base || baseBranch()}, but NOT cleaned: ${t.cleanupLeftover}` } : { status: 'MERGED', risk: false, note: `in ${t.base || baseBranch()}; ready for cleanup` };
   const b = branchInfo(t);
   if (!b) {
     const late = hoursAgo(t.createdAt) > S.notStartedHours;
@@ -373,12 +374,20 @@ function cleanup(b, only = null) {
     const base = t.base || baseBranch();
     const tip = gitOk(['rev-parse', '--verify', '-q', `refs/heads/${t.branch}`]);
     if (tip && gitOk(['merge-base', '--is-ancestor', tip, base]) === null) { console.log(`  kept ${t.id}: its branch has commits that are not in ${base}`); continue; }
-    const notes = [];
+    const notes = []; let leftover = false;
     for (const w of worktrees().slice(1).filter((x) => x.branch === t.branch)) {
       const r = spawnSync('git', ['worktree', 'remove', w.path], { cwd: ROOT, encoding: 'utf8' });
+      if (r.status !== 0) leftover = true;
       notes.push(r.status === 0 ? `worktree removed (${w.path})` : `worktree NOT removed (${w.path}): ${(r.stderr || '').trim().split('\n')[0]}; it has changes or is in use, check it and remove it by hand`);
     }
-    if (tip && gitOk(['branch', '-d', t.branch]) !== null) notes.push(`branch ${t.branch} deleted`);
+    if (tip) {
+      if (gitOk(['branch', '-d', t.branch]) !== null) notes.push(`branch ${t.branch} deleted`);
+      else { leftover = true; notes.push(`branch ${t.branch} NOT deleted (still checked out, or not merged)`); }
+    }
+    // Something is left (uncommitted files in its worktree, a branch still in use): keep the task on the board as
+    // HIGH RISK, never hide it as cleaned.
+    if (leftover) { t.cleanupLeftover = notes.join('; '); console.log(`  NOT cleaned ${t.id} (HIGH RISK, work may not be in ${base}): ${notes.join('; ')}`); continue; }
+    delete t.cleanupLeftover;
     if (hasRemote() && gitOk(['rev-parse', '--verify', '-q', `refs/remotes/origin/${t.branch}`])) notes.push(`remote branch kept; with the owner's OK: git push origin --delete ${t.branch}`);
     t.cleanedAt = new Date().toISOString(); n++;
     console.log(`  cleaned ${t.id}: ${notes.join('; ') || 'nothing left to remove'}`);
@@ -486,21 +495,34 @@ switch (cmd) {
       if (m.status !== 0) { failed('a merge conflict', `MERGE CONFLICT: ${t.id} does not merge cleanly into ${base}. Nothing changed. Ask the child session to update its branch from ${base}.\n${(m.stdout + m.stderr).slice(0, 600)}`); }
       else {
         const v = detectVerifyCmd(tmp, config);
+        if (!v.real && !process.argv.includes('--allow-no-check')) {
+          // Not the child's fault: report it without marking the task CHECK FAILED, so it can merge once a check exists.
+          process.exitCode = 1; console.error(`NO REAL CHECK: ${base} has no test or check command, so nothing would check ${t.id} before it lands. Nothing changed. Add a test script, or (owner's choice) run: node .harness/sessions.mjs merge ${t.id} --allow-no-check`);
+          throw Object.assign(new Error('no real check'), { handled: true });
+        }
         const chk = spawnSync(v.cmd, { cwd: tmp, shell: true, encoding: 'utf8', timeout: config.verifyTimeoutMs || 600000 });
         if (chk.status !== 0) failed(`the check (${v.cmd}) failed`, `CHECK FAILED after merging ${t.id} (${v.cmd}). Nothing changed in ${base}. Send this back to the child session:\n${(chk.stdout + chk.stderr).slice(-1500)}`);
         else {
           const sha = git(['rev-parse', 'HEAD'], tmp);
           if (p.branch === base && git(['status', '--porcelain'], p.path)) { console.error(`The main folder (${p.path}) has uncommitted changes on ${base}; commit them first. Nothing changed.`); process.exitCode = 1; }
           else {
+            // The base branch may be checked out in ANOTHER worktree: moving the ref under it would make that folder's
+            // next commit silently undo the merge. Fast-forward it there when it is clean, otherwise refuse.
+            const other = p.branch === base ? null : worktrees().slice(1).find((w) => w.branch === base && fs.existsSync(w.path));
+            if (other && git(['status', '--porcelain'], other.path)) {
+              console.error(`${base} is checked out in ${other.path}, which has uncommitted changes; commit them there first. Nothing changed.`);
+              process.exitCode = 1; throw Object.assign(new Error('dirty base worktree'), { handled: true });
+            }
             if (p.branch === base) git(['merge', '--ff-only', '-q', sha], p.path);
+            else if (other) git(['merge', '--ff-only', '-q', sha], other.path);
             else git(['update-ref', `refs/heads/${base}`, sha, git(['rev-parse', base])]);
             t.mergedAt = new Date().toISOString(); delete t.checkFailed; save(b);
             console.log(`MERGED ${t.id} into ${base} (${sha.slice(0, 7)}); check passed: ${v.cmd}${v.real ? '' : ' (WARNING: not a real check)'}`);
           }
         }
       }
-    } finally {
-      for (const d of links) { try { fs.unlinkSync(path.join(tmp, d)); } catch { /* not linked */ } }
+    } catch (e) { if (!e.handled) throw e; } finally {
+      for (const d of links) removeLink(path.join(tmp, d)); // never let `worktree remove --force` follow a junction into the project
       gitOk(['worktree', 'remove', '--force', tmp]); gitOk(['worktree', 'prune']);
     }
     if (t.mergedAt) cleanup(load(), t.id);

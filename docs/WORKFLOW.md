@@ -73,7 +73,10 @@ their own worktrees, local or cloud. The board is `node .harness/sessions.mjs bo
 - The child reports done through git (`sessions.mjs report <ID> done`), so Session A sees it locally or after a push.
 - **WIP checkpoint & cross-engine handoff:** if a child stalls or switches tools mid-task, save uncommitted work on the child branch without marking it done (`node .harness/sessions.mjs checkpoint <ID> [--message "…"]`; any `Harness-Wip` commit newer than `Harness-Session` keeps/returns the task to `WORKING` until reported done again), inspect commits, dirty files, check command, and ready engines with `node .harness/sessions.mjs handoff [ID] [--checkpoint] [--prompt|--json]`, or finish the task headlessly inside its worktree via `node .harness/dispatch.mjs --cwd <worktree> --goal "…" --wait` (cannot combine `--cwd` with `--branch` or `--resume-visible`).
 - **Merging needs your yes.** `sessions.mjs merge <ID>` merges in a temporary worktree and runs the check first; only
-  then does the base branch move. Then that child's worktree and branch are removed automatically.
+  then does the base branch move. With no real test or check command it refuses (the owner may add
+  `--allow-no-check`). When the base branch is checked out in another worktree, that worktree is fast-forwarded too (or
+  the merge is refused while it has uncommitted changes). Then that child's worktree and branch are removed; if anything
+  is left (uncommitted files, a branch in use), the task stays on the board as HIGH RISK instead.
 - **Nothing unfinished is ever deleted.** A child idle for 24 h, a failed check, or a task never started is shown as
   **HIGH RISK** on the board and at every session start, until you decide.
 

@@ -10,6 +10,34 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.29 — 2026-11-21
+
+- **Fix: one backlog item could run twice.** `backlog.mjs ready`, `reset` and `approve` accepted an item whose job was
+  still queued or running, so `pop` (or autopilot) queued the same task again; `done` could close an item that was
+  still running. They now refuse while the item has a queued or running job, and reopening a DONE item needs
+  `--force`. `block` always works, and a stale IN_PROGRESS item (its daemon died, nothing queued) can still be reset.
+- **Fix (judge gate): a quoted "APPROVE" could override the judge's real "NEEDS_FIX".** Only the last JSON block of a
+  review was read, so an approval quoted from the diff under review (or the template) after the real verdict won. A
+  review with more than one different verdict is now never an approval.
+- **Injection scan:** text hidden with zero-width characters or full-width letters is caught (it is normalised first),
+  as is "forget everything above". Fewer false alarms on normal task text: "you are now able to…", `.env.example`,
+  and "tokens" that are not credentials. New cases are in `test/evals/golden.json`.
+- `team.mjs`: a broken `team.json` is reported as invalid JSON (with the position), no longer as "not found, copy it
+  from the template".
+- **Fix (data loss, Windows): every `uat`-mode task emptied your `node_modules`.** Worker worktrees get a junction to
+  the project's `node_modules`; removing the worktree with `git worktree remove --force` followed the junction and
+  deleted the real folder's contents (on a passing task too). Every worktree removal now unlinks its links first, and a
+  Windows directory junction is removed as a link (it never touches the target).
+- **Fix: `sessions merge` could make another folder silently undo the merge.** When the base branch was checked out in
+  another worktree, its ref was moved underneath it, so that folder's next commit reverted the merge. The merge now
+  fast-forwards that worktree when it is clean, and refuses (changing nothing) when it has uncommitted changes.
+- **Fix: a merged task with leftovers was hidden.** If its worktree had uncommitted files or its branch could not be
+  deleted, the task was still marked cleaned and vanished from the board. It now stays on the board as MERGED,
+  HIGH RISK, with what is left.
+- **`sessions merge` needs a real check.** With no test or check command nothing would check the merge; it is refused
+  (nothing changes, the task is not marked failed) unless the owner adds `--allow-no-check`.
+- *Affects:* everyone using the backlog, autopilot, the judge gate, `uat` mode (Windows) or the session board. *Config / permissions:* none.
+
 ## 1.0.28 — 2026-11-21
 
 - **Fix (data loss): git worktree mode could overwrite your uncommitted work.** A worktree starts from the last commit,

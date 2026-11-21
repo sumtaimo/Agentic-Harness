@@ -30,7 +30,16 @@ import { readCharter, loadRoles, loadTeam, validateTeam, describeMember, syncAge
 ensureDirs();
 const cmd = process.argv[2] || 'show';
 const team = loadTeam();
-if (!team) { console.error('No .harness/team.json found. Copy it from the template to use the team hierarchy.'); process.exit(1); }
+if (!team) {
+  // A broken file is not a missing one: never send the person to overwrite their team with the template's.
+  const f = path.join(HARNESS_DIR, 'team.json');
+  if (fs.existsSync(f)) {
+    let why = 'it is not a JSON object';
+    try { JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { why = e.message; }
+    console.error(`.harness/team.json is not valid JSON (${why}). Fix that line; your team is still in the file (git diff .harness/team.json shows what changed).`);
+  } else console.error('No .harness/team.json found. Copy it from the template to use the team hierarchy.');
+  process.exit(1);
+}
 const config = loadConfig();
 const roles = loadRoles();
 const charter = readCharter();

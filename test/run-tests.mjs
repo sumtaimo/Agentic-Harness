@@ -260,6 +260,25 @@ await test('v1.0.28 git worktree mode: uncommitted edits in a scoped file stop t
   assert(fs.readFileSync(path.join(d, 'a.txt'), 'utf8') === 'FROM THE WORKER', 'a clean scope should run normally');
 });
 
+await test('v1.0.29 backlog: an item whose job is queued cannot be queued again or closed; DONE reopens only with --force; a stale item can still be reset', () => {
+  const d = sandbox();
+  fs.writeFileSync(path.join(d, '.harness', 'backlog.json'), JSON.stringify({ version: '2.0.0', project: '', maxAutoTasksPerRun: 3, tasks: [{ id: 'X1', title: 't', status: 'READY', verifyCmd: 'node -e 0' }] }, null, 2));
+  const bl = (...a) => node(d, ['.harness/backlog.mjs', ...a]);
+  const inbox = () => fs.readdirSync(path.join(d, '.harness', 'inbox')).filter((f) => f.startsWith('X1-'));
+  assert(bl('pop').status === 0 && inbox().length === 1, 'pop');
+  const again = bl('ready', 'X1');
+  assert(again.status === 1 && /run the same task twice/.test(again.stderr), again.stderr);
+  assert(bl('pop').status === 0 && inbox().length === 1, 'the same item was queued twice');
+  assert(bl('done', 'X1', 'by hand').status === 1 && bl('approve', 'X1').status === 1, 'closing or approving a queued item was allowed');
+  assert(bl('block', 'X1', 'wait').status === 0, 'block must always work');
+  for (const f of inbox()) fs.rmSync(path.join(d, '.harness', 'inbox', f)); // its daemon died: a stale item
+  assert(bl('reset', 'X1').status === 0, 'a stale item could not be reset');
+  assert(bl('done', 'X1', 'by hand').status === 0, 'done');
+  const reopen = bl('ready', 'X1');
+  assert(reopen.status === 1 && /already DONE/.test(reopen.stderr), reopen.stderr);
+  assert(bl('ready', 'X1', '--force').status === 0, '--force reopens');
+});
+
 await test('dispatch --wait with no daemon running processes the job and reports COMMITTED', () => {
   const d = sandbox();
   const r = node(d, ['.harness/dispatch.mjs', '--goal', 'WRITE hello.txt hi', '--files', 'hello.txt', '--check', 'node -e "process.exit(require(\'fs\').existsSync(\'hello.txt\')?0:1)"', '--wait']);
@@ -2334,6 +2353,64 @@ await test('the installer never installs into a copy of the template (clone, wor
   const r = spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), copy], { encoding: 'utf8' });
   assert(r.status === 1 && /copy of the harness template/.test(r.stderr), `exit ${r.status}: ${r.stdout}${r.stderr}`);
   assert(!fs.existsSync(path.join(copy, '.harness')) && fs.readFileSync(path.join(copy, 'AGENTS.md'), 'utf8') === before, 'nothing may be written into a template copy');
+});
+
+await test('v1.0.29 removeWorktree unlinks shared junctions first, so the project\'s node_modules is never emptied', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-junction '));
+  const root = path.join(base, 'root'); const wt = path.join(base, 'w t');
+  fs.mkdirSync(path.join(root, 'node_modules', 'pkg'), { recursive: true }); fs.writeFileSync(path.join(root, 'node_modules', 'pkg', 'index.js'), 'KEEP');
+  const G = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: root, stdio: 'pipe' });
+  G('init', '-q'); G('commit', '-q', '--allow-empty', '-m', 'i'); G('worktree', 'add', '-q', '--detach', wt);
+  try { fs.symlinkSync(path.join(root, 'node_modules'), path.join(wt, 'node_modules'), 'junction'); } catch { return; } // no link right: nothing to check
+  const integ = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'integration.mjs')).href);
+  await integ.removeWorktree(wt, root);
+  assert(fs.readFileSync(path.join(root, 'node_modules', 'pkg', 'index.js'), 'utf8') === 'KEEP', 'the project node_modules was emptied through the junction');
+  assert(!fs.existsSync(wt), 'the worktree was not removed');
+});
+
+await test('v1.0.29 session merge guards: no real check refuses; base checked out in another dirty worktree refuses; leftovers stay HIGH RISK; node_modules survives', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-sess guard-'));
+  const main = path.join(base, 'main'); fs.cpSync(sandbox(), main, { recursive: true });
+  fs.mkdirSync(path.join(main, 'node_modules', 'pkg'), { recursive: true }); fs.writeFileSync(path.join(main, 'node_modules', 'pkg', 'index.js'), 'KEEP');
+  fs.writeFileSync(path.join(main, '.gitignore'), 'node_modules/\n');
+  const G = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const gitEnv = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+  const S = (cwd, ...a) => node(cwd, ['.harness/sessions.mjs', ...a], { HARNESS_ROOT: cwd, ...gitEnv });
+  G(main, 'init', '-q', '-b', 'lab'); G(main, 'add', '-A'); G(main, 'commit', '-q', '-m', 'one');
+  const child = (id, title, file) => {
+    assert(S(main, 'new', title, '--type', 'feat').status === 0, 'new');
+    const wt = path.join(base, `child ${id}`); G(main, 'worktree', 'add', '-q', '-b', `claude/c${id}`, wt, 'lab');
+    assert(S(wt, 'start', `FEAT-${id}`).status === 0, 'start');
+    fs.writeFileSync(path.join(wt, file), 'x'); G(wt, 'add', '-A'); G(wt, 'commit', '-q', '-m', file);
+    assert(S(wt, 'report', `FEAT-${id}`, 'done').status === 0, 'done');
+    return wt;
+  };
+  // 1. No test script: nothing would check the merge, so it is refused (the owner may override).
+  child(1, 'one', 'one.txt');
+  const labBefore = G(main, 'rev-parse', 'lab');
+  const noCheck = S(main, 'merge', 'FEAT-1');
+  assert(noCheck.status === 1 && /NO REAL CHECK/.test(noCheck.stderr) && G(main, 'rev-parse', 'lab') === labBefore, noCheck.stdout + noCheck.stderr);
+  assert(fs.readFileSync(path.join(main, 'node_modules', 'pkg', 'index.js'), 'utf8') === 'KEEP', 'node_modules emptied by the merge worktree');
+  fs.writeFileSync(path.join(main, 'package.json'), JSON.stringify({ name: 's', private: true, scripts: { test: 'node -e 0' } }));
+  G(main, 'add', '-A'); G(main, 'commit', '-q', '-m', 'test script');
+  // 2. lab checked out in ANOTHER worktree with uncommitted changes, the main folder on another branch: refused.
+  G(main, 'checkout', '-q', '-b', 'other');
+  const labWt = path.join(base, 'lab wt'); G(main, 'worktree', 'add', '-q', labWt, 'lab');
+  fs.writeFileSync(path.join(labWt, 'README.md'), 'my edit');
+  const dirty = S(main, 'merge', 'FEAT-1');
+  assert(dirty.status === 1 && /checked out in .*uncommitted changes/.test(dirty.stderr) && G(labWt, 'rev-parse', 'HEAD') === G(main, 'rev-parse', 'lab'), dirty.stdout + dirty.stderr);
+  // Clean there: it is fast-forwarded in that worktree, so the merged file is really there (not a silent revert).
+  fs.rmSync(path.join(labWt, 'README.md'));
+  const ok = S(main, 'merge', 'FEAT-1');
+  assert(ok.status === 0 && fs.existsSync(path.join(labWt, 'one.txt')) && G(labWt, 'status', '--porcelain') === '', ok.stdout + ok.stderr);
+  // 3. Leftovers after a merge (uncommitted file in the child worktree) keep the task visible as HIGH RISK.
+  const wt2 = child(2, 'two', 'two.txt');
+  fs.writeFileSync(path.join(wt2, 'late.txt'), 'not committed');
+  G(labWt, 'checkout', '-q', '--detach');
+  const m2 = S(main, 'merge', 'FEAT-2');
+  assert(m2.status === 0 && /NOT cleaned FEAT-2 \(HIGH RISK/.test(m2.stdout), m2.stdout + m2.stderr);
+  assert(/FEAT-2 +MERGED/.test(S(main, 'board').stdout) && fs.existsSync(path.join(wt2, 'late.txt')), 'a merged task with leftovers was hidden or its work deleted');
+  assert(fs.readFileSync(path.join(main, 'node_modules', 'pkg', 'index.js'), 'utf8') === 'KEEP', 'node_modules emptied');
 });
 
 await test('session board: Session A runs child tasks (max 4) with clear names; DONE → check → merge → worktree + branch removed; unfinished work is never deleted, only flagged HIGH RISK', () => {
