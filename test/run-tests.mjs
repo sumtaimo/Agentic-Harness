@@ -225,6 +225,22 @@ await test('git worktree isolation: in-scope edits copied back, out-of-scope edi
   assert(git('worktree', 'list').toString().trim().split('\n').length === 1, 'worktree not cleaned up');
 });
 
+await test('v1.0.27 git worktree mode: a failed check restores the folder (worker results were copied in before the check)', () => {
+  const d = sandbox({ worktrees: true });
+  const git = (...a) => execFileSync('git', a, { cwd: d, stdio: 'pipe' });
+  fs.writeFileSync(path.join(d, 'a.txt'), 'ORIGINAL');
+  fs.mkdirSync(path.join(d, 'src')); fs.writeFileSync(path.join(d, 'src', 'keep.txt'), 'KEEP');
+  git('init', '-q'); git('add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+  drop(d, { id: 'wtfail', title: 'wtfail', verifyCmd: 'node -e "process.exit(1)"', subtasks: [
+    { id: 'w1', targetFiles: ['a.txt', 'new.txt'], prompt: 'WRITE a.txt BROKEN\nWRITE new.txt CREATED' },
+    { id: 'w2', targetFiles: ['src/'], prompt: 'WRITE src/keep.txt BROKEN\nWRITE src/extra.txt EXTRA' }] });
+  runOnce(d);
+  assert(json(path.join(d, '.harness', 'state.json')).phase === 'HALTED_HITL_REQUIRED', 'not halted');
+  assert(fs.readFileSync(path.join(d, 'a.txt'), 'utf8') === 'ORIGINAL' && fs.readFileSync(path.join(d, 'src', 'keep.txt'), 'utf8') === 'KEEP', 'edited files not restored in worktree mode');
+  assert(!fs.existsSync(path.join(d, 'new.txt')) && !fs.existsSync(path.join(d, 'src', 'extra.txt')), 'created files left behind in worktree mode');
+  assert(git('worktree', 'list').toString().trim().split('\n').length === 1, 'worktree not cleaned up');
+});
+
 await test('dispatch --wait with no daemon running processes the job and reports COMMITTED', () => {
   const d = sandbox();
   const r = node(d, ['.harness/dispatch.mjs', '--goal', 'WRITE hello.txt hi', '--files', 'hello.txt', '--check', 'node -e "process.exit(require(\'fs\').existsSync(\'hello.txt\')?0:1)"', '--wait']);

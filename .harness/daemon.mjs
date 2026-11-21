@@ -647,9 +647,12 @@ async function syncWorktree(wtPath, sub, destRoot = ROOT, scopeFn = inScope, tas
 
 // ───────────────────────────── staging backup + rollback ─────────────────────────────
 
-/** Back up every scoped target before Node 2 runs (only when worktrees are off). */
+/**
+ * Back up every scoped target before Node 2 runs. Also in worktree mode: each worker's result is copied into the folder
+ * as soon as it finishes (before the check), so a failed check or a failed sibling worker must be able to restore it.
+ */
 function backupScope(plan, workRoot = ROOT) {
-  if (config.useGitWorktrees || config.rollbackOnFailure === false) return null;
+  if (config.rollbackOnFailure === false) return null;
   const aiWorkers = plan.subtasks.filter((s) => s.prompt);
   if (!aiWorkers.length) return null;
   if (aiWorkers.some((s) => s.targetFiles.length === 0)) {
@@ -2028,7 +2031,18 @@ if (selfTestMode) {
     console.log(`Another harness daemon is already running for this folder (PID ${other}). Not starting a second one.`);
     process.exit(0);
   }
-  fs.writeFileSync(FILES.pid, String(process.pid));
+  // Claim the pid file atomically ('wx' fails if it exists), so two daemons started at the same instant cannot both
+  // pass the check above. A file left by a dead daemon (checked above) is removed and the claim tried once more.
+  const claim = () => { const fd = fs.openSync(FILES.pid, 'wx'); fs.writeSync(fd, String(process.pid)); fs.closeSync(fd); };
+  try { claim(); } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    const winner = daemonAlive();
+    if (winner) { console.log(`Another harness daemon is already running for this folder (PID ${winner}). Not starting a second one.`); process.exit(0); }
+    try { fs.rmSync(FILES.pid, { force: true }); claim(); } catch (e2) {
+      if (e2.code !== 'EEXIST') throw e2;
+      console.log('Another harness daemon started at the same moment. Not starting a second one.'); process.exit(0);
+    }
+  }
   ownsState = true;
   try { fs.writeFileSync(FILES.live, ''); } catch { /* ignore */ }
   const cleanup = () => {

@@ -10,6 +10,20 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.27 — 2026-11-21
+
+- **Fix (data loss): git worktree mode never rolled back a failed task.** With `useGitWorktrees: true` each worker's
+  result is copied into your folder as soon as it finishes, before the check runs, but no backup was taken in that mode.
+  A check that failed 3 times, or a failed sibling worker, left half-done work in the folder after
+  `HALTED_HITL_REQUIRED`. The scoped files are now backed up in worktree mode too and restored on failure.
+- **Fix: two daemons started at the same instant could both run.** The pid file is now claimed atomically; a pid file
+  left by a dead daemon is cleared and the claim retried once.
+- **`--cwd` with `--branch` or `--resume-visible` is always refused**, also for `--cwd .`, as the help says (it was
+  silently ignored when `--cwd` named the project itself).
+- Checked and found correct: Node 18.0 compatibility of every script (no newer APIs used), swarm rollback of several
+  workers with folders and paths with spaces, worktree clean-up, resume refusals for finished runs.
+- *Affects:* projects with `useGitWorktrees: true`, and anyone starting the daemon twice. *Config / permissions:* none.
+
 ## 1.0.26 — 2026-11-21
 
 - **One job per file, nothing twice.** `profile.md` now describes only the **project** (what it is, who it is for,

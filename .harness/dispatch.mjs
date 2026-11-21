@@ -156,11 +156,11 @@ if (cwdArg !== undefined) {
   }
 }
 const hasExternalCwd = !isSameDir(workRoot, ROOT);
-if (hasExternalCwd && branch) {
+if (cwdArg !== undefined && branch) { // also for --cwd . : the help promises a refusal, and a silent no-op hides a mistake
   console.error('Cannot combine --cwd with --branch (the external worktree already defines its own branch).');
   process.exit(1);
 }
-if (hasExternalCwd && resumeVisible) {
+if (cwdArg !== undefined && resumeVisible) {
   console.error('Cannot combine --cwd with --resume-visible (visible runs always target the main project root).');
   process.exit(1);
 }
