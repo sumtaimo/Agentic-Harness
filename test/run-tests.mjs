@@ -1104,6 +1104,18 @@ await test('--status prints the harness status (read-only alias for status.mjs)'
   assert(r.status === 0 && /Daemon:/.test(r.stdout) && /Backlog:/.test(r.stdout) && /Autonomous:/.test(r.stdout), r.stdout + r.stderr);
 });
 
+await test('status --full merges status, recent events, doctor, usage and team into one command; plain status and --json are unchanged', () => {
+  const d = sandbox();
+  runOnce(d);
+  const full = node(d, ['.harness/status.mjs', '--full']);
+  const out = full.stdout + full.stderr;
+  assert(full.status === 0 && /Backlog:/.test(out) && /Last 15 events/.test(out) && /── Setup check \(doctor\) ──/.test(out) && /── Usage ──/.test(out) && /── Team ──/.test(out), out);
+  const plain = node(d, ['.harness/status.mjs']);
+  assert(plain.status === 0 && !/── Setup check/.test(plain.stdout), 'plain status must not run doctor');
+  const json = node(d, ['.harness/status.mjs', '--json', '--full']);
+  assert(json.status === 0 && JSON.parse(json.stdout) && !/──/.test(json.stdout), '--json must stay pure JSON');
+});
+
 
 // ───────────── v2.3: editor integration (live feed, watch, session hook, worker guards) ─────────────
 

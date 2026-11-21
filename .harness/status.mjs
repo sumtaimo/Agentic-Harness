@@ -4,6 +4,7 @@
  *   node .harness/status.mjs          one-shot summary (works even before daemon starts)
  *   node .harness/status.mjs --log 20 also print the last 20 telemetry events
  *   node .harness/status.mjs --json   print collected status summary as JSON
+ *   node .harness/status.mjs --full   everything in one go: status + last 15 events, then doctor, usage and team
  */
 
 import fs from 'node:fs';
@@ -19,8 +20,9 @@ import { listVisibleRuns, VISIBLE_TERMINAL, editorDisplayName } from './lib/hand
 
 const args = process.argv.slice(2);
 const wantJson = args.includes('--json');
+const wantFull = args.includes('--full') && !wantJson;
 
-let logCount = 0;
+let logCount = wantFull ? 15 : 0;
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === '--log' || a.startsWith('--log=')) {
@@ -217,5 +219,14 @@ if (logCount > 0 && fs.existsSync(FILES.log)) {
     const tsStr = typeof e.ts === 'string' && e.ts.length >= 19 ? e.ts.slice(11, 19) : '??:??:??';
     const phStr = String(e.phase || '-').padEnd(20);
     console.log(`  ${tsStr}  ${phStr} ${String(e.message || '').replace(/\s+/g, ' ').slice(0, 110)}`);
+  }
+}
+
+// --full: one command instead of four (status, doctor, usage, team show). Each part still works on its own.
+if (wantFull) {
+  for (const [title, script, extra] of [['Setup check (doctor)', 'doctor.mjs', []], ['Usage', 'usage.mjs', []], ['Team', 'team.mjs', ['show']]]) {
+    console.log(`\n── ${title} ──`);
+    try { execFileSync(process.execPath, [path.join(HARNESS_DIR, script), ...extra], { cwd: ROOT, stdio: 'inherit', timeout: 120000 }); }
+    catch (e) { console.log(`! ${script} exited with ${e.status ?? e.message}`); }
   }
 }

@@ -10,6 +10,15 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.35 — 2026-11-21
+
+- **Remember only five commands.** `npm start`, `npm run run`, `npm run auto`, `npm run status -- --full` and
+  `npm run ui` reach everything. Nothing was removed or renamed: every command, alias (`normal`, `autopilot`), slash
+  command and VS Code task works as before.
+- **New `status --full`:** status and the last 15 events, then `doctor`, `usage` and `team show` in one go (one
+  command instead of four). `/harness:status` uses it when you ask about your setup, health, usage or the team.
+- *Affects:* nobody's existing scripts. *Config:* none.
+
 ## 1.0.34 — 2026-11-21
 
 - **New optional MCP preset `playwright`** in `.harness/mcp.json` (`@playwright/mcp@0.0.84`, pinned, `--headless
