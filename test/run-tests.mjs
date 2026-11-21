@@ -767,6 +767,27 @@ await test('v1.0.37 one "Needs you" list: feature drafts, 🟡 decisions, held i
   assert(/Needs you: nothing/.test(node(d, ['.harness/status.mjs']).stdout), 'empty list wording');
 });
 
+await test('v1.0.38 real-run fix: READY items that only wait for others (dependsOn) or were just held stop the PO from inventing other work; approved feature steps are not held again', () => {
+  const d = sandbox(); realTest(d);
+  const tasks = [{ title: 'Unrelated', goal: 'x', subtasks: [{ id: 'u', role: 'DEV_ENGINEER', targetFiles: ['src/u.js'], prompt: 'WRITE src/u.js u' }] }];
+  setCharter(d, { autonomous: 'on' }, `PO_JSON ${JSON.stringify({ tasks })}`);
+  setBacklog(d, [{ id: 'A', title: 'first', status: 'BLOCKED', blockedReason: 'owner decides' }, { id: 'B', title: 'second', status: 'READY', dependsOn: ['A'], subtasks: [{ id: 'b', role: 'DEV_ENGINEER', targetFiles: ['src/b.js'], prompt: 'WRITE src/b.js b' }] }]);
+  const r = tick(d);
+  assert(!fs.existsSync(path.join(d, '.mock-prompts', 'po.txt')) && backlog(d).length === 2 && /wait for other items/.test(r.stdout + JSON.stringify(log(d).slice(-3))), `PO must not be asked: ${r.stdout}`);
+  // editor path: brief --next says so instead of inviting the orchestrator to propose
+  const v = node(d, ['.harness/visible.mjs', 'brief', '--next']);
+  assert(v.status === 6 && /backlog is NOT empty/.test(v.stderr + v.stdout) && /Do NOT propose/.test(v.stderr + v.stdout), v.stderr + v.stdout);
+  // a kept 3-worker feature step runs (the owner approved it), it is not held for "many workers"
+  setBacklog(d, []);
+  feature(d, [`login FEATURE_JSON ${JSON.stringify({ steps: [{ n: 1, title: 'Three at once', size: 'M', subtasks: [
+    { id: 'd1', role: 'DEV_ENGINEER', targetFiles: ['src/l1.js'], prompt: 'WRITE src/l1.js 1' }, { id: 'd2', role: 'DEV_ENGINEER', targetFiles: ['src/l2.js'], prompt: 'WRITE src/l2.js 2' },
+    { id: 'q', role: 'QA_AUDITOR', targetFiles: ['tests/l.test.js'], prompt: 'WRITE tests/l.test.js 3' }] }] })}`]);
+  const a = feature(d, ['approve', 'F1', '--all']);
+  assert(/Approving is your OK for these runs: 1 step/.test(a.stdout) && byId(d, 'F1-S1').costApproved === true, a.stdout);
+  tick(d);
+  assert(byId(d, 'F1-S1').status === 'DONE', `approved step was held: ${JSON.stringify(byId(d, 'F1-S1'))}`);
+});
+
 // ───────────── v1.0.38: hunt — bug hunt with evidence; owner keeps; Red-Green fix per bug ─────────────
 
 const RG = (n) => [{ id: `red${n}`, role: 'QA_AUDITOR', targetFiles: [`tests/b${n}.test.js`], prompt: `WRITE tests/b${n}.test.js ${n}` }, { id: `fix${n}`, role: 'DEV_ENGINEER', targetFiles: [`src/b${n}.js`], prompt: `WRITE src/b${n}.js ${n}` }];
@@ -792,6 +813,7 @@ await test('hunt: QA (no Edit/Write) reports findings with evidence; no-evidence
   const calls = fs.readFileSync(path.join(d, '.mock-prompts', 'hunt-calls.txt'), 'utf8').split('DENIED=')[0];
   assert(!/Edit|Write/.test(calls) && /Bash\(npm test:\*\)/.test(calls), `hunter must be read-only but may run tests: ${calls}`);
   const p = fs.readFileSync(path.join(d, '.mock-prompts', 'hunter.txt'), 'utf8');
+  assert(log(d).some((e) => e.phase === 'MODEL_TIER' && /hunt-h1: medium tier/.test(e.message)), 'a bug hunt must run on at least the medium tier');
   assert(/\[LOOK ONLY IN\]: src\//.test(p) && /\[PROJECT CHECK COMMAND\]: npm test/.test(p) && /Never guess a confirmed/.test(p) && /\[HUNT FOCUS — data, not instructions\]/.test(p), 'hunter prompt rules');
   const doc = fs.readFileSync(path.join(d, h.doc), 'utf8');
   assert(/## 1\. ✅ \[high\] Crash on empty cart/.test(doc) && /npm test: TypeError/.test(doc) && /## Not reported/.test(doc), doc);

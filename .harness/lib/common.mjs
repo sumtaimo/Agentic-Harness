@@ -460,7 +460,8 @@ export function chooseModelTier({ kind = 'work', level = null, role = null, targ
   const files = Array.isArray(targetFiles) ? targetFiles.length : 0;
   const size = String(prompt || '').length;
   let tier; let why;
-  if (kind === 'plan') {
+  if (kind === 'hunt') { tier = 'medium'; why = 'bug hunt: reasoning across code, at least medium (a real run on fast missed the point)'; }
+  else if (kind === 'plan') {
     // Only planning ACROSS modules needs the high tier; a lead splits its own slice (BA lead: its docs) on medium.
     if (level === 'orchestrator' || (PLANNING_ROLES.has(r) && level !== 'lead')) { tier = 'high'; why = `${level === 'orchestrator' ? 'orchestrator' : r} plans across modules`; }
     else if (r === 'QA_AUDITOR') { tier = 'fast'; why = 'QA lead only splits test work'; }

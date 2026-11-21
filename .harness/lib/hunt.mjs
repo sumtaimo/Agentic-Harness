@@ -146,6 +146,7 @@ export function approveHunt(id, keepSpec) {
     return {
       id: `${h.id}-B${n}`, hunt: h.id, bugfix: true, title: `🐞 ${f.title}`.slice(0, 200), priority: sevPrio + n / 100,
       status: 'READY', source: 'HUNT', createdAt: stamp,
+      costApproved: true, // the owner kept this step after seeing its workers in the draft: that is their OK for the run
       goal: [`Bug fix (${h.id} #${n}, ${f.severity}, ${f.confidence}): ${f.title}`, `Where: ${f.file}${f.line ? `:${f.line}` : ''}`,
         f.repro && `Repro: ${f.repro}`, f.expected && `Expected: ${f.expected}`, f.actual && `Actual: ${f.actual}`, `Evidence: ${f.evidence}`,
         'Red-Green: QA_AUDITOR writes a test that fails because of this bug; DEV fixes the ROOT CAUSE so it passes. Report Symptom / Root Cause / Blast Radius. Never weaken, skip or special-case a test; if the bug cannot be reproduced, say so instead of changing code.',
@@ -159,6 +160,7 @@ export function approveHunt(id, keepSpec) {
   Object.assign(h, { status: 'APPROVED', kept, approvedAt: stamp, taskIds: added.map((t) => t.id) });
   writeBacklog(b);
   try { writeHuntDoc(h); } catch (e) { warnings.push(`Report page not updated: ${e.message}`); }
+  warnings.push(`Approving is your OK for these runs: each fix uses ${added.length === 1 ? 'its' : 'their'} QA + DEV workers at once and will not be held again.`);
   return { hunt: h, added, warnings };
 }
 

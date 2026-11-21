@@ -23,6 +23,13 @@ the entries newer than the version you had.
   most severe first, fixed Red-Green by autopilot on `uat` (QA writes a test that fails because of the bug, DEV fixes
   the root cause, report Symptom / Root Cause / Blast Radius, no weakened tests). Keeping a 🟡 suspect is warned.
 - A backlog item's `"bugfix": true` now reaches headless jobs too (it already reached editor briefs).
+- **Fixed in a real trial run (Claude, demo project):**
+  - **Autopilot planned unrelated work** while feature steps were READY but waiting for an earlier step (or were just
+    held for your OK): the PO invented two new tasks. Now autopilot reports "waiting" and plans nothing; `visible.mjs
+    brief --next` says "the backlog is NOT empty — do not propose" (`/harness:auto` follows it).
+  - **Approved feature steps and bug fixes were held again** for "several workers at once". Approving them after
+    seeing their workers is your OK for those runs; `approve` says so.
+  - **The bug hunt ran on the smallest model.** It now runs on at least the medium tier.
 - *Affects:* nobody until you use it. *Config:* none. Hunts are stored in `backlog.json` under `"hunts"`. New command
   `/harness:hunt` and script `npm run hunt`.
 

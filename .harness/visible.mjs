@@ -226,7 +226,11 @@ function brief() {
       held.push(`${item.id} ("${item.title || item.goal}")`);
     }
     if (held.length) console.log(`HELD for the human's OK (big runs; tell the user, approve only after a clear yes): ${held.join(', ')}. Approve one with: node .harness/backlog.mjs approve <id>`);
-    if (!item) die('Nothing is READY in the backlog.', 6);
+    if (!item) {
+      const waiting = readBacklog().tasks.filter((t) => t.status === 'READY');
+      if (waiting.length || held.length) die(`Nothing can start now, but the backlog is NOT empty: ${waiting.length ? `${waiting.length} READY item(s) wait for other items (${waiting.slice(0, 3).map((t) => `${t.id} after ${(t.dependsOn || []).join('+')}`).join(', ')})` : ''}${waiting.length && held.length ? '; ' : ''}${held.length ? `${held.length} held for the human's OK` : ''}. Do NOT propose new tasks: report to the human.`, 6);
+      die('Nothing is READY in the backlog.', 6);
+    }
   }
   if (itemArg) { item = readBacklog().tasks.find((t) => t.id === itemArg); if (!item) die(`No backlog item ${itemArg}.`); if (item.status !== 'READY') die(`Backlog item ${item.id} is ${item.status}, not READY.`); }
 

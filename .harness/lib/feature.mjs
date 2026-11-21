@@ -196,6 +196,7 @@ export function approveFeature(id, keepSpec) {
     added.push({
       id: idOf(n), feature: f.id, ...(s.journey ? { journey: true } : {}), title: `${f.id} · ${s.title}`.slice(0, 200), priority: 50 + n, // after hand-set priorities, in journey order
       status: 'READY', source: 'FEATURE', createdAt: stamp,
+      costApproved: true, // the owner kept this step after seeing its workers in the draft: that is their OK for the run
       goal: [`Feature ${f.id} "${f.goal}", step ${n} of ${f.steps.length}: ${s.title}.`, s.userAction && `User: ${s.userAction}`,
         s.states.length && `Screen states to handle: ${s.states.join(', ')}.`, s.validation.length && `Validation: ${s.validation.join('; ')}.`,
         s.reload && `Reload/refresh: ${s.reload}`, s.permissions && `Permissions: ${s.permissions}`,
@@ -210,6 +211,8 @@ export function approveFeature(id, keepSpec) {
   Object.assign(f, { status: 'APPROVED', kept, approvedAt: stamp, taskIds: added.map((t) => t.id) });
   writeBacklog(b);
   try { writeFeatureDoc(f); } catch (e) { warnings.push(`Spec page not updated: ${e.message}`); }
+  const multi = added.filter((t) => t.subtasks.length > 1).length;
+  if (multi) warnings.push(`Approving is your OK for these runs: ${multi} step(s) use several workers at once and will not be held again.`);
   return { feature: f, added, warnings };
 }
 

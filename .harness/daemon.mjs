@@ -2088,7 +2088,7 @@ async function huntRun(id, fromFile = null) {
           cwd: view.dir, timeoutMs: config.workerTimeoutMs,
           allowedTools: computeAllowedTools({ ...qa, allowedTools: (qa.allowedTools || []).filter((r) => !/^(Edit|Write)\b/.test(r)) }, [], []),
           disallowedTools: computeDisallowedTools(gov.charter),
-          tier: chooseModelTier({ kind: 'plan', role: 'QA_AUDITOR' })
+          tier: chooseModelTier({ kind: 'hunt', role: 'QA_AUDITOR' })
         });
         try { result = check(extractJson(output)); } catch (e) { result = null; lastErr = `${e.message}: ${String(output).slice(0, 200)}`; }
       }
@@ -2138,8 +2138,20 @@ async function autonomousTick(reason = 'interval') {
       }
       return null;
     };
+    const heldBefore = readBacklog().tasks.filter((t) => t.status === 'BLOCKED' && t.needsApproval).length;
     let item = pickReady();
     if (!item) {
+      // READY items that only wait for others (dependsOn), or items just held for the owner's OK: the backlog is NOT
+      // empty, so the PO must not invent other work (found in a real feature run: it planned unrelated tasks).
+      const fresh = readBacklog();
+      const waiting = fresh.tasks.filter((t) => t.status === 'READY');
+      const heldNow = fresh.tasks.filter((t) => t.status === 'BLOCKED' && t.needsApproval).length - heldBefore;
+      if (waiting.length || heldNow > 0) {
+        const why = waiting.length ? `${waiting.length} READY item(s) wait for other items to finish (${waiting.slice(0, 3).map((t) => `${t.id} after ${(t.dependsOn || []).join('+')}`).join(', ')})` : '';
+        refreshAutoStatus(`waiting: ${[why, heldNow > 0 ? `${heldNow} item(s) held for your OK` : ''].filter(Boolean).join('; ')} — no new work planned`);
+        logTelemetry('AUTO_WAITING', auto.lastResult || 'waiting on dependencies or your OK', { waiting: waiting.map((t) => t.id), held: heldNow });
+        return 'waiting';
+      }
       // "autonomous: on" never means planning from nothing: with the placeholder objectives there is no AI call and no spend.
       if (/\(describe your product goals here/.test(gov.charter.text)) {
         refreshAutoStatus('idle: no READY task, and the charter objectives are not filled in, so nothing to plan (no AI call)');
