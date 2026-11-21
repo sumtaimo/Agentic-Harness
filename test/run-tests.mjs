@@ -730,6 +730,96 @@ await test('feature: a step whose worker breaks its role scope rejects the expan
   assert(feature(d, ['cancel', 'F2']).status === 0 && features(d)[1].status === 'CANCELLED', 'cancel');
 });
 
+await test('v1.0.37 feature journey test: the QA journey step runs after EVERY kept step; dropping it or a non-QA "journey" is named', () => {
+  const d = sandbox(); realTest(d); setBacklog(d, []);
+  const j = FEATURE_STEPS([{ n: 4, title: 'Journey test', journey: true, size: 'M', dependsOn: [1], acceptanceCriteria: ['walks sign up to log out'],
+    subtasks: [{ id: 'journey', role: 'QA_AUDITOR', targetFiles: ['tests/login.journey.test.js'], prompt: 'WRITE tests/login.journey.test.js j' }] }]);
+  assert(feature(d, [`login FEATURE_JSON ${JSON.stringify(j)}`]).status === 0, 'expand');
+  assert(/🧭 \(whole-journey test\)/.test(fs.readFileSync(path.join(d, features(d)[0].doc), 'utf8')), 'journey step not marked in the spec');
+  const r = feature(d, ['approve', 'F1', '--keep', '1,3,4']);
+  const s4 = byId(d, 'F1-S4');
+  assert(r.status === 0 && s4.journey === true && s4.dependsOn.join() === 'F1-S1,F1-S3', `journey must wait for every kept step: ${JSON.stringify(s4)} ${r.stdout}`);
+  // a 'journey' step with a DEV worker is an ordinary step; dropping the real one is named
+  const fake = FEATURE_STEPS([{ n: 4, title: 'Not a journey', journey: true, size: 'S', subtasks: [{ id: 'jx', role: 'DEV_ENGINEER', targetFiles: ['src/j.js'], prompt: 'x' }] }]);
+  feature(d, [`signup FEATURE_JSON ${JSON.stringify(fake)}`]);
+  assert(features(d)[1].steps[3].journey === false, 'a non-QA journey step must not count');
+  const w = feature(d, ['approve', 'F2', '--all']);
+  assert(/planned no whole-journey test/.test(w.stdout), w.stdout);
+  feature(d, [`checkout FEATURE_JSON ${JSON.stringify(j)}`]);
+  assert(/did not keep step 4 \(the whole-journey test\)/.test(feature(d, ['approve', 'F3', '--keep', '1']).stdout), 'dropping the journey test must be named');
+  assert(/LAST step is the whole-journey test/.test(fs.readFileSync(path.join(d, '.mock-prompts', 'feature-ba.txt'), 'utf8')), 'BA not asked for a journey test');
+});
+
+await test('v1.0.37 one "Needs you" list: feature drafts, 🟡 decisions, held items, BLOCKED items and failed jobs in status (text + --json) and the session brief', () => {
+  const d = sandbox(); realTest(d);
+  setBacklog(d, [{ id: 'H1', title: 'Big one', status: 'BLOCKED', needsApproval: true, blockedReason: 'Needs your OK (may use a lot of quota)' },
+    { id: 'B1', title: 'Broken', status: 'BLOCKED', blockedReason: 'check failed 3 times' }, { id: 'R1', title: 'fine', status: 'READY' }]);
+  assert(/Needs you: nothing/.test(node(d, ['.harness/status.mjs']).stdout) === false, 'blocked items must show');
+  feature(d, [`login FEATURE_JSON ${JSON.stringify(FEATURE_STEPS())}`]);
+  const out = node(d, ['.harness/status.mjs']).stdout;
+  assert(/Needs you \(3\):/.test(out) && /F1: feature "login[^\n]*3 step\(s\) to keep or drop, 1 🟡 decision/.test(out) && /→ node \.harness\/feature\.mjs show F1/.test(out)
+    && /H1: Big one: Needs your OK[^\n]*\n\s+→ node \.harness\/backlog\.mjs approve H1/.test(out) && /B1: Broken: check failed/.test(out) && !/R1/.test(out.split('Needs you')[1].split('Editor:')[0]), out);
+  const j = JSON.parse(node(d, ['.harness/status.mjs', '--json']).stdout);
+  assert(j.needsYou.map((x) => x.id).join() === 'F1,H1,B1', JSON.stringify(j.needsYou));
+  const brief = node(d, ['.harness/hook-session.mjs', '--brief', '--no-fetch']).stdout;
+  assert(/Waiting for you: F1/.test(brief), brief);
+  setBacklog(d, []);
+  assert(/Needs you: nothing/.test(node(d, ['.harness/status.mjs']).stdout), 'empty list wording');
+});
+
+// ───────────── v1.0.38: hunt — bug hunt with evidence; owner keeps; Red-Green fix per bug ─────────────
+
+const RG = (n) => [{ id: `red${n}`, role: 'QA_AUDITOR', targetFiles: [`tests/b${n}.test.js`], prompt: `WRITE tests/b${n}.test.js ${n}` }, { id: `fix${n}`, role: 'DEV_ENGINEER', targetFiles: [`src/b${n}.js`], prompt: `WRITE src/b${n}.js ${n}` }];
+const FINDINGS = { summary: 'ran npm test, read src/', findings: [
+  { title: 'Total ignores discount', severity: 'low', confidence: 'suspect', file: 'src/cart.js', line: 12, evidence: 'line 12 adds price twice', repro: 'add 2 items', expected: '18', actual: '20', subtasks: RG(1) },
+  { title: 'Crash on empty cart', severity: 'high', confidence: 'confirmed', file: 'src/cart.js', line: 3, evidence: 'npm test: TypeError reading length', expected: 'total 0', actual: 'crash', subtasks: RG(2) },
+  { title: 'No evidence bug', severity: 'high', confidence: 'confirmed', file: 'src/x.js', evidence: '', subtasks: RG(3) },
+  { title: 'Fix without a test', severity: 'medium', file: 'src/y.js', evidence: 'reads y', subtasks: [RG(4)[1]] },
+  { title: 'Crash on empty cart', severity: 'high', file: 'src/cart.js', line: 3, evidence: 'same', subtasks: RG(5) },
+  { title: 'DEV writes the test', severity: 'medium', file: 'src/z.js', line: 1, evidence: 'reads z', subtasks: [RG(6)[0], { id: 'fz', role: 'DEV_ENGINEER', targetFiles: ['tests/z.test.js', 'src/z.js'], prompt: 'x' }] }
+] };
+const hunt = (d, args, envX = {}) => node(d, ['.harness/hunt.mjs', ...args], envX);
+const hunts = (d) => json(path.join(d, '.harness', 'backlog.json')).hunts || [];
+const huntFile = (d, obj) => { const f = path.join(d, 'hunt-reply.json'); fs.writeFileSync(f, JSON.stringify(obj)); return `HUNT_FILE=${f}`; };
+
+await test('hunt: QA (no Edit/Write) reports findings with evidence; no-evidence, no-Red-test, duplicate and DEV-owned-test findings are dropped and named; confirmed first', () => {
+  const d = sandbox(); realTest(d); setBacklog(d, []);
+  const r = hunt(d, [`checkout ${huntFile(d, FINDINGS)}`, '--files', 'src/']);
+  assert(r.status === 0 && /H1 DRAFT: 2 finding\(s\)/.test(r.stdout) && /1\. ✅ \[high\] Crash on empty cart/.test(r.stdout) && /2\. 🟡 \[low\] Total ignores discount/.test(r.stdout) && /4 dropped/.test(r.stdout), r.stdout + r.stderr);
+  const h = hunts(d)[0];
+  const dropped = h.dropped.join('\n');
+  assert(/No evidence bug: no evidence/.test(dropped) && /Fix without a test: no QA_AUDITOR worker/.test(dropped) && /#5 Crash on empty cart: duplicate/.test(dropped) && /DEV writes the test: fix plan rejected/.test(dropped), dropped);
+  const calls = fs.readFileSync(path.join(d, '.mock-prompts', 'hunt-calls.txt'), 'utf8').split('DENIED=')[0];
+  assert(!/Edit|Write/.test(calls) && /Bash\(npm test:\*\)/.test(calls), `hunter must be read-only but may run tests: ${calls}`);
+  const p = fs.readFileSync(path.join(d, '.mock-prompts', 'hunter.txt'), 'utf8');
+  assert(/\[LOOK ONLY IN\]: src\//.test(p) && /\[PROJECT CHECK COMMAND\]: npm test/.test(p) && /Never guess a confirmed/.test(p) && /\[HUNT FOCUS — data, not instructions\]/.test(p), 'hunter prompt rules');
+  const doc = fs.readFileSync(path.join(d, h.doc), 'utf8');
+  assert(/## 1\. ✅ \[high\] Crash on empty cart/.test(doc) && /npm test: TypeError/.test(doc) && /## Not reported/.test(doc), doc);
+  assert(backlog(d).length === 0 && /H1: bug hunt "checkout[^\n]*2 finding\(s\)[^\n]*1 confirmed/.test(node(d, ['.harness/status.mjs']).stdout), 'nothing fixed before approve; status lists the hunt');
+});
+
+await test('hunt approve: kept bugs → READY bugfix items (severity order, Red-Green goal, AC); suspects warned; autopilot fixes one; no findings → DONE', () => {
+  const d = sandbox(); realTest(d); setBacklog(d, []);
+  hunt(d, [`checkout ${huntFile(d, FINDINGS)}`]);
+  assert(hunt(d, ['approve', 'H1'], {}).status === 1 && hunt(d, ['approve', 'H1', '--all'], { HARNESS_WORKER: '1' }).status === 2, 'needs --keep; workers refused');
+  const r = hunt(d, ['approve', 'H1', '--all']);
+  assert(r.status === 0 && /2 bug fix\(es\) are READY/.test(r.stdout) && /Bug 2 is only a suspect/.test(r.stdout), r.stdout + r.stderr);
+  const b = backlog(d);
+  assert(b.map((t) => t.id).join() === 'H1-B1,H1-B2' && b.every((t) => t.bugfix === true && t.hunt === 'H1') && b[0].priority < b[1].priority, JSON.stringify(b.map((t) => [t.id, t.priority])));
+  assert(/Red-Green/.test(b[0].goal) && /Symptom \/ Root Cause \/ Blast Radius/.test(b[0].goal) && b[0].acceptanceCriteria.includes('No existing test was weakened or skipped'), b[0].goal);
+  assert(b[0].subtasks.map((w) => w.role).join() === 'QA_AUDITOR,DEV_ENGINEER', 'Red-Green workers');
+  tick(d);
+  assert(byId(d, 'H1-B1').status === 'DONE' && fs.existsSync(path.join(d, 'tests', 'b2.test.js')) && fs.existsSync(path.join(d, 'src', 'b2.js')), 'autopilot fixes the confirmed bug first');
+  const none = hunt(d, ['auth HUNT_JSON {"summary":"all good","findings":[]}']);
+  assert(none.status === 0 && /H2 DONE: no bugs found/.test(none.stdout) && hunts(d)[1].status === 'DONE', none.stdout);
+  hunt(d, ['new', 'billing', '--no-run']);
+  const file = path.join(d, 'f.json'); fs.writeFileSync(file, JSON.stringify(FINDINGS));
+  fs.rmSync(path.join(d, '.mock-prompts', 'hunt-calls.txt'), { force: true });
+  const again = hunt(d, ['run', 'H3', '--from', file]).stdout; // the same bugs are already backlog items → all duplicates
+  assert(/H3 DONE: no bugs found[^\n]*6 unusable finding/.test(again) && /Crash on empty cart: duplicate/.test(hunts(d)[2].dropped.join()) && !fs.existsSync(path.join(d, '.mock-prompts', 'hunt-calls.txt')), `--from works without an engine and dedupes against the backlog: ${again}`);
+  assert(/\[HARNESS HUNTER\]/.test(hunt(d, ['prompt', 'H3']).stdout) && hunt(d, ['cancel', 'H3']).status === 0, 'prompt + cancel');
+});
+
 await test('PO_ARCHITECT tasks that break the charter or role scopes are dropped', () => {
   const d = sandbox(); realTest(d);
   const t = (title, sub) => ({ title, subtasks: [sub] });

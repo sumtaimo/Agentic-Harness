@@ -52,6 +52,7 @@ import {
 } from './lib/integration.mjs';
 import { syncVisibleRunAfterDaemon } from './lib/handoff.mjs';
 import { findFeature, expandPrompt, normalizeExpansion, saveDraft, markFeatureError } from './lib/feature.mjs';
+import { findHunt, huntPrompt, normalizeFindings, saveHunt, markHuntError } from './lib/hunt.mjs';
 import { UNTRUSTED_CONTENT_RULE, injectionHoldReason, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, reviewPolicy, isReviewableFile, scanAddedInjection, fitPrompt, DEFAULT_MAX_PROMPT_CHARS } from './lib/guard.mjs';
 
 const execAsync = promisify(exec);
@@ -2037,6 +2038,68 @@ async function featureExpand(id, fromFile = null) {
   return { feature: saved, dropped: parsed.dropped };
 }
 
+/**
+ * Bug hunt (hunt.mjs): QA_AUDITOR without Edit/Write (it may still run its own test command) reports findings with
+ * evidence. Each finding's fix plan (QA Red test + DEV fix) is validated like a PO task; an invalid finding is dropped
+ * and named, not fatal. `fromFile` (the editor path) skips the engine.
+ */
+async function huntRun(id, fromFile = null) {
+  const h = findHunt(id);
+  if (!h) throw fatal(`No hunt ${id}. Start one with: node .harness/hunt.mjs "<area>"`);
+  if (h.status !== 'DRAFTING' && h.status !== 'DRAFT') throw fatal(`${h.id} is ${h.status}; only a new or draft hunt can run.`);
+  const gov = loadGov();
+  const qa = gov.roles.QA_AUDITOR || { name: 'QA_AUDITOR', description: 'Quality Assurance Auditor.', allowedTools: ['Read', 'Glob', 'Grep'] };
+  const b = readBacklog();
+  const check = (obj) => {
+    const r = normalizeFindings(obj, { max: h.maxFindings, backlogTitles: b.tasks.map((t) => String(t.title || '').replace(/^🐞\s*/, '')) });
+    const ok = [];
+    for (const f of r.findings) {
+      const probe = JSON.parse(JSON.stringify(f.subtasks.map((w) => ({ id: w.id, role: w.role, skills: Array.isArray(w.skills) ? w.skills : [], targetFiles: w.targetFiles, prompt: String(w.prompt || '') }))));
+      try {
+        if (probe.length > 4) throw new Error('more than 4 workers');
+        validateSubtasks(probe, { source: `${h.id} bug "${f.title}"`, requireScope: true, gov, autonomous: true, hasQaLead: true });
+        probe.forEach((w) => resolveGovernance(w, gov));
+        f.subtasks = probe.map(({ resolvedRole, resolvedSkills, resolvedTools, deniedTools, ...rest }) => rest);
+        ok.push(f);
+      } catch (e) { r.dropped.push(`${f.title}: fix plan rejected (${e.message})`); }
+    }
+    ok.forEach((f, i) => { f.n = i + 1; });
+    return { ...r, findings: ok };
+  };
+  let result = null; let lastErr = '';
+  if (fromFile) {
+    try { result = check(JSON.parse(fs.readFileSync(fromFile, 'utf8'))); } catch (e) { markHuntError(h.id, e.message); throw fatal(`${h.id}: hunt result rejected: ${e.message}`); }
+  } else {
+    const view = await projectView();
+    try {
+      const { files, total } = listProjectFiles(view.dir, (config.planner || {}).maxFilesListed || 400);
+      const det = detectVerifyCmd(view.dir, config);
+      const prompt = huntPrompt(h, qa, {
+        check: det.real ? det.cmd : '', catalog: catalog(gov),
+        backlog: b.tasks.map((t) => `- ${t.id} [${t.status}] ${t.title || t.goal}`).join('\n'),
+        repoMap: buildRepoMap(view.dir, { maxChars: 1200 }), files: `${files.join('\n')}${total > files.length ? `\n… (${total - files.length} more)` : ''}`,
+        memory: memoryContext(config, { query: { goal: h.scope, files: h.files } })
+      });
+      writeState({ phase: '0_HUNT', taskTitle: `QA_AUDITOR is hunting bugs (${h.id}): ${h.scope}`.slice(0, 200), planSummary: `≤ ${h.maxFindings} finding(s)` });
+      logTelemetry('0_HUNT', `Bug hunt ${h.id} "${h.scope}" (≤ ${h.maxFindings} findings)`, { hunt: h.id });
+      for (let attempt = 1; attempt <= 2 && !result; attempt++) {
+        const { output } = await spawnEngine({
+          id: `hunt-${h.id.toLowerCase()}`, prompt: attempt === 1 ? prompt : `${prompt}\n\n[YOUR PREVIOUS REPLY WAS NOT USABLE — reply with the JSON object only]: ${lastErr}`,
+          cwd: view.dir, timeoutMs: config.workerTimeoutMs,
+          allowedTools: computeAllowedTools({ ...qa, allowedTools: (qa.allowedTools || []).filter((r) => !/^(Edit|Write)\b/.test(r)) }, [], []),
+          disallowedTools: computeDisallowedTools(gov.charter),
+          tier: chooseModelTier({ kind: 'plan', role: 'QA_AUDITOR' })
+        });
+        try { result = check(extractJson(output)); } catch (e) { result = null; lastErr = `${e.message}: ${String(output).slice(0, 200)}`; }
+      }
+    } finally { await view.cleanup(); }
+    if (!result) { markHuntError(h.id, lastErr); logTelemetry('0_HUNT_INVALID', `${h.id}: hunter reply unusable: ${lastErr}`, { hunt: h.id }); throw fatal(`${h.id}: QA_AUDITOR's reply was not usable twice: ${lastErr}`); }
+  }
+  const saved = saveHunt(h.id, result);
+  logTelemetry('0_HUNT_DRAFT', `${h.id}: ${saved.findings.length} finding(s) (${saved.findings.filter((f) => f.confidence === 'confirmed').length} confirmed), ${result.dropped.length} dropped`, { hunt: h.id });
+  return { hunt: saved, dropped: result.dropped };
+}
+
 /** Fingerprint of everything the PO's answer depends on: charter, backlog, and the integration branch tip. */
 async function poFingerprint(gov) {
   const branch = integrationFor({ autonomous: true });
@@ -2132,6 +2195,22 @@ const onceMode = args.includes('--once') || tickMode;
 const argVal = (flag) => { const i = args.indexOf(flag); return i > -1 ? args[i + 1] : undefined; };
 auto.enabled = args.includes('--autonomous') && !tickMode;
 auto.intervalSec = Number(argVal('--interval')) || (Number(argVal('--schedule')) * 60) || config.heartbeatIntervalSeconds || (config.autonomous || {}).intervalSeconds || 60;
+
+const huntId = argVal('--hunt-run');
+if (huntId) {
+  // Read-only like --feature-expand: no pid file, no inbox, works while a daemon runs.
+  try {
+    const { hunt: h, dropped } = await huntRun(huntId, argVal('--from') || null);
+    if (!h.findings.length) console.log(`${h.id} DONE: no bugs found in "${h.scope}".${dropped.length ? ` ${dropped.length} unusable finding(s) dropped (see ${h.doc}).` : ''}`);
+    else {
+      console.log(`${h.id} DRAFT: ${h.findings.length} finding(s) in "${h.scope}". Report: ${h.doc}`);
+      for (const f of h.findings) console.log(`  ${String(f.n).padStart(2)}. ${f.confidence === 'confirmed' ? '✅' : '🟡'} [${f.severity}] ${f.title}  (${f.file}${f.line ? `:${f.line}` : ''})`);
+      if (dropped.length) console.log(`  (${dropped.length} dropped by the harness: no evidence, no Red-Green plan, duplicate or over the limit — see the report)`);
+      console.log(`✅ confirmed = a command really failed · 🟡 suspect = found by reading only. Keep the bugs to fix: node .harness/hunt.mjs approve ${h.id} --keep 1,2   (or --all)`);
+    }
+    process.exit(0);
+  } catch (e) { console.error(`HUNT_FAILED: ${e.message}`); process.exit(1); }
+}
 
 const featureId = argVal('--feature-expand');
 if (featureId) {

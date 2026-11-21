@@ -46,6 +46,16 @@ if (prompt.startsWith('[HARNESS LEAD ')) {
   process.exit(0);
 }
 
+// HUNTER mode: echo back "HUNT_JSON {...}" from the hunt focus (one line).
+if (prompt.startsWith('[HARNESS HUNTER]')) {
+  fs.appendFileSync(path.join(MP, 'hunt-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);
+  fs.writeFileSync(path.join(MP, 'hunter.txt'), prompt);
+  const file = (prompt.match(/HUNT_FILE=(\S+)/) || [])[1];
+  const plan = file ? fs.readFileSync(file, 'utf8') : (prompt.match(/HUNT_JSON (\{.*\})/) || [])[1] || 'not json';
+  console.log(JSON.stringify({ type: 'result', is_error: false, result: plan, total_cost_usd: mockCost }));
+  process.exit(0);
+}
+
 // FEATURE_BA mode: echo back "FEATURE_JSON {...}" from the owner goal (one line).
 if (prompt.startsWith('[HARNESS FEATURE_BA]')) {
   fs.appendFileSync(path.join(MP, 'feature-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);

@@ -10,6 +10,31 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.38 — 2026-11-21
+
+- **New: `hunt` — bug hunt with evidence.** `npm run hunt -- "checkout" --files src/cart/` (or `/harness:hunt`):
+  QA_AUDITOR, without Edit/Write (it may run the project's tests), looks for real bugs only — wrong results, crashes,
+  data loss, security holes, broken states, missing validation or permissions; never style. Every finding carries
+  file:line, evidence, repro, expected and actual: ✅ **confirmed** when a command really failed, 🟡 **suspect** when
+  found by reading only. Findings without evidence, without a Red-Green fix plan (a QA test + a code fix, test files
+  QA-only), duplicates and anything over the limit (10, `--max`, never above 20) are dropped and named in the report
+  (`docs/bugs/H1.md`).
+- **You keep the bugs to fix:** `hunt approve H1 --keep 1,3` (or `--all`). Each kept bug becomes one READY `bugfix` item,
+  most severe first, fixed Red-Green by autopilot on `uat` (QA writes a test that fails because of the bug, DEV fixes
+  the root cause, report Symptom / Root Cause / Blast Radius, no weakened tests). Keeping a 🟡 suspect is warned.
+- A backlog item's `"bugfix": true` now reaches headless jobs too (it already reached editor briefs).
+- *Affects:* nobody until you use it. *Config:* none. Hunts are stored in `backlog.json` under `"hunts"`. New command
+  `/harness:hunt` and script `npm run hunt`.
+
+## 1.0.37 — 2026-11-21
+
+- **One "Needs you" list.** `status` (and `status --json` as `needsYou`) lists everything that waits for you in one
+  place, each with the one command that moves it on: feature drafts and 🟡 decisions, bug hunts to review, items held
+  for your OK, BLOCKED items, failed jobs. The session start shows features and hunts waiting for you.
+- **Whole-journey test in every feature.** BA's last step is a QA test that walks the user through every step end to
+  end (🧭 in the spec). On approve it waits for every step you kept. Dropping it, or a feature without one, is named.
+- *Affects:* `status` output gains a "Needs you" block. *Config:* none.
+
 ## 1.0.36 — 2026-11-21
 
 - **New: `feature` — a big feature from a short goal.** `npm run feature -- "login"` (or `/harness:feature login` in

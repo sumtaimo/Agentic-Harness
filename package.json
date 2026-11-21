@@ -1,6 +1,6 @@
 {
   "name": "agentic-harness",
-  "version": "1.0.36",
+  "version": "1.0.38",
   "private": true,
   "description": "Zero-dependency agentic workflow harness template (no packages to install)",
   "engines": {
@@ -25,7 +25,8 @@
     "usage": "node .harness/usage.mjs",
     "engines": "node .harness/engines.mjs",
     "audit": "node test/audit.mjs",
-    "feature": "node .harness/feature.mjs"
+    "feature": "node .harness/feature.mjs",
+    "hunt": "node .harness/hunt.mjs"
   },
   "author": "TAIMO",
   "license": "MIT"

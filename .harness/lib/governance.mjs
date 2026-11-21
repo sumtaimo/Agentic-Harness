@@ -694,7 +694,7 @@ export function itemToJob(item, { autonomous = false } = {}) {
     autonomous,
     createdAt: new Date().toISOString()
   };
-  for (const k of ['engine', 'verifyCmd', 'acceptanceCriteria', 'interfaceContract', 'source']) if (item[k] !== undefined) job[k] = item[k];
+  for (const k of ['engine', 'verifyCmd', 'acceptanceCriteria', 'interfaceContract', 'source', 'bugfix']) if (item[k] !== undefined) job[k] = item[k];
   if (item.hierarchy) job.hierarchy = true;
   if (item.maxCostUsd !== undefined) job.maxCostUsd = item.maxCostUsd;
   if (item.costApproved === true) job.costApproved = true; // the person approved this big run (backlog.mjs approve)

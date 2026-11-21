@@ -229,18 +229,19 @@ version of the `release` branch about twice a day; nothing about you is sent). U
 
 ## 3. Everyday use — no coding needed
 
-**Remember only six.** Every other command still works; these five reach all of them:
+**Remember only seven.** Every other command still works; these five reach all of them:
 
 | Command | What it does |
 |---|---|
 | `npm start` | the menu: every other command is in it (continue, new task, setup, backlog, sessions, usage) |
 | `npm run run -- --goal "…"` | do one task now (fastest, lowest quota) |
 | `npm run feature -- "login"` | a big feature from a short goal: BA grows it into the whole user workflow, you keep the steps you want, autopilot builds them |
+| `npm run hunt -- "checkout"` | bug hunt: QA finds real bugs with evidence, you keep the ones to fix, autopilot fixes each Red-Green |
 | `npm run auto` | work through the backlog on its own (on the `uat` branch) |
-| `npm run status -- --full` | everything at once: status and recent events, then doctor, usage and team |
+| `npm run status -- --full` | everything at once: what needs you, status and recent events, then doctor, usage and team |
 | `npm run ui` | the web dashboard |
 
-In Claude Code the same ideas are `/harness:run`, `/harness:feature`, `/harness:auto`, `/harness:status` and `/harness:teach`.
+In Claude Code the same ideas are `/harness:run`, `/harness:feature`, `/harness:hunt`, `/harness:auto`, `/harness:status` and `/harness:teach`.
 
 Start in one step from any terminal (**`npm start`** or `node .harness/start.mjs`, `--summary` for overview only, `--json` for scripts) for an interactive numbered menu `[1]`–`[6]` (`[1]` Continue unfinished work incl. `handoff`/`resume`/`verify`/`rollback`/`report`; `[2]` New task incl. `--branch uat`, `--cwd`, and `--model`; `[3]` Setup & Team incl. `engines`, `auto-assign`, `sync-agents`, and `validate`; `[4]` Backlog & Autopilot incl. `approve`, `ready`/`block`/`pop`/`releases`, `tick`, and loop; `[5]` Session board incl. `checkpoint`, `handoff`, `--cwd`, `merge`, `cleanup`; `[6]` Usage 7d/30d, status, memory rules/context/auto-lessons, `--brief`, and Web UI `[7]`), or use **Command Palette → Tasks: Run Task**:
 
