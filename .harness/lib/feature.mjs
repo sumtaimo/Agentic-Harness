@@ -233,7 +233,7 @@ export function featureProgress(b = readBacklog()) {
 /** The words a planner call matches skills on: its job plus the owner's text (so a "journey" skill fits every feature). */
 export const PLANNER_TOPIC = {
   BA_ANALYST: 'feature user workflow journey spec acceptance criteria',
-  QA_AUDITOR: 'bug hunt regression tests'
+  QA_AUDITOR: 'bug hunt'
 };
 
 /**

@@ -18,6 +18,8 @@ the entries newer than the version you had.
   `[OVERALL GOAL]` (found while preparing a skill test for Skill Foundry).
 - **`feature.mjs prompt` / `hunt.mjs prompt` print the exact headless prompt** (roles, allowed paths, repo map,
   project files, skills) instead of a shorter one, so an editor agent sees the same as a headless run.
+- The hunt's skill topic is now just "bug hunt" (was "bug hunt regression tests"), so a dedicated bug-hunter skill
+  ranks first instead of test-champion, which matched "tests"/"regression" more often.
 - *Affects:* every feature step, hunt fix and PO task (workers get more context). *Config:* none.
 
 ## 1.0.40 — 2026-11-21
