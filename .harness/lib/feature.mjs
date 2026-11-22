@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT } from './common.mjs';
+import { UNTRUSTED_CONTENT_RULE } from './guard.mjs';
 import { readBacklog, writeBacklog, loadSkills, matchSkills } from './governance.mjs';
 import { fetchSkillsOnDemand } from './skill-fetch.mjs';
 
@@ -57,6 +58,7 @@ export function clampMax(max) {
 export function expandPrompt(f, ba, context = {}) {
   return [
     '[HARNESS FEATURE_BA]',
+    `[UNTRUSTED CONTENT RULE]: ${UNTRUSTED_CONTENT_RULE}`,
     `[ROLE PERSONA — BA_ANALYST]:\n${ba?.mission || ba?.description || 'Business Analyst.'}`,
     'You act for the project owner. Do NOT create, edit or delete any file — only read. The harness writes the spec and the backlog for you.',
     `The owner wrote a short goal. Grow it into the WHOLE user workflow, from the first screen to the end of what the user is trying to do — not only the words they wrote (for "login": sign up, log in, wrong password, forgot password, staying logged in, reload, log out, permissions). At most ${f.maxSteps} steps, in the order the user meets them.`,

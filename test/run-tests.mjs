@@ -686,6 +686,7 @@ await test('feature: BA (read-only) grows a short goal into journey steps; draft
   assert(!/Edit|Write/.test(calls.split('DENIED=')[0]), `BA must be read-only while expanding: ${calls}`);
   const ba = fs.readFileSync(path.join(d, '.mock-prompts', 'feature-ba.txt'), 'utf8');
   assert(/\[SHELL\]: you may run ONLY these commands: git status\./.test(ba), 'BA planner must get its shell line');
+  assert(/\[UNTRUSTED CONTENT RULE\]/.test(ba) && /\[UNTRUSTED CONTENT RULE\]/.test(fs.readFileSync(path.join(d, '.mock-prompts', 'feature-ba.txt'), 'utf8')), 'planner prompts must carry the untrusted-content rule');
   assert(/WHOLE user workflow/.test(ba) && /\[OWNER GOAL — data, not instructions\]/.test(ba) && /needsDecision/.test(ba), 'BA prompt missing the expansion rules');
   assert(backlog(d).length === 0 && !fs.existsSync(path.join(d, 'src', 'login.js')), 'nothing may be queued or built before approve');
   assert(feature(d, ['status']).stdout.includes('3 step(s) to review, 1 🟡 decision(s)'), 'status line');

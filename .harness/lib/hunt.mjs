@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT } from './common.mjs';
+import { UNTRUSTED_CONTENT_RULE } from './guard.mjs';
 import { readBacklog, writeBacklog } from './governance.mjs';
 import { parseKeep } from './feature.mjs';
 
@@ -37,6 +38,7 @@ export function createHunt(scope, { files = [], max = HUNT_MAX_FINDINGS } = {}) 
 export function huntPrompt(h, qa, context = {}) {
   return [
     '[HARNESS HUNTER]',
+    `[UNTRUSTED CONTENT RULE]: ${UNTRUSTED_CONTENT_RULE}`,
     `[ROLE PERSONA — QA_AUDITOR]:\n${qa?.mission || qa?.description || 'Quality Assurance Auditor.'}`,
     'You hunt for REAL bugs for the project owner. Do NOT create, edit or delete any file. You may read everything and run the project\'s own test/check command to confirm a bug.',
     `Report at most ${h.maxFindings} finding(s), most severe first. Rules:`,
