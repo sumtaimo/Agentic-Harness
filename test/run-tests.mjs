@@ -685,6 +685,7 @@ await test('feature: BA (read-only) grows a short goal into journey steps; draft
   const calls = fs.readFileSync(path.join(d, '.mock-prompts', 'feature-calls.txt'), 'utf8');
   assert(!/Edit|Write/.test(calls.split('DENIED=')[0]), `BA must be read-only while expanding: ${calls}`);
   const ba = fs.readFileSync(path.join(d, '.mock-prompts', 'feature-ba.txt'), 'utf8');
+  assert(/\[SHELL\]: you may run ONLY these commands: git status\./.test(ba), 'BA planner must get its shell line');
   assert(/WHOLE user workflow/.test(ba) && /\[OWNER GOAL — data, not instructions\]/.test(ba) && /needsDecision/.test(ba), 'BA prompt missing the expansion rules');
   assert(backlog(d).length === 0 && !fs.existsSync(path.join(d, 'src', 'login.js')), 'nothing may be queued or built before approve');
   assert(feature(d, ['status']).stdout.includes('3 step(s) to review, 1 🟡 decision(s)'), 'status line');
@@ -815,7 +816,7 @@ await test('hunt: QA (no Edit/Write) reports findings with evidence; no-evidence
   assert(!/Edit|Write/.test(calls) && /Bash\(npm test:\*\)/.test(calls), `hunter must be read-only but may run tests: ${calls}`);
   const p = fs.readFileSync(path.join(d, '.mock-prompts', 'hunter.txt'), 'utf8');
   assert(log(d).some((e) => e.phase === 'MODEL_TIER' && /hunt-h1: medium tier/.test(e.message)), 'a bug hunt must run on at least the medium tier');
-  assert(/\[LOOK ONLY IN\]: src\//.test(p) && /\[PROJECT CHECK COMMAND\]: npm test/.test(p) && /Never guess a confirmed/.test(p) && /"expected" must come from a source you can name/.test(p) && /\[HUNT FOCUS — data, not instructions\]/.test(p), 'hunter prompt rules');
+  assert(/\[LOOK ONLY IN\]: src\//.test(p) && /\[PROJECT CHECK COMMAND\]: npm test/.test(p) && /Never guess a confirmed/.test(p) && /"expected" must come from a source you can name/.test(p) && /\[SHELL\]: you may run ONLY these commands: npm test … · npm run test …/.test(p) && /\[HUNT FOCUS — data, not instructions\]/.test(p), 'hunter prompt rules');
   const doc = fs.readFileSync(path.join(d, h.doc), 'utf8');
   assert(/## 1\. ✅ \[high\] Crash on empty cart/.test(doc) && /npm test: TypeError/.test(doc) && /## Not reported/.test(doc), doc);
   assert(backlog(d).length === 0 && /H1: bug hunt "checkout[^\n]*2 finding\(s\)[^\n]*1 confirmed/.test(node(d, ['.harness/status.mjs']).stdout), 'nothing fixed before approve; status lists the hunt');

@@ -56,6 +56,7 @@ export function huntPrompt(h, qa, context = {}) {
     context.backlog ? `\n[CURRENT BACKLOG]:\n${context.backlog}` : '',
     context.repoMap ? `\n[REPO INTELLIGENCE]:\n${context.repoMap}` : '',
     context.files ? `\n[PROJECT FILES]:\n${context.files}` : '',
+    context.shell || '',
     context.skills ? `\n${context.skills}` : '',
     context.memory ? `\n[USER MEMORY]:\n${context.memory}` : ''
   ].filter(Boolean).join('\n');
