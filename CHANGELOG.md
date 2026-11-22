@@ -25,6 +25,9 @@ skill library against it.
   creating F1, F2, F3 …. Errors of the read-only planning calls are always kept on the draft.
 - **Fix: READY items that wait for others (`dependsOn`)** were reported as "nothing READY" (backlog `overview` / `pop`),
   or as `Autopilot next: ""` (session start). They now say what they wait for.
+- **Fix: newly released skills reached projects a day late.** The list of available skills was cached for 24 hours, so a
+  skill released today (found in a real trial: `journey-mapper` was not fetched for a `feature`) was missed until
+  tomorrow. It is now cached for 6 hours; deleting the file `skill-registry.json` inside the `.harness` folder looks again at once.
 - **"Needs you" counts only failed jobs of the last 7 days**, so an old failure you dealt with does not keep the list
   from ever being empty.
 - **Docs:** the "remember seven" table now shows `node .harness/…` (works in every project; an installed project has no

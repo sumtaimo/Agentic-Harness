@@ -173,7 +173,7 @@ offers to move them into `me.md` once (`node .harness/memory.mjs me from-profile
 
 **Skills, one by one:** a new project starts with a small set of skills (one per role). When a task
 needs another one, the harness adds it by itself before the agents start and tells you which and why. Each agent gets at
-most 2 skills, the best match first. Turn fetching off with `"skillFetch": false`.
+most 2 skills, the best match first. The list of available skills is looked up at most every 6 hours (delete the file `skill-registry.json` inside the `.harness` folder to look again now). Turn fetching off with `"skillFetch": false`.
 
 **New versions:** session start, `doctor` and the menu tell you when a newer harness is released (they read the
 version of the `release` branch about twice a day; nothing about you is sent). Update with

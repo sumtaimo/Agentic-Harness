@@ -5,7 +5,7 @@
  *
  * How (controller only, before a task's workers start; never inside a worker):
  *  - the registry is Skill Foundry's `list --json` (every ready skill with its roles and keywords, installed or not),
- *    cached in .harness/skill-registry.json (git-ignored): 24 hours when it worked, 1 hour when it failed;
+ *    cached in .harness/skill-registry.json (git-ignored): 6 hours when it worked, 1 hour when it failed (delete the file to look again now);
  *  - a skill is fetched when it is NOT installed, its roles include the worker's role, and one of its keywords appears in
  *    the worker's task as a whole word (the same rule as installed skills, SKILL_KEYWORD_MATCH);
  *  - each worker fetches only what makes ITS OWN top SKILL_LIMIT_PER_WORKER (2) skills; a skill two workers need is
@@ -22,7 +22,7 @@ import { matchSkills } from './governance.mjs';
 
 export const MAX_PER_TASK = 6; // safety cap for a whole task (2 per worker × up to 3 workers' worth); each worker's own limit is SKILL_LIMIT_PER_WORKER
 export const ADD_TIMEOUT_MS = 90000; // npx github:… can take 10-60 s cold; the task never waits longer for a skill
-export const REGISTRY_OK_MS = 24 * 60 * 60 * 1000;
+export const REGISTRY_OK_MS = 6 * 60 * 60 * 1000; // was 24 h: a skill released today reached projects only tomorrow (found in a real trial)
 export const REGISTRY_FAIL_MS = 60 * 60 * 1000;
 
 const cacheFile = (root) => path.join(root, '.harness', 'skill-registry.json');

@@ -945,6 +945,20 @@ await test('v1.0.44 planner calls (feature BA, hunt QA, PO) can read skills that
   assert(g('status', '--porcelain', '--', '.claude/skills').includes('journey-mapper') && fs.existsSync(path.join(d, '.claude', 'skills', 'journey-mapper', 'SKILL.md')), 'your own folder must be untouched');
 });
 
+await test('v1.0.44 skill list cache: used for under 6 h, looked up again after (a skill released today is found the same day); a failure is retried after 1 h', async () => {
+  const sf = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'skill-fetch.mjs')).href);
+  const d = sandbox();
+  const fake = path.join(d, 'fake-foundry.mjs');
+  fs.writeFileSync(fake, `console.log(JSON.stringify([{ name: process.env.FAKE_NAME, roles: ['BA_ANALYST'], keywords: ['journey'], description: 'x' }]));`);
+  const ask = (now, name) => sf.loadRegistry({ root: d, now, env: { ...process.env, HARNESS_FOUNDRY_CMD: fake, FAKE_NAME: name } });
+  const H = 3600 * 1000; const t0 = Date.now();
+  let r = ask(t0, 'old-skill'); assert(r.source === 'live' && r.skills[0].name === 'old-skill', JSON.stringify(r));
+  r = ask(t0 + 5 * H, 'new-skill'); assert(r.source === 'cache' && r.skills[0].name === 'old-skill', 'within 6 h the cache is used');
+  r = ask(t0 + 7 * H, 'new-skill'); assert(r.source === 'live' && r.skills[0].name === 'new-skill', 'after 6 h a skill released meanwhile is found');
+  fs.rmSync(path.join(d, '.harness', 'skill-registry.json'));
+  r = ask(t0 + 7 * H + 1000, 'newer-skill'); assert(r.source === 'live' && r.skills[0].name === 'newer-skill', 'deleting the file looks again at once');
+});
+
 await test('v1.0.44 "Needs you" counts only failed jobs from the last 7 days (an old failure you dealt with does not nag forever)', () => {
   const d = sandbox(); realTest(d); setBacklog(d, []);
   const f = path.join(d, '.harness', 'failed'); fs.mkdirSync(f, { recursive: true });
