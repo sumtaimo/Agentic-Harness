@@ -460,9 +460,13 @@ export async function menuDispatch(_rl, ask, info, run = runScript, say = consol
   say('  [1] normal   — 1 direct worker (fastest, lowest quota)');
   say('  [2] parallel — AI planner splits into parallel workers');
   say('  [3] team     — orchestrator -> BA/DEV/QA leads -> workers');
+  say('  [4] feature  — BA grows the goal into the whole user workflow; you keep the steps (nothing is built before)');
+  say('  [5] hunt     — QA hunts bugs in this area with evidence; you keep the ones to fix');
   const modeRaw = await ask('Choose mode [1]: ');
   if (modeRaw === null || isBackCmd(modeRaw)) return;
   const mTrim = modeRaw.trim().toLowerCase();
+  if (mTrim === '4' || mTrim === 'feature') { run('feature.mjs', ['new', goal]); say('Next: node .harness/feature.mjs show F<n>, then approve F<n> --keep …'); return; }
+  if (mTrim === '5' || mTrim === 'hunt') { run('hunt.mjs', ['new', goal]); say('Next: node .harness/hunt.mjs show H<n>, then approve H<n> --keep …'); return; }
   const mode = (!mTrim || mTrim === '1' || mTrim === 'normal') ? 'normal'
     : (mTrim === '2' || mTrim === 'parallel') ? 'parallel'
     : (mTrim === '3' || mTrim === 'team') ? 'team'

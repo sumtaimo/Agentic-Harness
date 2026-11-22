@@ -10,6 +10,13 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.40 — 2026-11-21
+
+- **`feature` and `hunt` without a command to remember:** `npm start` → `[2] New task` now offers `[4] feature` and
+  `[5] hunt`, and VS Code has two buttons, *Harness: Big feature* and *Harness: Bug hunt* (Run Task menu). Nothing else
+  changed in the menu: `[1]`–`[3]` work as before.
+- *Affects:* the menu and `.vscode/tasks.json` (the installer merges the two new tasks into yours). *Config:* none.
+
 ## 1.0.39 — 2026-11-21
 
 - **`feature` and `hunt` now use skills.** BA expanding a feature and QA hunting bugs get matching skills the same way

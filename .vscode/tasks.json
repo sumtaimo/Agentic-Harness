@@ -75,6 +75,40 @@
       "problemMatcher": []
     },
     {
+      "label": "Harness: Big feature (BA grows a short goal)",
+      "detail": "Type a short goal like \"login\". BA grows it into the whole user workflow and writes a draft; nothing is built until you keep steps (node .harness/feature.mjs approve F1 --keep 1,2).",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/feature.mjs",
+        "new",
+        "${input:featureGoal}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Harness: Bug hunt (QA finds bugs with evidence)",
+      "detail": "Name an area like \"checkout\". QA looks for real bugs with evidence; nothing is fixed until you keep them (node .harness/hunt.mjs approve H1 --keep 1).",
+      "type": "process",
+      "command": "node",
+      "args": [
+        ".harness/hunt.mjs",
+        "new",
+        "${input:huntScope}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "Harness: 3. Teach the AI something (remember)",
       "detail": "Save a rule or preference. Every AI working in this folder will follow it.",
       "type": "process",
@@ -573,6 +607,17 @@
       "id": "sessionId",
       "type": "promptString",
       "description": "Child task ID on the session board (e.g. FEAT-1; leave empty on handoff to auto-detect)",
+      "default": ""
+    },
+    {
+      "id": "featureGoal",
+      "type": "promptString",
+      "description": "Short goal for the feature, e.g. login or checkout"
+    },
+    {
+      "id": "huntScope",
+      "type": "promptString",
+      "description": "Area to hunt bugs in, e.g. checkout (empty = whole project)",
       "default": ""
     }
   ]

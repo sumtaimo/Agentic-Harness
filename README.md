@@ -251,6 +251,8 @@ Start in one step from any terminal (**`npm start`** or `node .harness/start.mjs
 | **Harness: 1. Start (live screen)** | Starts the background harness and shows the live screen (auto-starts on folder open). |
 | **Harness: Run (normal, one task now)** | Runs one direct worker (`--mode normal`) with no planner — fastest and cheapest, with rollback on failure. |
 | **Harness: 2. New task (type what you want)** | Asks: *what to do*, *which files/folders it may change* (optional), *how to check it* (optional), *which AI*, and *split into parallel workers?* Then runs it and tells you **COMMITTED ✔** or **NOT DONE ✖**. |
+| **Harness: Big feature (BA grows a short goal)** | Type a short goal like *login*: BA grows it into the whole user workflow as a draft; nothing is built until you keep steps (`node .harness/feature.mjs approve F1 --keep 1,2`). Also `npm start` → `[2]` → `[4]`. |
+| **Harness: Bug hunt (QA finds bugs with evidence)** | Name an area like *checkout*: QA looks for real bugs with evidence; nothing is fixed until you keep them (`node .harness/hunt.mjs approve H1 --keep 1`). Also `npm start` → `[2]` → `[5]`. |
 | **Harness: 3. Teach the AI something (remember)** | Saves a rule, e.g. *"Always explain changes in simple English"*. Every AI in this folder follows it from then on. |
 | **Harness: 4. Show memory** | Lists what the AI remembers. |
 | **Harness: 5. Status + recent events** | What is happening now and the last events. |

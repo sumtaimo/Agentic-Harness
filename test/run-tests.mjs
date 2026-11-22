@@ -876,6 +876,15 @@ await test('v1.0.39 workers are told their exact shell commands up front; doctor
   assert(/cannot open the app in a browser themselves: the playwright MCP preset is off/.test(doc), doc.split('Browser testing')[1]?.slice(0, 600));
 });
 
+await test('v1.0.39 npm start → [2] New task offers [4] feature and [5] hunt (no command to remember)', () => {
+  const d = sandbox(); realTest(d); setBacklog(d, []);
+  const menu = (input) => spawnSync(process.execPath, ['.harness/start.mjs'], { cwd: d, env: { ...env, HARNESS_ROOT: d }, input, encoding: 'utf8', timeout: 45000 });
+  const m = menu(`2\nlogin FEATURE_JSON ${JSON.stringify(FEATURE_STEPS())}\n4\n0\n`);
+  assert(/\[4\] feature/.test(m.stdout) && /\[5\] hunt/.test(m.stdout) && /F1 DRAFT: 3 step\(s\)/.test(m.stdout) && features(d)[0]?.status === 'DRAFT', m.stdout.slice(-1500) + m.stderr);
+  const h = menu(`2\ncheckout ${huntFile(d, FINDINGS)}\n5\n0\n`);
+  assert(/H1 DRAFT: 2 finding/.test(h.stdout) && hunts(d)[0]?.status === 'DRAFT', h.stdout.slice(-1500) + h.stderr);
+});
+
 await test('PO_ARCHITECT tasks that break the charter or role scopes are dropped', () => {
   const d = sandbox(); realTest(d);
   const t = (title, sub) => ({ title, subtasks: [sub] });
