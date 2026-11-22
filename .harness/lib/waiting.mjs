@@ -29,9 +29,14 @@ export function needsYou(b = readBacklog()) {
     out.push({ kind: held ? 'ok' : 'blocked', id: t.id, text: `${t.title || t.goal}: ${String(t.blockedReason || (held ? 'needs your OK' : 'blocked')).slice(0, 120)}`,
       next: held ? `node .harness/backlog.mjs approve ${t.id}` : `node .harness/backlog.mjs ready ${t.id}  (after you decide)` });
   }
+  // Failed jobs stay in .harness/failed/ for good; only recent ones (7 days) nag, so an old failure you dealt with does not
+  // keep the list from ever being empty.
   let failed = 0;
-  try { failed = fs.readdirSync(DIRS.failed).filter((f) => f.endsWith('.json')).length; } catch { /* no folder */ }
-  if (failed) out.push({ kind: 'failed', id: 'failed', text: `${failed} failed or halted job(s) to look at`, next: 'see .harness/failed/*.trace.txt' });
+  try {
+    const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+    failed = fs.readdirSync(DIRS.failed).filter((f) => f.endsWith('.json') && (() => { try { return fs.statSync(`${DIRS.failed}/${f}`).mtimeMs >= cutoff; } catch { return false; } })()).length;
+  } catch { /* no folder */ }
+  if (failed) out.push({ kind: 'failed', id: 'failed', text: `${failed} failed or halted job(s) in the last 7 days to look at`, next: 'see .harness/failed/*.trace.txt' });
   return out;
 }
 

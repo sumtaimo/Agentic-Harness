@@ -229,17 +229,20 @@ version of the `release` branch about twice a day; nothing about you is sent). U
 
 ## 3. Everyday use — no coding needed
 
-**Remember only seven.** Every other command still works; these five reach all of them:
+**Remember only seven.** Every other command still works; these seven reach all of them. In a project you installed
+the harness into, type the `node .harness/…` form (it always works); the `npm` shortcut exists in this template
+repository, and in your project only if you add it to its `package.json` scripts (your own `npm start` is not the
+harness menu). In VS Code every one of them is also a button: *Tasks: Run Task → Harness: …*.
 
-| Command | What it does |
-|---|---|
-| `npm start` | the menu: every other command is in it (continue, new task, setup, backlog, sessions, usage) |
-| `npm run run -- --goal "…"` | do one task now (fastest, lowest quota) |
-| `npm run feature -- "login"` | a big feature from a short goal: BA grows it into the whole user workflow, you keep the steps you want, autopilot builds them |
-| `npm run hunt -- "checkout"` | bug hunt: QA finds real bugs with evidence, you keep the ones to fix, autopilot fixes each Red-Green |
-| `npm run auto` | work through the backlog on its own (on the `uat` branch) |
-| `npm run status -- --full` | everything at once: what needs you, status and recent events, then doctor, usage and team |
-| `npm run ui` | the web dashboard |
+| Command (any project) | Shortcut in this repo | What it does |
+|---|---|---|
+| `node .harness/start.mjs` | `npm start` | the menu: every other command is in it (continue, new task, setup, backlog, sessions, usage) |
+| `node .harness/dispatch.mjs --mode normal --wait --goal "…"` | `npm run run -- --goal "…"` | do one task now (fastest, lowest quota) |
+| `node .harness/feature.mjs "login"` | `npm run feature -- "login"` | a big feature from a short goal: BA grows it into the whole user workflow, you keep the steps you want, autopilot builds them |
+| `node .harness/hunt.mjs "checkout"` | `npm run hunt -- "checkout"` | bug hunt: QA finds real bugs with evidence, you keep the ones to fix, autopilot fixes each Red-Green |
+| `node .harness/daemon.mjs --autonomous` | `npm run auto` | work through the backlog on its own (on the `uat` branch) |
+| `node .harness/status.mjs --full` | `npm run status -- --full` | everything at once: what needs you, status and recent events, then doctor, usage and team |
+| `node .harness/ui.mjs` | `npm run ui` | the web dashboard |
 
 In Claude Code the same ideas are `/harness:run`, `/harness:feature`, `/harness:hunt`, `/harness:auto`, `/harness:status` and `/harness:teach`.
 

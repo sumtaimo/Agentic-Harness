@@ -10,6 +10,28 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.44 — 2026-11-22
+
+Maintenance release: bugs found by installing the harness the way a new user does and running `feature`, `hunt` and the
+skill library against it.
+
+- **Fix: skills were invisible to planner calls.** A skill pointer says "read `.claude/skills/<name>/SKILL.md`" (that file
+  holds the real rules). Skills just installed from the skill library are usually not committed yet, and the planner calls
+  (BA expanding a feature, QA hunting bugs, PO planning) run in a read-only view of the branch, so they could not read it
+  and followed only the short pointer. The view now gets the installed `.claude/skills`.
+- **Fix: `feature` / `hunt` without an allowed AI tool** now stop at once with `ENGINE_APPROVAL_NEEDED` (exit 3) and the
+  same instructions as `dispatch` (it used to say "none installed"). The reason is kept, so "Needs you" lists the draft
+  with `→ node .harness/feature.mjs expand F1`, and asking again for the same goal or area reuses that draft instead of
+  creating F1, F2, F3 …. Errors of the read-only planning calls are always kept on the draft.
+- **Fix: READY items that wait for others (`dependsOn`)** were reported as "nothing READY" (backlog `overview` / `pop`),
+  or as `Autopilot next: ""` (session start). They now say what they wait for.
+- **"Needs you" counts only failed jobs of the last 7 days**, so an old failure you dealt with does not keep the list
+  from ever being empty.
+- **Docs:** the "remember seven" table now shows `node .harness/…` (works in every project; an installed project has no
+  `npm run feature` unless you add it) with the `npm` shortcut for this repository; fixed "these five" → "seven". The
+  website command list uses the `node` forms.
+- *Affects:* everyone using `feature`, `hunt` or installed skills. *Config:* none.
+
 ## 1.0.43 — 2026-11-22
 
 - **Web dashboard (`npm run ui`) shows what needs you:** a new card *Needs you · Features · Bug hunts* lists every item

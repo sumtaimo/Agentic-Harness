@@ -29,7 +29,7 @@ import { DIRS, FILES, ensureDirs, readJsonSafe, helpIfAsked, harnessPidAlive } f
 helpIfAsked(import.meta.url);
 import {
   GOV, STATUSES, readBacklog, writeBacklog, updateBacklogItem, validateBacklog, nextReady, backlogCounts,
-  itemToJob, snapshotRelease, resetMemory, listReleases, loadSkills
+  itemToJob, snapshotRelease, resetMemory, listReleases, loadSkills, waitingReady
 } from './lib/governance.mjs';
 
 ensureDirs();
@@ -89,7 +89,8 @@ function show() {
     }
   }
   const next = nextReady(b);
-  console.log(`\nNext to run: ${next ? `${next.id} — ${next.title}` : '(nothing READY)'}`);
+  const wait = waitingReady(b);
+  console.log(`\nNext to run: ${next ? `${next.id} — ${next.title}` : wait.length ? `(nothing can start: ${wait.length} READY item(s) wait for ${[...new Set(wait.flatMap((w) => w.after))].slice(0, 4).join(', ')})` : '(nothing READY)'}`);
 }
 
 function showReleases() {
@@ -162,7 +163,11 @@ switch (cmd) {
 
   case 'pop': {
     const item = nextReady();
-    if (!item) { console.log('Nothing READY in the backlog.'); break; }
+    if (!item) {
+      const wait = waitingReady();
+      console.log(wait.length ? `Nothing can start now: ${wait.length} READY item(s) wait for other items (${wait.slice(0, 3).map((w) => `${w.id} after ${w.after.join('+')}`).join(', ')}).` : 'Nothing READY in the backlog.');
+      break;
+    }
     const job = itemToJob(item, { autonomous: false });
     const file = path.join(DIRS.inbox, `${job.id}.json`);
     updateBacklogItem(item.id, { status: 'IN_PROGRESS', startedAt: new Date().toISOString(), lastJobId: job.id });

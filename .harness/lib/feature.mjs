@@ -11,7 +11,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT } from './common.mjs';
+import { ROOT, loadConfig, engineUsable } from './common.mjs';
+import { askEngineConsent } from './consent.mjs';
 import { UNTRUSTED_CONTENT_RULE } from './guard.mjs';
 import { readBacklog, writeBacklog, loadSkills, matchSkills } from './governance.mjs';
 import { fetchSkillsOnDemand } from './skill-fetch.mjs';
@@ -23,6 +24,23 @@ const SIZES = ['S', 'M', 'L'];
 
 export const slugify = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, ' ').trim()
   .replace(/[\s_]+/g, '-').replace(/-+/g, '-').slice(0, 40).replace(/^-|-$/g, '');
+
+const sameText = (a, b) => String(a || '').toLowerCase().replace(/\s+/g, ' ').trim() === String(b || '').toLowerCase().replace(/\s+/g, ' ').trim();
+export { sameText };
+
+/**
+ * Before an AI call: is any tool installed, logged in AND allowed by this person? Same check and message as dispatch
+ * (ENGINE_APPROVAL_NEEDED), asked once in a terminal. Never spends anything.
+ */
+export async function engineGate() {
+  const config = loadConfig();
+  const order = config.autoOrder || Object.keys(config.profiles);
+  const cands = [...new Set([...(config.activeProfile && config.activeProfile !== 'auto' ? [config.activeProfile] : []), ...order])].filter((k) => config.profiles[k]);
+  await askEngineConsent(config, cands);
+  if (cands.some((k) => engineUsable(config, k).ok)) return { ok: true };
+  const why = cands.map((k) => `  - ${k}: ${engineUsable(config, k).why}`).join('\n');
+  return { ok: false, message: `ENGINE_APPROVAL_NEEDED: no AI tool is allowed and ready on this machine, so nothing was started.\n${why}\nAllow one in a terminal with:  node .harness/engines.mjs` };
+}
 
 export function readFeatures(b = readBacklog()) { return Array.isArray(b.features) ? b.features : []; }
 
@@ -38,6 +56,10 @@ export function createFeature(goal, { max = FEATURE_MAX_STEPS } = {}) {
   if (text.length > 2000) throw new Error('Feature goal is longer than 2000 characters; write a short goal and let BA expand it.');
   const b = readBacklog();
   const list = readFeatures(b);
+  // Asking again for the same goal (the first try could not run, e.g. no AI tool was allowed yet) reuses that draft
+  // instead of piling up F1, F2, F3 … for one request.
+  const same = list.find((f) => f.status === 'DRAFTING' && !f.steps.length && sameText(f.goal, text));
+  if (same) return Object.assign({}, same, { reused: true });
   const n = list.reduce((m, f) => Math.max(m, Number(String(f.id).slice(1)) || 0), 0) + 1;
   const slug = slugify(text) || `feature-${n}`;
   const f = {

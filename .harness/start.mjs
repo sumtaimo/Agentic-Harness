@@ -709,7 +709,7 @@ export async function menuBacklog(_rl, ask, info, run = runScript, say = console
   }
   if (choice === '8') {
     const next = (() => { try { return nextReady(); } catch { return null; } })();
-    if (!next) { say('No READY item in .harness/backlog.json to promote.'); return; }
+    if (!next) { say('No READY item in .harness/backlog.json can start now (none READY, or the READY ones wait for items they depend on).'); return; }
     say(`Next READY item: ${next.id} — ${next.title || next.goal}`);
     if (!await confirm(ask, `Promote ${next.id} into .harness/inbox/ now? [y/N] `, false)) { say('Cancelled.'); return; }
     run('backlog.mjs', ['pop']);

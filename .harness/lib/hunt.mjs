@@ -10,7 +10,7 @@ import path from 'node:path';
 import { ROOT } from './common.mjs';
 import { UNTRUSTED_CONTENT_RULE } from './guard.mjs';
 import { readBacklog, writeBacklog } from './governance.mjs';
-import { parseKeep } from './feature.mjs';
+import { parseKeep, sameText } from './feature.mjs';
 
 export const HUNT_MAX_FINDINGS = 10;
 export const HUNT_HARD_MAX = 20;
@@ -27,6 +27,8 @@ export function createHunt(scope, { files = [], max = HUNT_MAX_FINDINGS } = {}) 
   if (text.length > 2000) throw new Error('Hunt focus is longer than 2000 characters; name an area, e.g. hunt "checkout" --files src/cart/.');
   const b = readBacklog();
   const list = readHunts(b);
+  const same = list.find((h) => h.status === 'DRAFTING' && !h.findings.length && sameText(h.scope, text) && sameText(h.files.join(','), files.join(',')));
+  if (same) return Object.assign({}, same, { reused: true });
   const n = list.reduce((m, h) => Math.max(m, Number(String(h.id).slice(1)) || 0), 0) + 1;
   const h = { id: `H${n}`, scope: text, files: files.map(String).filter(Boolean), status: 'DRAFTING', maxFindings: clamp(max),
     doc: `docs/bugs/H${n}.md`, createdAt: new Date().toISOString(), findings: [], taskIds: [] };

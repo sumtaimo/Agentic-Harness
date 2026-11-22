@@ -1908,6 +1908,13 @@ async function projectView() {
   await execFileAsync('git', ['worktree', 'add', '-q', '--detach', dir, tip], { cwd: ROOT });
   const sharedLinks = g.linkIntoWorktrees || ['node_modules'];
   linkShared(dir, sharedLinks, ROOT);
+  // A skill pointer says "read .claude/skills/<name>/SKILL.md" (that file holds the real rules). Skills installed from the
+  // skill library are usually NOT committed yet, so the view (a checkout of the branch) lacks them and the planner (BA,
+  // QA, PO) would follow only the short pointer. Copy what is missing; the view is read-only and thrown away after.
+  try {
+    const src = path.join(ROOT, '.claude', 'skills'); const dst = path.join(dir, '.claude', 'skills');
+    if (fs.existsSync(src)) { fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.cpSync(src, dst, { recursive: true, force: false, errorOnExist: false }); }
+  } catch { /* the pointer text still works */ }
   return { dir, tip, cleanup: async () => { unlinkShared(dir, sharedLinks); await removeWorktree(dir, ROOT); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 
@@ -2251,7 +2258,7 @@ if (huntId) {
       console.log(`✅ confirmed = a command really failed · 🟡 suspect = found by reading only. Keep the bugs to fix: node .harness/hunt.mjs approve ${h.id} --keep 1,2   (or --all)`);
     }
     process.exit(0);
-  } catch (e) { console.error(`HUNT_FAILED: ${e.message}`); process.exit(1); }
+  } catch (e) { try { markHuntError(huntId, e.message); } catch { /* the reason is still printed */ } console.error(`HUNT_FAILED: ${e.message}`); process.exit(1); }
 }
 
 const featureId = argVal('--feature-expand');
@@ -2265,7 +2272,7 @@ if (featureId) {
     for (const s of f.steps) console.log(`  ${String(s.n).padStart(2)}. [${s.size}] ${s.title}${s.dependsOn.length ? `  (after ${s.dependsOn.join(', ')})` : ''}${s.needsDecision ? `\n      🟡 ${s.needsDecision}` : ''}`);
     console.log(`${open.length ? `${open.length} step(s) need your decision (🟡). ` : ''}Keep the steps you want: node .harness/feature.mjs approve ${f.id} --keep 1,2,3   (or --all)`);
     process.exit(0);
-  } catch (e) { console.error(`FEATURE_EXPAND_FAILED: ${e.message}`); process.exit(1); }
+  } catch (e) { try { markFeatureError(featureId, e.message); } catch { /* the reason is still printed */ } console.error(`FEATURE_EXPAND_FAILED: ${e.message}`); process.exit(1); }
 }
 
 if (selfTestMode) {

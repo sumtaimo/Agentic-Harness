@@ -95,7 +95,7 @@ try {
       briefLines.push(`! Stopped run ${s.id} ("${s.title}", ${s.status}${diag}): node .harness/visible.mjs handoff ${s.id} | rollback: node .harness/visible.mjs rollback ${s.id}`);
     } else if (charter.autonomous && c.READY > 0) {
       const next = nextReady(bl);
-      briefLines.push(`> Autopilot next: "${next?.title || next?.goal || ''}" (${c.READY} READY) — run /harness:auto or node .harness/daemon.mjs --tick`);
+      briefLines.push(next ? `> Autopilot next: "${next.title || next.goal || ''}" (${c.READY} READY) — run /harness:auto or node .harness/daemon.mjs --tick` : `- Autopilot: ${c.READY} READY item(s) wait for other items to finish; nothing can start yet`);
     } else {
       briefLines.push(`- Status: idle, no unfinished editor runs (${taughtCount} taught rule(s), ${autoLessonsCount} auto-lesson(s) in memory)`);
     }
@@ -235,7 +235,8 @@ try {
     lines.push(`- UNFINISHED editor run ${r.id} ("${r.title}", ${r.status}${ed}${diag}). Ask the user whether to finish it (node .harness/visible.mjs verify ${r.id}), hand off or continue in another AI/terminal (node .harness/visible.mjs handoff ${r.id} or node .harness/dispatch.mjs --resume-visible ${r.id} --wait), or undo it (node .harness/visible.mjs rollback ${r.id}). Do not start another task first.`);
   } else if (charter.autonomous && c.READY > 0) {
     const next = nextReady();
-    lines.push(`- AUTO MODE IS ON (the owner enabled it in .harness/charter.md) and ${c.READY} task(s) are READY${next ? `; next: "${next.title || next.goal}"` : ''}. Start the autonomous workflow now with /harness:auto: you act as the orchestrator, the named agents work visibly, the controller verifies, and you report to the user at the end. If the user's message is about something else, answer it first and then offer to run the READY task(s).`);
+    if (!next) lines.push(`- AUTO MODE IS ON, but the ${c.READY} READY task(s) wait for other items (dependsOn) to finish, so nothing can start yet. Do not start /harness:auto for them; tell the user what they wait for if asked (node .harness/backlog.mjs overview).`);
+    else lines.push(`- AUTO MODE IS ON (the owner enabled it in .harness/charter.md) and ${c.READY} task(s) are READY${next ? `; next: "${next.title || next.goal}"` : ''}. Start the autonomous workflow now with /harness:auto: you act as the orchestrator, the named agents work visibly, the controller verifies, and you report to the user at the end. If the user's message is about something else, answer it first and then offer to run the READY task(s).`);
   } else if (charter.autonomous && /\(describe your product goals here/.test(charter.text)) {
     lines.push('- Auto mode is ON but there is nothing READY and the charter objectives are not filled in, so the harness will not plan anything by itself. Add a task (node .harness/backlog.mjs add "<title>" --status READY) or fill in the objectives in .harness/charter.md.');
   }

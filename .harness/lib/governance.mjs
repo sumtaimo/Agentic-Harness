@@ -679,6 +679,13 @@ export function nextReady(b = readBacklog()) {
     .sort((a, z) => (a.t.priority ?? 99) - (z.t.priority ?? 99) || a.i - z.i)[0]?.t || null;
 }
 
+/** READY items that cannot start yet because items they depend on are not DONE: [{ id, after: [ids not done] }]. */
+export function waitingReady(b = readBacklog()) {
+  const done = new Set(b.tasks.filter((t) => t.status === 'DONE').map((t) => t.id));
+  return b.tasks.filter((t) => t.status === 'READY' && Array.isArray(t.dependsOn) && t.dependsOn.some((d) => !done.has(d)))
+    .map((t) => ({ id: t.id, after: t.dependsOn.filter((d) => !done.has(d)) }));
+}
+
 export function backlogCounts(b = readBacklog()) {
   const c = Object.fromEntries(STATUSES.map((s) => [s, 0]));
   for (const t of b.tasks) c[t.status || 'BACKLOG'] = (c[t.status || 'BACKLOG'] || 0) + 1;

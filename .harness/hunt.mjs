@@ -23,7 +23,8 @@ import { spawnSync } from 'node:child_process';
 import { ROOT, HARNESS_DIR, ensureDirs, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readBacklog, writeBacklog } from './lib/governance.mjs';
-import { createHunt, findHunt, approveHunt, huntProgress, renderHuntDoc, readHunts, HUNT_MAX_FINDINGS } from './lib/hunt.mjs';
+import { engineGate } from './lib/feature.mjs';
+import { createHunt, findHunt, markHuntError, approveHunt, huntProgress, renderHuntDoc, readHunts, HUNT_MAX_FINDINGS } from './lib/hunt.mjs';
 
 ensureDirs();
 const argv = process.argv.slice(2);
@@ -40,6 +41,14 @@ const positional = () => { const out = []; for (let i = 0; i < rest.length; i++)
 const die = (msg, code = 1) => { console.error(msg); process.exit(code); };
 const need = () => { const id = positional()[0]; if (!id) die(`Usage: node .harness/hunt.mjs ${cmd} H1`); const h = findHunt(id); if (!h) die(`No hunt ${id}. See: node .harness/hunt.mjs status`); return h; };
 
+async function runChecked(h, from) {
+  if (!from) {
+    const gate = await engineGate();
+    if (!gate.ok) { markHuntError(h.id, 'No AI tool is allowed yet. Allow one: node .harness/engines.mjs, then: node .harness/hunt.mjs run ' + h.id); console.error(gate.message); return 3; }
+  }
+  return run(h, from);
+}
+
 function run(h, from) {
   const args = [path.join(HARNESS_DIR, 'daemon.mjs'), '--hunt-run', h.id];
   if (from) args.push('--from', path.resolve(from));
@@ -50,11 +59,12 @@ switch (cmd) {
   case 'new': {
     const files = (val('--files') || '').split(',').map((f) => f.trim()).filter(Boolean);
     let h; try { h = createHunt(positional().join(' '), { files, max: val('--max') ?? HUNT_MAX_FINDINGS }); } catch (e) { die(e.message); }
+    if (h.reused) console.log(`${h.id} already exists for this area and has not run yet: trying again.`); else
     console.log(`${h.id} created: hunting "${h.scope}"${h.files.length ? ` in ${h.files.join(', ')}` : ''} (≤ ${h.maxFindings} findings). Report will be ${h.doc}.`);
     if (flag('--no-run')) { console.log(`Run it later: node .harness/hunt.mjs run ${h.id}   (editor: node .harness/hunt.mjs prompt ${h.id})`); break; }
-    process.exit(run(h));
+    process.exit(await runChecked(h));
   }
-  case 'run': { const h = need(); process.exit(run(h, val('--from'))); }
+  case 'run': { const h = need(); process.exit(await runChecked(h, val('--from'))); }
   case 'prompt': {
     const h = need();
     // the exact prompt the headless run sends (project files, roles, repo map, skills), without calling an AI

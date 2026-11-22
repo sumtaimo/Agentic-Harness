@@ -23,7 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { ROOT, HARNESS_DIR, ensureDirs, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readBacklog, writeBacklog } from './lib/governance.mjs';
-import { createFeature, findFeature, approveFeature, featureProgress, renderFeatureDoc, readFeatures, FEATURE_MAX_STEPS } from './lib/feature.mjs';
+import { createFeature, findFeature, engineGate, markFeatureError, approveFeature, featureProgress, renderFeatureDoc, readFeatures, FEATURE_MAX_STEPS } from './lib/feature.mjs';
 
 ensureDirs();
 const argv = process.argv.slice(2);
@@ -40,6 +40,14 @@ const positional = () => { const out = []; for (let i = 0; i < rest.length; i++)
 const die = (msg, code = 1) => { console.error(msg); process.exit(code); };
 const need = () => { const id = positional()[0]; if (!id) die(`Usage: node .harness/feature.mjs ${cmd} F1`); const f = findFeature(id); if (!f) die(`No feature ${id}. See: node .harness/feature.mjs status`); return f; };
 
+async function expandChecked(f, from) {
+  if (!from) { // an AI call: refuse early and say what to do; keep the draft and the reason so "Needs you" shows it
+    const gate = await engineGate();
+    if (!gate.ok) { markFeatureError(f.id, 'No AI tool is allowed yet. Allow one: node .harness/engines.mjs, then: node .harness/feature.mjs expand ' + f.id); console.error(gate.message); return 3; }
+  }
+  return expand(f, from);
+}
+
 function expand(f, from) {
   const args = [path.join(HARNESS_DIR, 'daemon.mjs'), '--feature-expand', f.id];
   if (from) args.push('--from', path.resolve(from));
@@ -52,11 +60,11 @@ switch (cmd) {
     const goal = positional().join(' ').trim();
     if (!goal) die('Usage: node .harness/feature.mjs "login"   (a short goal; BA grows it into the whole user workflow)');
     let f; try { f = createFeature(goal, { max: val('--max') ?? FEATURE_MAX_STEPS }); } catch (e) { die(e.message); }
-    console.log(`${f.id} created: "${f.goal}" (≤ ${f.maxSteps} steps). Spec page will be ${f.doc}.`);
+    console.log(f.reused ? `${f.id} already exists for this goal and was not expanded yet: trying again.` : `${f.id} created: "${f.goal}" (≤ ${f.maxSteps} steps). Spec page will be ${f.doc}.`);
     if (flag('--no-expand')) { console.log(`Expand it later: node .harness/feature.mjs expand ${f.id}   (editor: node .harness/feature.mjs prompt ${f.id})`); break; }
-    process.exit(expand(f));
+    process.exit(await expandChecked(f));
   }
-  case 'expand': { const f = need(); process.exit(expand(f, val('--from'))); }
+  case 'expand': { const f = need(); process.exit(await expandChecked(f, val('--from'))); }
   case 'prompt': {
     const f = need();
     // the exact prompt the headless run sends (project files, roles, repo map, skills), without calling an AI

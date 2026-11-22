@@ -56,6 +56,11 @@ if (prompt.startsWith('[HARNESS HUNTER]')) {
   process.exit(0);
 }
 
+// Planner modes also report which installed skill folders their working folder can read (a skill pointer says "read .claude/skills/<name>/SKILL.md").
+if (/^\[HARNESS (FEATURE_BA|HUNTER|PO_ARCHITECT)\]/.test(prompt)) {
+  try { fs.writeFileSync(path.join(MP, 'cwd-skills.txt'), fs.readdirSync(path.join(process.cwd(), '.claude', 'skills')).sort().join(',')); } catch { fs.writeFileSync(path.join(MP, 'cwd-skills.txt'), '(none)'); }
+}
+
 // FEATURE_BA mode: echo back "FEATURE_JSON {...}" from the owner goal (one line).
 if (prompt.startsWith('[HARNESS FEATURE_BA]')) {
   fs.appendFileSync(path.join(MP, 'feature-calls.txt'), `${process.argv.slice(2).join(' ')}\n`);

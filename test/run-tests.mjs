@@ -890,6 +890,70 @@ await test('v1.0.39 npm start → [2] New task offers [4] feature and [5] hunt (
   assert(/H1 DRAFT: 2 finding/.test(h.stdout) && hunts(d)[0]?.status === 'DRAFT', h.stdout.slice(-1500) + h.stderr);
 });
 
+await test('v1.0.44 maintenance: no allowed AI → ENGINE_APPROVAL_NEEDED (exit 3), reason kept so "Needs you" shows it, retry reuses the draft; Khmer goal gets a safe spec path', () => {
+  const d = sandbox(); realTest(d); setBacklog(d, []);
+  fs.rmSync(path.join(d, '.harness', 'approvals.json'), { force: true }); // nobody allowed the (fake) AI tool yet
+  const a = feature(d, ['login page']);
+  assert(a.status === 3 && /ENGINE_APPROVAL_NEEDED/.test(a.stderr) && /node \.harness\/engines\.mjs/.test(a.stderr) && !/none installed/.test(a.stderr), a.stdout + a.stderr);
+  assert(features(d).length === 1 && /No AI tool is allowed yet/.test(features(d)[0].lastError) && !fs.existsSync(path.join(d, 'src')), JSON.stringify(features(d)));
+  const out = node(d, ['.harness/status.mjs']).stdout;
+  assert(/F1: feature "login page" could not be expanded: No AI tool is allowed yet/.test(out) && /→ node \.harness\/feature\.mjs expand F1/.test(out), out);
+  const b = feature(d, ['login  PAGE']); // same goal again: reuse, never F2
+  assert(b.status === 3 && /F1 already exists for this goal/.test(b.stdout) && features(d).length === 1, b.stdout + b.stderr);
+  const h = hunt(d, ['checkout', '--files', 'src/']);
+  assert(h.status === 3 && /ENGINE_APPROVAL_NEEDED/.test(h.stderr) && hunts(d).length === 1 && /No AI tool is allowed yet/.test(hunts(d)[0].lastError), h.stdout + h.stderr);
+  assert(/H1 already exists for this area/.test(hunt(d, ['checkout', '--files', 'src/']).stdout) && hunts(d).length === 1, 'hunt retry must reuse');
+  // allowing the tool again → the same draft expands (the editor path needs no allowance at all)
+  fs.writeFileSync(path.join(d, '.harness', 'approvals.json'), JSON.stringify({ engines: { mock: true } }));
+  const bl = json(path.join(d, '.harness', 'backlog.json')); bl.features[0].goal = `login page FEATURE_JSON ${JSON.stringify(FEATURE_STEPS())}`; // the fake AI reads its reply from the goal
+  fs.writeFileSync(path.join(d, '.harness', 'backlog.json'), JSON.stringify(bl));
+  const ok = feature(d, ['expand', 'F1']);
+  assert(ok.status === 0 && /F1 DRAFT: 3 step/.test(ok.stdout) && features(d).length === 1 && features(d)[0].lastError === undefined, ok.stdout + ok.stderr);
+  // a Khmer goal has no Latin letters: the spec path falls back to feature-<n>, no empty or broken file name
+  const k = feature(d, ['new', 'ទំព័រចូលគណនី', '--no-expand']);
+  assert(k.status === 0 && /Spec page will be docs\/features\/feature-2\.md/.test(k.stdout), k.stdout);
+});
+
+await test('v1.0.44 READY items that only wait for others are never called "nothing READY": backlog overview/pop, session brief and menu say what they wait for', () => {
+  const d = sandbox(); realTest(d);
+  setBacklog(d, [{ id: 'A', title: 'first', status: 'BLOCKED', blockedReason: 'owner decides' }, { id: 'B', title: 'second', status: 'READY', dependsOn: ['A'], subtasks: [{ id: 'b', role: 'DEV_ENGINEER', targetFiles: ['src/b.js'], prompt: 'x' }] }]);
+  const ov = node(d, ['.harness/backlog.mjs', 'overview']).stdout;
+  assert(/Next to run: \(nothing can start: 1 READY item\(s\) wait for A\)/.test(ov) && !/nothing READY\)/.test(ov), ov);
+  const pop = node(d, ['.harness/backlog.mjs', 'pop']).stdout;
+  assert(/Nothing can start now: 1 READY item\(s\) wait for other items \(B after A\)/.test(pop) && byId(d, 'B').status === 'READY', pop);
+  setCharter(d, { autonomous: 'on' });
+  const brief = node(d, ['.harness/hook-session.mjs', '--brief', '--no-fetch']).stdout;
+  assert(/1 READY item\(s\) wait for other items to finish/.test(brief) && !/Autopilot next: ""/.test(brief), brief);
+  setBacklog(d, [{ id: 'C', title: 'plain', status: 'READY' }]);
+  assert(/Next to run: C — plain/.test(node(d, ['.harness/backlog.mjs', 'overview']).stdout), 'a startable item still shows as next');
+});
+
+await test('v1.0.44 planner calls (feature BA, hunt QA, PO) can read skills that are installed but not committed yet: the read-only view gets .claude/skills', () => {
+  const { d, g } = gitSandbox();
+  realTest(d); g('add', '-A'); g('commit', '-q', '-m', 'package.json');
+  g('branch', 'uat');
+  for (const [n, body] of [['journey-mapper', 'REAL-RULES-journey'], ['committed-one', 'REAL-RULES-committed']]) {
+    fs.mkdirSync(path.join(d, '.claude', 'skills', n), { recursive: true }); fs.writeFileSync(path.join(d, '.claude', 'skills', n, 'SKILL.md'), body);
+  }
+  g('add', '-f', '.claude/skills/committed-one/SKILL.md'); g('commit', '-q', '-m', 'one skill is committed'); // journey-mapper stays uncommitted
+  assert(g('ls-files', '.claude/skills').split('\n').length === 1, 'precondition: only one skill is committed');
+  setBacklog(d, []);
+  const r = feature(d, [`login FEATURE_JSON ${JSON.stringify(FEATURE_STEPS())}`]);
+  assert(r.status === 0, r.stdout + r.stderr);
+  assert(fs.readFileSync(path.join(d, '.mock-prompts', 'cwd-skills.txt'), 'utf8') === 'committed-one,journey-mapper', `the planner's folder must hold both skills: ${fs.readFileSync(path.join(d, '.mock-prompts', 'cwd-skills.txt'), 'utf8')}`);
+  assert(g('worktree', 'list').split('\n').length === 1, 'the view worktree must be removed afterwards');
+  assert(g('status', '--porcelain', '--', '.claude/skills').includes('journey-mapper') && fs.existsSync(path.join(d, '.claude', 'skills', 'journey-mapper', 'SKILL.md')), 'your own folder must be untouched');
+});
+
+await test('v1.0.44 "Needs you" counts only failed jobs from the last 7 days (an old failure you dealt with does not nag forever)', () => {
+  const d = sandbox(); realTest(d); setBacklog(d, []);
+  const f = path.join(d, '.harness', 'failed'); fs.mkdirSync(f, { recursive: true });
+  fs.writeFileSync(path.join(f, 'old-1.json'), '{}'); const old = new Date(Date.now() - 10 * 24 * 3600 * 1000); fs.utimesSync(path.join(f, 'old-1.json'), old, old);
+  assert(/Needs you: nothing/.test(node(d, ['.harness/status.mjs']).stdout), 'a 10-day-old failure must not nag');
+  fs.writeFileSync(path.join(f, 'new-1.json'), '{}');
+  assert(/1 failed or halted job\(s\) in the last 7 days/.test(node(d, ['.harness/status.mjs']).stdout), 'a fresh failure must show');
+});
+
 await test('PO_ARCHITECT tasks that break the charter or role scopes are dropped', () => {
   const d = sandbox(); realTest(d);
   const t = (title, sub) => ({ title, subtasks: [sub] });
