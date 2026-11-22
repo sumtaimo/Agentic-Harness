@@ -4411,11 +4411,15 @@ await test('bug-hunter Batch 4 (ui, charter, settings): ui.mjs skipSessions/usag
     'Bash(node .harness/sessions.mjs start:*)',
     'Bash(node .harness/sessions.mjs checkpoint:*)',
     'Bash(node .harness/sessions.mjs handoff:*)',
-    'Bash(node .harness/sessions.mjs report:*)'
+    'Bash(node .harness/sessions.mjs report:*)',
+    'Bash(node .harness/feature.mjs new:*)', 'Bash(node .harness/feature.mjs expand:*)', 'Bash(node .harness/feature.mjs prompt:*)', 'Bash(node .harness/feature.mjs show:*)', 'Bash(node .harness/feature.mjs status:*)',
+    'Bash(node .harness/hunt.mjs new:*)', 'Bash(node .harness/hunt.mjs run:*)', 'Bash(node .harness/hunt.mjs prompt:*)', 'Bash(node .harness/hunt.mjs show:*)', 'Bash(node .harness/hunt.mjs status:*)'
   ]) assert(settings.allow.includes(rule), `settings.json allow missing ${rule}`);
+  assert(!settings.allow.some((r) => /(feature|hunt)\.mjs (approve|cancel)/.test(r)), 'approve/cancel of a feature or hunt must always ask the person');
   for (const rule of [
     'Bash(node .harness/backlog.mjs approve:*)',
-    'Bash(node .harness/sessions.mjs cleanup:*)'
+    'Bash(node .harness/sessions.mjs cleanup:*)',
+    'Bash(node .harness/feature.mjs approve:*)', 'Bash(node .harness/feature.mjs cancel:*)', 'Bash(node .harness/hunt.mjs approve:*)', 'Bash(node .harness/hunt.mjs cancel:*)'
   ]) assert(settings.ask.includes(rule), `settings.json ask missing ${rule}`);
 });
 

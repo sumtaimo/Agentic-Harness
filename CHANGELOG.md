@@ -10,6 +10,14 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.46 — 2026-11-22
+
+- **Claude Code no longer asks permission for every `/harness:feature` and `/harness:hunt` command.** `.claude/settings.json`
+  now allows the planning commands (`feature.mjs new|expand|prompt|show|status`, `hunt.mjs new|run|prompt|show|status`)
+  and still **asks you** for the deciding ones (`approve`, `cancel`), like `backlog.mjs approve`. The installer merges
+  these rules into your existing settings (yours stay).
+- *Affects:* Claude Code users of `feature` / `hunt`. *Permission change:* 10 allow rules, 4 ask rules. *Config:* none.
+
 ## 1.0.45 — 2026-11-22
 
 - **`feature` and `hunt` for every AI tool, not only Claude Code.** Only Claude Code can be restricted to read-only tools
