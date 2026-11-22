@@ -22,9 +22,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ROOT, HARNESS_DIR, ensureDirs, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
-import { readBacklog, writeBacklog, loadRoles } from './lib/governance.mjs';
-import { plannerSkills } from './lib/feature.mjs';
-import { createHunt, findHunt, approveHunt, huntProgress, huntPrompt, renderHuntDoc, readHunts, HUNT_MAX_FINDINGS } from './lib/hunt.mjs';
+import { readBacklog, writeBacklog } from './lib/governance.mjs';
+import { createHunt, findHunt, approveHunt, huntProgress, renderHuntDoc, readHunts, HUNT_MAX_FINDINGS } from './lib/hunt.mjs';
 
 ensureDirs();
 const argv = process.argv.slice(2);
@@ -58,10 +57,12 @@ switch (cmd) {
   case 'run': { const h = need(); process.exit(run(h, val('--from'))); }
   case 'prompt': {
     const h = need();
-    const ps = plannerSkills('QA_AUDITOR', h.scope, { id: `${h.id.toLowerCase()}-planner` });
-    if (ps.skills.length) console.error(`Skills for QA: ${ps.skills.map((x) => x.name).join(', ')}${ps.fetched.length ? ` (added from Skill Foundry: ${ps.fetched.join(', ')})` : ''}`);
-    console.log(huntPrompt(h, loadRoles().QA_AUDITOR, { skills: ps.block }));
-    console.log(`\n[EDITOR NOTE] Give this to a QA agent that may read files and run the project's tests but writes nothing. Save its JSON reply to a file, then: node .harness/hunt.mjs run ${h.id} --from <file>`);
+    // the exact prompt the headless run sends (project files, roles, repo map, skills), without calling an AI
+    const r = spawnSync(process.execPath, [path.join(HARNESS_DIR, 'daemon.mjs'), '--hunt-run', h.id, '--print-prompt'], { cwd: ROOT, encoding: 'utf8' });
+    if (r.status !== 0) die((r.stderr || r.stdout || 'could not build the prompt').trim());
+    if (r.stderr) process.stderr.write(r.stderr);
+    process.stdout.write(r.stdout);
+    console.log(`\n[EDITOR NOTE] Give this to a read-only agent (QA, which may run the tests); it writes no file. Save its JSON reply to a file, then: node .harness/hunt.mjs run ${h.id} --from <file>`);
     break;
   }
   case 'show': {

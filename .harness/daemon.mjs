@@ -1153,6 +1153,9 @@ async function runPlanner(task, errorTrace = null, previous = null, workRoot = R
     planSummary = 'single worker';
   }
   for (const sub of subtasks) { // task-level contract + acceptance criteria reach every worker
+    // ...and the task's goal when its workers were given (feature steps, bug fixes, PO tasks): it carries the feature,
+    // screen states, spec path, or a bug's evidence and the Red-Green rules. Up to 1.0.40 it was dropped.
+    if (given && task.goal && !sub.goal && sub.prompt !== task.goal) sub.goal = task.goal;
     if (interfaceContract && !sub.interfaceContract) sub.interfaceContract = interfaceContract;
     if (task.acceptanceCriteria && !sub.acceptanceCriteria) sub.acceptanceCriteria = task.acceptanceCriteria;
   }
@@ -1997,10 +2000,10 @@ async function poGenerate(gov, max) {
  * steps; every step's workers are validated exactly like a PO task (role scopes, charter paths, no overlap, test files
  * only for QA) before the owner sees the draft. `fromFile` (the editor path) skips the engine and validates that JSON.
  */
-async function featureExpand(id, fromFile = null) {
+async function featureExpand(id, fromFile = null, { printOnly = false } = {}) {
   const f = findFeature(id);
   if (!f) throw fatal(`No feature ${id}. Create one with: node .harness/feature.mjs new "<goal>"`);
-  if (f.status !== 'DRAFTING' && f.status !== 'DRAFT') throw fatal(`${f.id} is ${f.status}; only a new or draft feature can be expanded.`);
+  if (!printOnly && f.status !== 'DRAFTING' && f.status !== 'DRAFT') throw fatal(`${f.id} is ${f.status}; only a new or draft feature can be expanded.`);
   const gov = loadGov();
   const ba = gov.roles.BA_ANALYST || { name: 'BA_ANALYST', description: 'Business Analyst.', allowedTools: ['Read', 'Glob', 'Grep'] };
   const maxWorkers = (config.planner || {}).maxWorkers || 4;
@@ -2036,6 +2039,7 @@ async function featureExpand(id, fromFile = null) {
         repoMap: buildRepoMap(view.dir, { maxChars: 1200 }), files: `${files.join('\n')}${total > files.length ? `\n… (${total - files.length} more)` : ''}`,
         memory: memoryContext(config, { query: { goal: f.goal } })
       });
+      if (printOnly) { if (ps.skills.length) console.error(`Skills for BA: ${ps.skills.map((x) => x.name).join(', ')}`); console.log(prompt); return { printed: true }; }
       writeState({ phase: '0_FEATURE_BA', taskTitle: `BA_ANALYST is expanding ${f.id}: ${f.goal}`.slice(0, 200), planSummary: `≤ ${f.maxSteps} step(s)` });
       logTelemetry('0_FEATURE_BA', `Expanding ${f.id} "${f.goal}" into a user workflow (≤ ${f.maxSteps} steps)`, { feature: f.id });
       for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
@@ -2061,10 +2065,10 @@ async function featureExpand(id, fromFile = null) {
  * evidence. Each finding's fix plan (QA Red test + DEV fix) is validated like a PO task; an invalid finding is dropped
  * and named, not fatal. `fromFile` (the editor path) skips the engine.
  */
-async function huntRun(id, fromFile = null) {
+async function huntRun(id, fromFile = null, { printOnly = false } = {}) {
   const h = findHunt(id);
   if (!h) throw fatal(`No hunt ${id}. Start one with: node .harness/hunt.mjs "<area>"`);
-  if (h.status !== 'DRAFTING' && h.status !== 'DRAFT') throw fatal(`${h.id} is ${h.status}; only a new or draft hunt can run.`);
+  if (!printOnly && h.status !== 'DRAFTING' && h.status !== 'DRAFT') throw fatal(`${h.id} is ${h.status}; only a new or draft hunt can run.`);
   const gov = loadGov();
   const qa = gov.roles.QA_AUDITOR || { name: 'QA_AUDITOR', description: 'Quality Assurance Auditor.', allowedTools: ['Read', 'Glob', 'Grep'] };
   const b = readBacklog();
@@ -2102,6 +2106,7 @@ async function huntRun(id, fromFile = null) {
         repoMap: buildRepoMap(view.dir, { maxChars: 1200 }), files: `${files.join('\n')}${total > files.length ? `\n… (${total - files.length} more)` : ''}`,
         memory: memoryContext(config, { query: { goal: h.scope, files: h.files } })
       });
+      if (printOnly) { if (ps.skills.length) console.error(`Skills for QA: ${ps.skills.map((x) => x.name).join(', ')}`); console.log(prompt); return { printed: true }; }
       writeState({ phase: '0_HUNT', taskTitle: `QA_AUDITOR is hunting bugs (${h.id}): ${h.scope}`.slice(0, 200), planSummary: `≤ ${h.maxFindings} finding(s)` });
       logTelemetry('0_HUNT', `Bug hunt ${h.id} "${h.scope}" (≤ ${h.maxFindings} findings)`, { hunt: h.id });
       for (let attempt = 1; attempt <= 2 && !result; attempt++) {
@@ -2234,6 +2239,7 @@ const huntId = argVal('--hunt-run');
 if (huntId) {
   // Read-only like --feature-expand: no pid file, no inbox, works while a daemon runs.
   try {
+    if (args.includes('--print-prompt')) { await huntRun(huntId, null, { printOnly: true }); process.exit(0); }
     const { hunt: h, dropped } = await huntRun(huntId, argVal('--from') || null);
     if (!h.findings.length) console.log(`${h.id} DONE: no bugs found in "${h.scope}".${dropped.length ? ` ${dropped.length} unusable finding(s) dropped (see ${h.doc}).` : ''}`);
     else {
@@ -2250,6 +2256,7 @@ const featureId = argVal('--feature-expand');
 if (featureId) {
   // Read-only planning step: it never claims the pid file or the inbox, so it also works while a daemon runs.
   try {
+    if (args.includes('--print-prompt')) { await featureExpand(featureId, null, { printOnly: true }); process.exit(0); }
     const { feature: f, dropped } = await featureExpand(featureId, argVal('--from') || null);
     const open = f.steps.filter((s) => s.needsDecision);
     console.log(`${f.id} DRAFT: ${f.steps.length} step(s) for "${f.goal}"${dropped ? ` (${dropped} more were over the ${f.maxSteps}-step limit and dropped)` : ''}. Spec: ${f.doc}`);

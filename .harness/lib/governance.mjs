@@ -699,7 +699,7 @@ export function itemToJob(item, { autonomous = false } = {}) {
   if (item.maxCostUsd !== undefined) job.maxCostUsd = item.maxCostUsd;
   if (item.costApproved === true) job.costApproved = true; // the person approved this big run (backlog.mjs approve)
   if (item.model) job.model = item.model;
-  if (Array.isArray(item.subtasks) && item.subtasks.length) job.subtasks = item.subtasks;
+  if (Array.isArray(item.subtasks) && item.subtasks.length) Object.assign(job, { subtasks: item.subtasks, ...(item.goal ? { goal: item.goal } : {}) });
   else if (item.hierarchy) Object.assign(job, { goal: item.goal || item.title, targetFiles: item.targetFiles || [] });
   else if (item.autoPlan) Object.assign(job, { autoPlan: true, goal: item.goal || item.title, targetFiles: item.targetFiles || [] });
   else job.subtasks = [{ id: workerName({ role: item.role, goal: item.goal || item.title, files: item.targetFiles }), role: item.role, skills: item.skills, targetFiles: item.targetFiles || [], prompt: item.goal || item.title }];

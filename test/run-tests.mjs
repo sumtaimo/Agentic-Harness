@@ -726,7 +726,8 @@ await test('feature: a step whose worker breaks its role scope rejects the expan
   const file = path.join(d, 'steps.json'); fs.writeFileSync(file, JSON.stringify(FEATURE_STEPS()));
   const ed = feature(d, ['expand', 'F3', '--from', file]);
   assert(ed.status === 0 && /F3 DRAFT: 3 step\(s\)/.test(ed.stdout) && !fs.existsSync(path.join(d, '.mock-prompts', 'feature-calls.txt')), ed.stdout + ed.stderr);
-  assert(/\[HARNESS FEATURE_BA\]/.test(feature(d, ['prompt', 'F3']).stdout), 'prompt for the editor BA agent');
+  const ep = feature(d, ['prompt', 'F3']).stdout;
+  assert(/\[HARNESS FEATURE_BA\]/.test(ep) && /\[WORKER ROLES/.test(ep) && /\[PROJECT FILES\]/.test(ep), 'the editor prompt must be the full headless prompt (roles, project files)');
   assert(feature(d, ['cancel', 'F2']).status === 0 && features(d)[1].status === 'CANCELLED', 'cancel');
 });
 
@@ -831,6 +832,8 @@ await test('hunt approve: kept bugs → READY bugfix items (severity order, Red-
   assert(/Red-Green/.test(b[0].goal) && /Symptom \/ Root Cause \/ Blast Radius/.test(b[0].goal) && b[0].acceptanceCriteria.includes('No existing test was weakened or skipped'), b[0].goal);
   assert(b[0].subtasks.map((w) => w.role).join() === 'QA_AUDITOR,DEV_ENGINEER', 'Red-Green workers');
   tick(d);
+  const fixPrompt = promptOf(d, 'fix2');
+  assert(/\[OVERALL GOAL[^\]]*\]:\nBug fix \(H1 #1, high, confirmed\): Crash on empty cart/.test(fixPrompt) && /Red-Green: QA_AUDITOR writes a test/.test(fixPrompt) && /Symptom \/ Root Cause \/ Blast Radius/.test(fixPrompt), `the bug's evidence and Red-Green rules must reach the workers: ${fixPrompt.slice(0, 600)}`);
   assert(byId(d, 'H1-B1').status === 'DONE' && fs.existsSync(path.join(d, 'tests', 'b2.test.js')) && fs.existsSync(path.join(d, 'src', 'b2.js')), 'autopilot fixes the confirmed bug first');
   const none = hunt(d, ['auth HUNT_JSON {"summary":"all good","findings":[]}']);
   assert(none.status === 0 && /H2 DONE: no bugs found/.test(none.stdout) && hunts(d)[1].status === 'DONE', none.stdout);
@@ -839,7 +842,7 @@ await test('hunt approve: kept bugs → READY bugfix items (severity order, Red-
   fs.rmSync(path.join(d, '.mock-prompts', 'hunt-calls.txt'), { force: true });
   const again = hunt(d, ['run', 'H3', '--from', file]).stdout; // the same bugs are already backlog items → all duplicates
   assert(/H3 DONE: no bugs found[^\n]*6 unusable finding/.test(again) && /Crash on empty cart: duplicate/.test(hunts(d)[2].dropped.join()) && !fs.existsSync(path.join(d, '.mock-prompts', 'hunt-calls.txt')), `--from works without an engine and dedupes against the backlog: ${again}`);
-  assert(/\[HARNESS HUNTER\]/.test(hunt(d, ['prompt', 'H3']).stdout) && hunt(d, ['cancel', 'H3']).status === 0, 'prompt + cancel');
+  assert(/\[PROJECT FILES\]/.test(hunt(d, ['prompt', 'H3']).stdout) && /\[HARNESS HUNTER\]/.test(hunt(d, ['prompt', 'H3']).stdout) && hunt(d, ['cancel', 'H3']).status === 0, 'prompt + cancel');
 });
 
 await test('v1.0.39 feature BA and hunt QA get matching skills (role + keywords, at most 2, never narrowing tools); other roles\' skills stay out', () => {

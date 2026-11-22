@@ -10,6 +10,16 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.41 — 2026-11-22
+
+- **Fix: a backlog item's goal never reached its workers** when the item had its own workers (feature steps, bug
+  fixes, PO tasks). So feature workers did not see the feature, screen states or spec path, and bug-fix workers did not
+  see the evidence or the Red-Green / Symptom-Root Cause-Blast Radius rules. The goal now reaches every worker as its
+  `[OVERALL GOAL]` (found while preparing a skill test for Skill Foundry).
+- **`feature.mjs prompt` / `hunt.mjs prompt` print the exact headless prompt** (roles, allowed paths, repo map,
+  project files, skills) instead of a shorter one, so an editor agent sees the same as a headless run.
+- *Affects:* every feature step, hunt fix and PO task (workers get more context). *Config:* none.
+
 ## 1.0.40 — 2026-11-21
 
 - **`feature` and `hunt` without a command to remember:** `npm start` → `[2] New task` now offers `[4] feature` and
