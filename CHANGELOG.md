@@ -10,6 +10,20 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.45 — 2026-11-22
+
+- **`feature` and `hunt` for every AI tool, not only Claude Code.** Only Claude Code can be restricted to read-only tools
+  (`--allowedTools`); Antigravity (first in `autoOrder`) and Codex get "only read" as a written rule. When BA or QA runs
+  in your project folder (not a git project, or integration off) the harness now compares the project files before and
+  after the call and, if any changed, prints `! … was told to only read, but N project file(s) changed …`, logs
+  `PLANNER_CHANGED_FILES` and keeps the warning on the draft and its spec page. It never restores anything (your own
+  uncommitted work could be in the same files). In the default setup the call runs in a throw-away view that is deleted.
+- Tested with an Antigravity-style engine (prompt as argument, no `--allowedTools`, plain-text answer). Docs (AGENTS.md,
+  README, WORKFLOW in English and Khmer) say how to use both commands from Antigravity, Cursor and VS Code.
+- *Not tested:* real Antigravity (`agy`) and Codex runs, because neither tool is installed where this was built; their
+  profiles were verified by earlier releases for workers.
+- *Affects:* only runs of `feature` / `hunt`. *Config:* none.
+
 ## 1.0.44 — 2026-11-22
 
 Maintenance release: bugs found by installing the harness the way a new user does and running `feature`, `hunt` and the

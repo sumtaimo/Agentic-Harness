@@ -101,6 +101,7 @@ export function normalizeFindings(parsed, { max = HUNT_MAX_FINDINGS, backlogTitl
 
 export function renderHuntDoc(h) {
   const L = [`# ${h.id}: bug hunt — ${h.scope}`, '', `Status: ${h.status}. Written by the harness from QA_AUDITOR's hunt; ✅ confirmed = a command really failed, 🟡 suspect = found by reading only.`, ''];
+  if (h.warning) L.push(`> ⚠ ${h.warning}`, '');
   if (h.summary) L.push(h.summary, '');
   if (!h.findings.length) L.push('No bugs found.', '');
   for (const f of h.findings) {
@@ -125,7 +126,7 @@ export function saveHunt(id, result, root = ROOT) {
   const b = readBacklog();
   const h = readHunts(b).find((x) => x.id === id);
   if (!h) throw new Error(`No hunt ${id}.`);
-  Object.assign(h, { status: result.findings.length ? 'DRAFT' : 'DONE', summary: result.summary, findings: result.findings, dropped: result.dropped, huntedAt: new Date().toISOString(), lastError: undefined });
+  Object.assign(h, { status: result.findings.length ? 'DRAFT' : 'DONE', summary: result.summary, findings: result.findings, dropped: result.dropped, huntedAt: new Date().toISOString(), lastError: undefined, warning: result.warning || undefined });
   writeBacklog(b);
   writeHuntDoc(h, root);
   return h;

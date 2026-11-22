@@ -137,6 +137,7 @@ export function normalizeExpansion(parsed, max = FEATURE_MAX_STEPS) {
 /** The spec page the owner reads (docs/features/<slug>.md). */
 export function renderFeatureDoc(f) {
   const L = [`# ${f.id}: ${f.goal}`, '', `Status: ${f.status}${f.approvedAt ? ` (approved ${f.approvedAt.slice(0, 10)})` : ''}. Written by the harness from BA_ANALYST's expansion; edit the backlog, not this page.`, ''];
+  if (f.warning) L.push(`> ⚠ ${f.warning}`, '');
   if (f.summary) L.push(f.summary, '');
   const open = f.steps.filter((s) => s.needsDecision);
   if (open.length) L.push('## Needs your decision', '', ...open.map((s) => `- Step ${s.n} (${s.title}): ${s.needsDecision}`), '');
@@ -169,7 +170,7 @@ export function saveDraft(id, expansion, root = ROOT) {
   const b = readBacklog();
   const f = readFeatures(b).find((x) => x.id === id);
   if (!f) throw new Error(`No feature ${id}.`);
-  Object.assign(f, { status: 'DRAFT', summary: expansion.summary, steps: expansion.steps, draftedAt: new Date().toISOString(), lastError: undefined });
+  Object.assign(f, { status: 'DRAFT', summary: expansion.summary, steps: expansion.steps, draftedAt: new Date().toISOString(), lastError: undefined, warning: expansion.warning || undefined });
   writeBacklog(b);
   writeFeatureDoc(f, root);
   return f;

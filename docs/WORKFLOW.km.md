@@ -107,6 +107,7 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
   Red-Green៖ QA សរសេរ test ដែលបរាជ័យ DEV កែមូលហេតុពិត។
 - **អ្វីដែលរង់ចាំអ្នក** នៅក្នុងបញ្ជីតែមួយ៖ `npm run status` ("Needs you"), `npm run status -- --full`, ពេលចាប់ផ្តើម session
   និង web dashboard (`npm run ui`, ប្រអប់ *Needs you · Features · Bug hunts*)។
+- **AI គ្រប់ប្រភេទ៖** ពាក្យបញ្ជាទាំងពីរប្រើ AI ណាក៏បានដែលអ្នកបានអនុញ្ញាតក្នុង `config.json` (`claude`, `antigravity`, `codex`) ហើយក៏ប្រើបានពី Antigravity, Cursor និង VS Code ដែរ។ ភាពខុសគ្នាមួយ៖ មានតែ Claude Code ទេដែលអាចត្រូវបានកំណត់ឲ្យប្រើឧបករណ៍អានតែប៉ុណ្ណោះ។ Antigravity និង Codex ទទួលបានវាជាការណែនាំជាអក្សរ ដូច្នេះបើវាផ្លាស់ប្តូរឯកសារគម្រោងពេលរៀបផែនការ harness នឹងព្រមាន (⚠) ជំនួសការនៅស្ងាត់។
 - **Browser៖** worker អាចបើកកម្មវិធីក្នុង browser ពិតបាន តែតាម preset MCP `playwright` (បិទជាលំនាំដើម `doctor` ប្រាប់របៀបបើក)។
 
 ## ៨. ការកែលម្អបន្ថែម

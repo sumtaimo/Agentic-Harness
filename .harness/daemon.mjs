@@ -1896,6 +1896,30 @@ function refreshAutoStatus(note) {
  * integration branch (a detached worktree, removed afterwards) — NOT the user's folder, which may be
  * on another branch. Returns { dir, tip, cleanup }.
  */
+/**
+ * Only Claude Code can be told "these tools only" (--allowedTools); Antigravity and Codex get the read-only rule as words.
+ * When a read-only planner call (feature BA, hunt QA) runs IN the project folder (no isolated view: not a git repo, or
+ * integration off), size + time of every project file before and after tell whether it touched anything. It never
+ * restores (the user's own uncommitted work could be in the same files): it says so loudly.
+ */
+function fileStamp(root) {
+  const m = new Map();
+  try { for (const f of listProjectFiles(root, 5000).files) { try { const st = fs.statSync(path.join(root, f)); m.set(f, `${st.size}:${st.mtimeMs}`); } catch { m.set(f, 'gone'); } } } catch { /* nothing to compare */ }
+  return m;
+}
+function changedFiles(before, root) {
+  const after = fileStamp(root); const out = [];
+  for (const [f, v] of after) if (before.get(f) !== v) out.push(f);
+  for (const f of before.keys()) if (!after.has(f)) out.push(f);
+  return out;
+}
+function plannerChangedWarning(who, files) {
+  const text = `${who} was told to only read, but ${files.length} project file(s) changed while it ran: ${files.slice(0, 5).join(', ')}${files.length > 5 ? ', …' : ''}. Check with git status / git diff before you build anything. (Only Claude Code can restrict an AI to read-only tools; Antigravity and Codex get it as an instruction.)`;
+  logTelemetry('PLANNER_CHANGED_FILES', text, { who, files: files.slice(0, 20) });
+  console.error(`! ${text}`);
+  return text;
+}
+
 async function projectView() {
   const branch = integrationFor({ autonomous: true });
   if (!branch || !(await isRepoWithCommits(ROOT))) return { dir: ROOT, tip: null, cleanup: async () => {} };
@@ -2014,7 +2038,7 @@ async function featureExpand(id, fromFile = null, { printOnly = false } = {}) {
   const gov = loadGov();
   const ba = gov.roles.BA_ANALYST || { name: 'BA_ANALYST', description: 'Business Analyst.', allowedTools: ['Read', 'Glob', 'Grep'] };
   const maxWorkers = (config.planner || {}).maxWorkers || 4;
-  let parsed = null; let lastErr = '';
+  let parsed = null; let lastErr = ''; let plannerWarning = '';
   const check = (obj) => {
     const exp = normalizeExpansion(obj, f.maxSteps);
     for (const st of exp.steps) {
@@ -2048,6 +2072,7 @@ async function featureExpand(id, fromFile = null, { printOnly = false } = {}) {
         memory: memoryContext(config, { query: { goal: f.goal } })
       });
       if (printOnly) { if (ps.skills.length) console.error(`Skills for BA: ${ps.skills.map((x) => x.name).join(', ')}`); console.log(prompt); return { printed: true }; }
+      const stampBefore = view.dir === ROOT ? fileStamp(ROOT) : null;
       writeState({ phase: '0_FEATURE_BA', taskTitle: `BA_ANALYST is expanding ${f.id}: ${f.goal}`.slice(0, 200), planSummary: `≤ ${f.maxSteps} step(s)` });
       logTelemetry('0_FEATURE_BA', `Expanding ${f.id} "${f.goal}" into a user workflow (≤ ${f.maxSteps} steps)`, { feature: f.id });
       for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
@@ -2060,10 +2085,11 @@ async function featureExpand(id, fromFile = null, { printOnly = false } = {}) {
         });
         try { parsed = check(extractJson(output)); } catch (e) { parsed = null; lastErr = `${e.message}: ${String(output).slice(0, 200)}`; }
       }
+      if (stampBefore) { const ch = changedFiles(stampBefore, ROOT); if (ch.length) plannerWarning = plannerChangedWarning('BA_ANALYST', ch); }
     } finally { await view.cleanup(); }
     if (!parsed) { markFeatureError(f.id, lastErr); logTelemetry('0_FEATURE_INVALID', `${f.id}: BA reply unusable: ${lastErr}`, { feature: f.id }); throw fatal(`${f.id}: BA_ANALYST's reply was not usable twice: ${lastErr}`); }
   }
-  const saved = saveDraft(f.id, parsed);
+  const saved = saveDraft(f.id, { ...parsed, warning: plannerWarning });
   logTelemetry('0_FEATURE_DRAFT', `${f.id} drafted: ${saved.steps.length} step(s), ${saved.steps.filter((s) => s.needsDecision).length} need a decision${parsed.dropped ? `, ${parsed.dropped} over the limit dropped` : ''}`, { feature: f.id });
   return { feature: saved, dropped: parsed.dropped };
 }
@@ -2096,7 +2122,7 @@ async function huntRun(id, fromFile = null, { printOnly = false } = {}) {
     ok.forEach((f, i) => { f.n = i + 1; });
     return { ...r, findings: ok };
   };
-  let result = null; let lastErr = '';
+  let result = null; let lastErr = ''; let plannerWarning = '';
   if (fromFile) {
     try { result = check(JSON.parse(fs.readFileSync(fromFile, 'utf8'))); } catch (e) { markHuntError(h.id, e.message); throw fatal(`${h.id}: hunt result rejected: ${e.message}`); }
   } else {
@@ -2116,6 +2142,7 @@ async function huntRun(id, fromFile = null, { printOnly = false } = {}) {
         memory: memoryContext(config, { query: { goal: h.scope, files: h.files } })
       });
       if (printOnly) { if (ps.skills.length) console.error(`Skills for QA: ${ps.skills.map((x) => x.name).join(', ')}`); console.log(prompt); return { printed: true }; }
+      const stampBefore = view.dir === ROOT ? fileStamp(ROOT) : null;
       writeState({ phase: '0_HUNT', taskTitle: `QA_AUDITOR is hunting bugs (${h.id}): ${h.scope}`.slice(0, 200), planSummary: `≤ ${h.maxFindings} finding(s)` });
       logTelemetry('0_HUNT', `Bug hunt ${h.id} "${h.scope}" (≤ ${h.maxFindings} findings)`, { hunt: h.id });
       for (let attempt = 1; attempt <= 2 && !result; attempt++) {
@@ -2128,10 +2155,11 @@ async function huntRun(id, fromFile = null, { printOnly = false } = {}) {
         });
         try { result = check(extractJson(output)); } catch (e) { result = null; lastErr = `${e.message}: ${String(output).slice(0, 200)}`; }
       }
+      if (stampBefore) { const ch = changedFiles(stampBefore, ROOT); if (ch.length) plannerWarning = plannerChangedWarning('QA_AUDITOR', ch); }
     } finally { await view.cleanup(); }
     if (!result) { markHuntError(h.id, lastErr); logTelemetry('0_HUNT_INVALID', `${h.id}: hunter reply unusable: ${lastErr}`, { hunt: h.id }); throw fatal(`${h.id}: QA_AUDITOR's reply was not usable twice: ${lastErr}`); }
   }
-  const saved = saveHunt(h.id, result);
+  const saved = saveHunt(h.id, { ...result, warning: plannerWarning });
   logTelemetry('0_HUNT_DRAFT', `${h.id}: ${saved.findings.length} finding(s) (${saved.findings.filter((f) => f.confidence === 'confirmed').length} confirmed), ${result.dropped.length} dropped`, { hunt: h.id });
   return { hunt: saved, dropped: result.dropped };
 }

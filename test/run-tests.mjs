@@ -959,6 +959,30 @@ await test('v1.0.44 skill list cache: used for under 6 h, looked up again after 
   r = ask(t0 + 7 * H + 1000, 'newer-skill'); assert(r.source === 'live' && r.skills[0].name === 'newer-skill', 'deleting the file looks again at once');
 });
 
+await test('v1.0.45 Antigravity/Codex-style engine (prompt as argument, no --allowedTools, plain-text answer): feature and hunt work; a planner that changes files although it was told to only read is reported loudly', () => {
+  const { d, g } = gitSandbox({ mode: 'off' }); // a git project with integration off: the planner runs IN the project folder (no isolated view)
+  fs.appendFileSync(path.join(d, '.gitignore'), '\n.mock-prompts/\n'); // the fake engine's own log files are not project files
+  realTest(d); setBacklog(d, []); g('add', '-A'); g('commit', '-q', '-m', 'ready');
+  const cfg = json(path.join(d, '.harness', 'config.json'));
+  cfg.profiles.agylike = { verified: true, binary: process.execPath, args: [path.join(REPO, 'test', 'mock-agy.mjs'), '{prompt}'], allowedTools: [] };
+  cfg.activeProfile = 'agylike'; cfg.autoOrder = ['agylike'];
+  fs.writeFileSync(path.join(d, '.harness', 'config.json'), JSON.stringify(cfg, null, 2));
+  fs.writeFileSync(path.join(d, '.harness', 'approvals.json'), JSON.stringify({ engines: { agylike: true } }));
+  const ok = feature(d, [`login FEATURE_JSON ${JSON.stringify(FEATURE_STEPS())}`]);
+  assert(ok.status === 0, `exit ${ok.status}: ${ok.stderr}`); assert(/F1 DRAFT: 3 step\(s\)/.test(ok.stdout), 'draft'); assert(!/changed while it ran/.test(ok.stderr + ok.stdout), `a well-behaved engine must not be reported: ${ok.stderr.slice(0, 400)}`);
+  assert(/\[SHELL\]: you may run ONLY these commands: git status\./.test(fs.readFileSync(path.join(d, '.mock-prompts', 'feature-ba.txt'), 'utf8')), 'the read-only rule must also be in the words, for engines that cannot be restricted');
+  assert(!fs.existsSync(path.join(d, 'src', 'stray.js')) && features(d)[0].warning === undefined, 'a well-behaved engine leaves no warning');
+  // an engine that writes although it was told to only read, running in the project folder
+  const bad = feature(d, [`signup FEATURE_JSON ${JSON.stringify(FEATURE_STEPS())}`], { STRAY: '1' });
+  assert(bad.status === 0 && /changed while it ran: src\/stray\.js/.test(bad.stderr) && /Only Claude Code can restrict/.test(bad.stderr), bad.stdout + bad.stderr);
+  const f2 = features(d)[1];
+  assert(/src\/stray\.js/.test(f2.warning) && /> ⚠ BA_ANALYST was told to only read/.test(fs.readFileSync(path.join(d, f2.doc), 'utf8')), 'the warning must stay on the draft and in the spec page');
+  assert(log(d).some((e) => e.phase === 'PLANNER_CHANGED_FILES'), 'logged');
+  fs.rmSync(path.join(d, 'src', 'stray.js'), { force: true });
+  const h = hunt(d, [`checkout ${huntFile(d, FINDINGS)}`], { STRAY: '1' });
+  assert(h.status === 0 && /H1 DRAFT: 2 finding/.test(h.stdout) && /QA_AUDITOR was told to only read/.test(h.stderr) && /⚠/.test(fs.readFileSync(path.join(d, hunts(d)[0].doc), 'utf8')), h.stdout + h.stderr);
+});
+
 await test('v1.0.44 "Needs you" counts only failed jobs from the last 7 days (an old failure you dealt with does not nag forever)', () => {
   const d = sandbox(); realTest(d); setBacklog(d, []);
   const f = path.join(d, '.harness', 'failed'); fs.mkdirSync(f, { recursive: true });

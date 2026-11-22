@@ -244,7 +244,7 @@ harness menu). In VS Code every one of them is also a button: *Tasks: Run Task �
 | `node .harness/status.mjs --full` | `npm run status -- --full` | everything at once: what needs you, status and recent events, then doctor, usage and team |
 | `node .harness/ui.mjs` | `npm run ui` | the web dashboard |
 
-In Claude Code the same ideas are `/harness:run`, `/harness:feature`, `/harness:hunt`, `/harness:auto`, `/harness:status` and `/harness:teach`.
+In Antigravity, Cursor and VS Code there are no slash commands: use the `node .harness/…` commands above or the VS Code buttons (an editor agent can do the AI step itself: `node .harness/feature.mjs prompt F1`, then `expand F1 --from <file>`). `feature` and `hunt` work with every AI tool you allowed (Claude, Antigravity, Codex). In Claude Code the same ideas are `/harness:run`, `/harness:feature`, `/harness:hunt`, `/harness:auto`, `/harness:status` and `/harness:teach`.
 
 Start in one step from any terminal (**`npm start`** or `node .harness/start.mjs`, `--summary` for overview only, `--json` for scripts) for an interactive numbered menu `[1]`–`[6]` (`[1]` Continue unfinished work incl. `handoff`/`resume`/`verify`/`rollback`/`report`; `[2]` New task incl. `--branch uat`, `--cwd`, and `--model`; `[3]` Setup & Team incl. `engines`, `auto-assign`, `sync-agents`, and `validate`; `[4]` Backlog & Autopilot incl. `approve`, `ready`/`block`/`pop`/`releases`, `tick`, and loop; `[5]` Session board incl. `checkpoint`, `handoff`, `--cwd`, `merge`, `cleanup`; `[6]` Usage 7d/30d, status, memory rules/context/auto-lessons, `--brief`, and Web UI `[7]`), or use **Command Palette → Tasks: Run Task**:
 

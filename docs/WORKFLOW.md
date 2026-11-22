@@ -168,6 +168,11 @@ Two commands grow a short request into checked work, with **one stop for you** b
   usage and team), the session start, and the web dashboard (`npm run ui`, card *Needs you · Features · Bug hunts*).
 - The BA_ANALYST expansion and the QA_AUDITOR hunt get matching skills by keyword, as workers do, plus the
   untrusted-content rule and their exact shell commands.
+- **Any AI tool:** both commands use whichever tool in `config.json` you allowed (`claude`, `antigravity`, `codex`), also from
+  Antigravity, Cursor or VS Code (the VS Code buttons, or `node .harness/feature.mjs`); an editor agent can do the AI step
+  itself with `prompt` and `expand F1 --from <file>`. One difference: only Claude Code can be restricted to read-only tools;
+  Antigravity and Codex get "only read" as a written rule, so if one of them changes a project file during a planning call
+  while the call runs in your project folder, the harness says so (⚠ in the draft and the log) instead of staying silent.
 - **Browser:** workers can open the app in a real browser only through the optional `playwright` MCP preset
   (`.harness/mcp.json`, off by default; `doctor` says how to turn it on). The QA_AUDITOR and UX_DESIGNER roles run no `node` scripts.
 
