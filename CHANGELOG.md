@@ -10,6 +10,13 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.42 — 2026-11-22
+
+- **Bug hunt: no invented expectations.** The hunter must take "expected" from a source it can name (spec, test, docs,
+  a caller) and may count odd inputs (NaN, null, reversed ranges) only when a real caller passes them or a source names
+  them. Found by the Skill Foundry bug-hunter live runs: agents reported clamp(NaN) with an expected value they chose.
+- *Affects:* `hunt` findings (fewer false alarms). *Config:* none.
+
 ## 1.0.41 — 2026-11-22
 
 - **Fix: a backlog item's goal never reached its workers** when the item had its own workers (feature steps, bug

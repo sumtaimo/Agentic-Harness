@@ -42,6 +42,7 @@ export function huntPrompt(h, qa, context = {}) {
     `Report at most ${h.maxFindings} finding(s), most severe first. Rules:`,
     '- Only bugs: wrong results, crashes, data loss, security holes, broken states (loading/error/empty/reload), missing validation or permission checks. Never style, naming or "could be cleaner".',
     '- Every finding needs evidence: "file" and "line", "evidence" (the command you ran and its failing output, or the exact code lines), "repro" steps, "expected" and "actual".',
+    '- "expected" must come from a source you can name (a spec, a test, the docs, a caller in the code), never your own choice; an odd input (NaN, null, a reversed range) counts only when a real caller passes it or a source names it.',
     '- "confidence": "confirmed" ONLY when a command or test you ran really fails because of it; otherwise "suspect". Never guess a confirmed.',
     '- Do not repeat a bug the backlog already has.',
     '- Fix plan per finding: exactly two workers with no shared file — a QA_AUDITOR worker that writes a test that FAILS because of the bug (Red), and a DEV_ENGINEER (or UX_DESIGNER for style files) worker that fixes the root cause in the code file(s) (Green). Explicit "targetFiles" inside each role\'s paths.',
