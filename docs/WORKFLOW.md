@@ -150,6 +150,27 @@ is still open (`BRIEFED`, `DELEGATED`, or `FAILED`):
 - **Worktree mode (`useGitWorktrees: true`):** commit or stash the files a task may change first. A worktree starts
   from the last commit, so the harness refuses to start over uncommitted edits in those files instead of overwriting them.
 
+## Big features and bug hunts (v1.0.36–1.0.42)
+
+Two commands grow a short request into checked work, with **one stop for you** before anything is built:
+
+- **`npm run feature -- "login"`** (or `/harness:feature login`, or `npm start` → `[2]` → `[4]`): BA_ANALYST, read-only,
+  grows the goal into the whole user workflow (sign up, log in, errors, reload, log out, permissions …) and writes a
+  draft spec in `docs/features/<name>.md`. Guessed business rules are marked 🟡. The last step is a QA test that walks
+  the user through every step. You keep steps with `node .harness/feature.mjs approve F1 --keep 1,2,4` (or `--all`);
+  autopilot builds them on `uat`, each step after the ones it depends on.
+- **`npm run hunt -- "checkout" --files src/cart/`** (or `/harness:hunt`, or `npm start` → `[2]` → `[5]`): QA_AUDITOR,
+  without Edit/Write (it may run the project's tests), reports real bugs with evidence: ✅ confirmed (a command really
+  failed) or 🟡 suspect (found by reading). "Expected" must come from a source it can name. Findings without evidence
+  or a Red-Green fix plan are dropped and named in `docs/bugs/H1.md`. You keep the ones to fix
+  (`node .harness/hunt.mjs approve H1 --keep 1`); each is fixed Red-Green: QA writes a failing test, DEV fixes the root cause.
+- **What waits for you** is in one list: `npm run status` ("Needs you"), `npm run status -- --full` (plus doctor,
+  usage and team), the session start, and the web dashboard (`npm run ui`, card *Needs you · Features · Bug hunts*).
+- The BA_ANALYST expansion and the QA_AUDITOR hunt get matching skills by keyword, as workers do, plus the
+  untrusted-content rule and their exact shell commands.
+- **Browser:** workers can open the app in a real browser only through the optional `playwright` MCP preset
+  (`.harness/mcp.json`, off by default; `doctor` says how to turn it on). The QA_AUDITOR and UX_DESIGNER roles run no `node` scripts.
+
 ## 4. What is NOT guaranteed (read this before trusting it with a real project)
 
 - **The judge and the injection scanner are AI- and pattern-based.** A judge can miss a bug and the scanner can miss a cleverly worded injection; the real check still decides PASSED, and the human still reviews the diff.

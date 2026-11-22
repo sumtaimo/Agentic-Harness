@@ -93,6 +93,22 @@ Harness គឺជាកម្មវិធីគ្រប់គ្រង (control
 - `me.md` មួយសម្រាប់មនុស្សម្នាក់ និងម៉ាស៊ីនមួយ៖ git worktree (session worktree របស់ Claude Code, កូន session របស់ `/harness:sessions`) ប្រើឯកសាររបស់ checkout មេ។ Skill ផ្ទាល់ខ្លួននៅក្នុង `~/.claude/skills/<name>/` របស់អ្នក ហើយ `doctor` ពិនិត្យនីមួយៗ។
 - **ទំព័រក្រុម** `.harness/memory/people.md` (ឡើង git)៖ ម្នាក់ៗចែករំលែកឈ្មោះ hats អ្វីដែលគួរសួរពួកគេ និងបើចង់ ភាសា និងឈ្មោះ git របស់ខ្លួន (`node .harness/memory.mjs me share --ask "…" --language --git`)។ ពេលចាប់ផ្តើម session វាបង្ហាញ "Decisions by hat" ដើម្បីឲ្យ AI ប្រាប់ថាត្រូវសួរអ្នកណា។ ព័ត៌មានទំនាក់ទំនង (email, លេខទូរសព្ទ) ត្រូវបានបដិសេធ ហើយរបៀបចម្លើយ បទពិសោធន៍ និង skill ផ្ទាល់ខ្លួននៅតែក្នុង `me.md`។
 
+## Feature ធំ និងការរកកំហុស (v1.0.36–1.0.42)
+
+ពាក្យបញ្ជាពីរពង្រីកសំណើខ្លីទៅជាការងារដែលត្រូវបានពិនិត្យ ហើយមាន **ចំណុចឈប់មួយសម្រាប់អ្នក** មុនពេលសាងសង់អ្វីទាំងអស់៖
+
+- **`npm run feature -- "login"`** (ឬ `/harness:feature login` ឬ `npm start` → `[2]` → `[4]`)៖ BA_ANALYST (អានតែប៉ុណ្ណោះ)
+  ពង្រីកគោលដៅទៅជាដំណើរការអ្នកប្រើពេញលេញ ហើយសរសេរសេចក្តីព្រាងក្នុង `docs/features/<name>.md`។ ច្បាប់អាជីវកម្មដែលទាយ
+  ត្រូវបានសម្គាល់ 🟡។ ជំហានចុងក្រោយគឺ test របស់ QA ដែលដើរកាត់ជំហានទាំងអស់។ អ្នកជ្រើសជំហានដោយ
+  `node .harness/feature.mjs approve F1 --keep 1,2,4` (ឬ `--all`) ហើយ autopilot សាងសង់វានៅលើ `uat`។
+- **`npm run hunt -- "checkout" --files src/cart/`** (ឬ `/harness:hunt` ឬ `npm start` → `[2]` → `[5]`)៖ QA_AUDITOR
+  (មិនកែឯកសារ តែអាចរត់ test បាន) រាយការណ៍កំហុសពិតដែលមានភស្តុតាង៖ ✅ confirmed ឬ 🟡 suspect។ "expected" ត្រូវមកពីប្រភព
+  ដែលអាចដាក់ឈ្មោះបាន។ អ្នកជ្រើសកំហុសដែលត្រូវកែ (`node .harness/hunt.mjs approve H1 --keep 1`) ហើយនីមួយៗត្រូវបានកែតាម
+  Red-Green៖ QA សរសេរ test ដែលបរាជ័យ DEV កែមូលហេតុពិត។
+- **អ្វីដែលរង់ចាំអ្នក** នៅក្នុងបញ្ជីតែមួយ៖ `npm run status` ("Needs you"), `npm run status -- --full`, ពេលចាប់ផ្តើម session
+  និង web dashboard (`npm run ui`, ប្រអប់ *Needs you · Features · Bug hunts*)។
+- **Browser៖** worker អាចបើកកម្មវិធីក្នុង browser ពិតបាន តែតាម preset MCP `playwright` (បិទជាលំនាំដើម `doctor` ប្រាប់របៀបបើក)។
+
 ## ៨. ការកែលម្អបន្ថែម
 
 - test មិនខូចទៀតទេ ពេលមានការងារក្នុង backlog ឬមាន run កំពុងបើក (`sandbox()` ក្នុង `test/run-tests.mjs`)។

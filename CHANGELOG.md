@@ -10,6 +10,15 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.43 — 2026-11-22
+
+- **Web dashboard (`npm run ui`) shows what needs you:** a new card *Needs you · Features · Bug hunts* lists every item
+  waiting for you with its next command, and the progress of each feature and bug hunt (`/api/backlog` now also returns
+  `needsYou`, `features`, `hunts`).
+- Docs and website: a WORKFLOW section (English and Khmer) on features, bug hunts, the "Needs you" list and the browser
+  preset; the website command list adds `npm run feature`, `npm run hunt` and `npm run status -- --full`.
+- *Affects:* dashboard and docs only. *Config:* none.
+
 ## 1.0.42 — 2026-11-22
 
 - **Bug hunt: no invented expectations.** The hunter must take "expected" from a source it can name (spec, test, docs,

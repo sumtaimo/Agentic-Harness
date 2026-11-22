@@ -22,6 +22,9 @@ import {
   quotaWarnings, formatQuotaWarning, helpIfAsked
 } from './lib/common.mjs';
 import { readBacklog, backlogCounts, nextReady } from './lib/governance.mjs';
+import { needsYou } from './lib/waiting.mjs';
+import { featureProgress } from './lib/feature.mjs';
+import { huntProgress } from './lib/hunt.mjs';
 import { listVisibleRuns, editorDisplayName } from './lib/handoff.mjs';
 import { collectStatus } from './start.mjs';
 
@@ -156,7 +159,11 @@ export function readBacklogData() {
     maxAutoTasksPerRun: b.maxAutoTasksPerRun ?? 3,
     counts: backlogCounts(b),
     next: nextReady(b),
-    tasks
+    tasks,
+    // read-only views of the same backlog file: what waits for the owner, and how far features and bug hunts got
+    needsYou: (() => { try { return needsYou(b); } catch { return []; } })(),
+    features: (() => { try { return featureProgress(b); } catch { return []; } })(),
+    hunts: (() => { try { return huntProgress(b); } catch { return []; } })()
   };
 }
 
@@ -400,6 +407,12 @@ const DASHBOARD_HTML = `<!doctype html>
       <h2><span>Backlog</span><span id="backlog-pill" class="pill">--</span></h2>
       <div id="backlog-counts" class="badge-row"></div>
       <div id="backlog-body" class="table-wrap"></div>
+    </section>
+
+    <section class="card">
+      <h2><span>Needs you · Features · Bug hunts</span><span id="needs-pill" class="pill">--</span></h2>
+      <div id="needs-body" class="table-wrap"></div>
+      <div id="features-body" class="table-wrap"></div>
     </section>
 
     <section class="card">
@@ -685,6 +698,25 @@ const DASHBOARD_HTML = `<!doctype html>
     body.replaceChildren(...nodes);
   }
 
+  function renderNeeds(bl) {
+    const list = Array.isArray(bl.needsYou) ? bl.needsYou : [];
+    const pill = document.getElementById('needs-pill');
+    pill.textContent = list.length ? list.length + ' need you' : 'nothing waiting';
+    pill.className = list.length ? 'pill warn' : 'pill ok';
+    document.getElementById('needs-body').replaceChildren(list.length
+      ? makeTable(['What', 'Waiting for you', 'Next command'], list.slice(0, 12).map((w) => [
+        { mono: true, node: el('span', null, w.id) }, el('span', null, w.text), { mono: true, node: el('span', null, w.next) }]))
+      : el('div', { className: 'muted' }, 'Nothing waits for you.'));
+    const rows = [...(bl.features || []).map((f) => [f.id, 'feature', f.goal, f.status, f.kept ? f.done + '/' + f.kept + ' done' + (f.blocked ? ', ' + f.blocked + ' blocked' : '') : f.steps + ' step(s)']),
+      ...(bl.hunts || []).map((h) => [h.id, 'bug hunt', h.scope, h.status, h.kept ? h.done + '/' + h.kept + ' fixed' + (h.blocked ? ', ' + h.blocked + ' blocked' : '') : h.findings + ' finding(s), ' + h.confirmed + ' confirmed'])]
+      .filter((r) => r[3] !== 'CANCELLED').slice(-12);
+    document.getElementById('features-body').replaceChildren(rows.length
+      ? makeTable(['ID', 'Kind', 'Goal / area', 'Status', 'Progress'], rows.map((r) => [
+        { mono: true, node: el('span', null, r[0]) }, el('span', null, r[1]), el('span', null, String(r[2]).slice(0, 80)),
+        { node: el('span', { className: pillClassForStatus(r[3] === 'DRAFT' || r[3] === 'APPROVED' ? 'IN_PROGRESS' : r[3]) }, r[3]) }, el('span', null, r[4])]))
+      : el('div', { className: 'muted' }, 'No features or bug hunts yet (npm run feature -- "login", npm run hunt -- "checkout").'));
+  }
+
   function renderUsage(usage) {
     const d7 = usage.days7 || {};
     const span = usage.rangeDays || d7.days || 7;
@@ -824,6 +856,7 @@ const DASHBOARD_HTML = `<!doctype html>
       renderAlerts(status, usage, sessions);
       renderStatus(status);
       renderBacklog(backlog);
+      renderNeeds(backlog);
       renderUsage(usage);
       renderVisible(visible);
       renderSessions(sessions);
