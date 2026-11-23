@@ -176,6 +176,24 @@ Two commands grow a short request into checked work, with **one stop for you** b
 - **Browser:** workers can open the app in a real browser only through the optional `playwright` MCP preset
   (`.harness/mcp.json`, off by default; `doctor` says how to turn it on). The QA_AUDITOR and UX_DESIGNER roles run no `node` scripts.
 
+## Product foundation and the intake question
+
+The harness knows *how* to run work; `docs/foundation/` records *why* the product exists, so the AI stops guessing. The
+installer writes three short blank forms (a file you already filled in is never overwritten):
+
+- `docs/foundation/product.md`: why, who it is for, success sign, hard business rules, out of scope. Filled by the Product Owner / BA. Passed to `lead-ba` and `lead-dev`. <!-- docs-drift:ignore -->
+- `docs/foundation/domain.md`: the things the product handles, their states, who can do what, rules between things. Filled by the BA / Product Owner. Passed to `lead-ba`, `lead-dev` and `lead-qa`. <!-- docs-drift:ignore -->
+- `docs/foundation/brand.md`: brand in one sentence, tone, visual direction, flows we love, **Never do this (Anti-patterns)**. Filled by the UX/UI Designer / Product Owner. Passed to `lead-ux`.
+
+Blanks stay as `(fill me)`. These files are **not** imported into `CLAUDE.md` or any always-loaded file: `/harness:run` and
+`/harness:feature` pass them *by reference* (one "First read …" line in the role's goal), and only the files that role needs.
+
+**Intake question (skippable).** At the start of `/harness:run` (feature or UI work only) and `/harness:feature`, the
+orchestrator checks the relevant foundation files. It asks **at most 3 short questions**, only when a relevant field is still
+`(fill me)`. It says nothing for bug fixes, typos, wording tweaks, renames, formatting, dependency bumps and other routine
+chores. Answering "skip" continues at once and is not asked again in that session; answers are used for that run, and are saved
+into the foundation file only after your yes (through `lead-ba`, which may then edit only that file).
+
 ## 4. What is NOT guaranteed (read this before trusting it with a real project)
 
 - **The judge and the injection scanner are AI- and pattern-based.** A judge can miss a bug and the scanner can miss a cleverly worded injection; the real check still decides PASSED, and the human still reviews the diff.

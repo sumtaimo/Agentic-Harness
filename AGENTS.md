@@ -124,6 +124,13 @@ contract, stay inside your scoped files, and **never** run `.harness/dispatch.mj
    A person adds or updates only their own section with `node .harness/memory.mjs me share [--ask "…"] [--language] [--git]`
    (offer it; never share for them). It never holds answer style, experience, personal skills or contact details.
 
+6. **Product foundation** (`docs/foundation/product.md`, `domain.md`, `brand.md`): the *why* (users, business rules, states,
+   permissions, brand feel, anti-patterns). Read them **by task, not at session start**: `brand.md` for UI/UX work;
+   `product.md` + `domain.md` for features and business logic. Never paste whole files into prompts or import them into
+   `CLAUDE.md`. A line that still says `(fill me)` is unknown: never invent it. For a feature or UI task whose relevant
+   fields are blank, ask at most 3 short questions (the user may answer "skip"); for bug fixes, typos and routine chores,
+   do not ask. Details: `docs/WORKFLOW.md`, "Product foundation and the intake question".
+
 ## 2. Learning from mistakes and from the user (the "memory" rules)
 
 - When the user **corrects you, states a preference, or approves a way of working** that should apply across machines and teammates, save a permanent rule (`lessons.md`):
@@ -321,6 +328,7 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/memory/` | `profile.md` (shared project profile), `lessons.md` (committed); `me.md` (each person's own profile and hats), `auto-lessons.md`, `sessions/` (git-ignored) |
 | `.harness/inbox/` → `completed/` or `failed/` | job files (`failed/` also has `.trace.txt`) |
 | `.harness/staging/` | backups of scoped files while a task runs (restored on failure) |
+| `docs/foundation/` | `product.md`, `domain.md`, `brand.md`: short forms for the product owner, analysts and designers (why, rules, states, brand feel, anti-patterns); passed to roles by reference, never always-loaded |
 | `.harness/charter.md` · `backlog.json` | autonomous limits · task backlog |
 | `.harness/backlog.mjs` | backlog list / add / ready / pop / import (with snapshot) / releases |
 | `.harness/roles/` · `skills/` | role personas + tool limits · skill rules |

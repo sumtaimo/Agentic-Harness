@@ -223,6 +223,17 @@ if (RESET) {
 
 copyDir(path.join(SRC, '.harness'), path.join(target, '.harness'));
 
+// Product foundation (docs/foundation/): blank, short forms for PO, BA and UX/UI. A project's own filled-in files are never
+// touched: a file is copied only when it does not exist (COPYFILE_EXCL refuses to overwrite even if one appears meanwhile).
+for (const name of ['product.md', 'domain.md', 'brand.md']) {
+  const from = path.join(SRC, 'docs', 'foundation', name); const to = path.join(target, 'docs', 'foundation', name);
+  if (!fs.existsSync(from)) continue;
+  if (fs.existsSync(to)) { report.push(`kept   docs/foundation/${name} (already existed)`); continue; }
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  try { fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL); report.push(`wrote  docs/foundation/${name} (blank form to fill in)`); }
+  catch { report.push(`kept   docs/foundation/${name} (already existed)`); }
+}
+
 // Fingerprint of the harness core code, so doctor can tell when a project (or an AI in it) edited the template's files.
 const { hashCore, winCommandLine } = await import(pathToFileURL(path.join(target, '.harness', 'lib', 'common.mjs')).href);
 let upgradedFrom = null; let upgradedTo = null; // for the "what's new" summary at the end
@@ -515,6 +526,7 @@ Next steps:
      Allow your AI tools once (headless runs use only allowed ones):  node .harness/engines.mjs     usage later:  node .harness/usage.mjs
                        several engines (claude, agy, codex)? see docs/MULTI-MODEL-SETUP.md in the harness repo, then  node .harness/team.mjs auto-assign
   2. Fill the charter: describe your project goals in .harness/charter.md ("Project objectives"); see the team with  node .harness/team.mjs show
+     Fill the product foundation (short, plain words, PO / BA / UX): docs/foundation/product.md, domain.md, brand.md  (blank "(fill me)" lines)
   3. Prompt it:
        in Claude Code:  open the folder, accept the trust dialog once, restart the session so it loads the agents, then type
                         /harness:run <what you want done>     (the named agents appear working in your session; you get a report)

@@ -6938,6 +6938,42 @@ await test('v1.0.26 team page: me share puts only chosen fields on people.md, re
   for (const c of ['git push', 'git push -u origin feature', 'git status', 'git commit -m "git push origin main"', 'node -e "git -C . reset --hard"']) assert(guard(c) === 0, `blocked by mistake: ${c}`);
 });
 
+await test('product foundation: the installer writes docs/foundation blank forms, never overwrites a filled one, and the commands pass them by reference with a skippable intake', () => {
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-found-'));
+  const inst = () => spawnSync(process.execPath, [path.join(REPO, 'install.mjs'), proj], { encoding: 'utf8', env: { ...env, HARNESS_OFFLINE: '1' } });
+  const f = (n) => path.join(proj, 'docs', 'foundation', n);
+  const first = inst();
+  assert(first.status === 0, first.stdout + first.stderr);
+  for (const n of ['product.md', 'domain.md', 'brand.md']) {
+    const t = fs.readFileSync(f(n), 'utf8');
+    assert(/\(fill me/.test(t) && t.split('\n').length < 40, `${n} must be a short blank form`);
+    assert(new RegExp(`wrote  docs/foundation/${n.replace('.', '\\.')}`).test(first.stdout), `${n} not reported as written`);
+  }
+  assert(/## Never do this \(Anti-patterns\)/.test(fs.readFileSync(f('brand.md'), 'utf8')), 'brand.md has no anti-patterns section');
+
+  // A person's filled-in file survives a re-install byte for byte; a deleted one comes back blank.
+  const mine = '# Product foundation\n\n- Why this product exists: help shops send invoices\n';
+  fs.writeFileSync(f('product.md'), mine);
+  fs.rmSync(f('domain.md'));
+  const again = inst();
+  assert(again.status === 0, again.stdout + again.stderr);
+  assert(fs.readFileSync(f('product.md'), 'utf8') === mine, 'a filled foundation file was overwritten');
+  assert(/kept   docs\/foundation\/product\.md/.test(again.stdout) && /\(fill me/.test(fs.readFileSync(f('domain.md'), 'utf8')), again.stdout);
+
+  // Never always-loaded: no instruction file imports or points at the foundation files by @-import.
+  for (const n of ['CLAUDE.md', 'GEMINI.md', 'AGENTS.md']) assert(!/@docs\/foundation/.test(fs.readFileSync(path.join(proj, n), 'utf8')), `${n} imports the foundation`);
+
+  // The commands name which file goes to which role, cap and allow skipping the questions, and skip small work.
+  const run = fs.readFileSync(path.join(REPO, '.claude', 'commands', 'harness', 'run.md'), 'utf8');
+  const feat = fs.readFileSync(path.join(REPO, '.claude', 'commands', 'harness', 'feature.md'), 'utf8');
+  for (const [name, t] of [['run.md', run], ['feature.md', feat]]) {
+    assert(/at most 3 short questions/.test(t) && /skip/i.test(t) && /\(fill me/.test(t) && /by reference/.test(t), `${name} lacks the skippable, capped intake or by-reference passing`);
+    for (const n of ['product.md', 'domain.md']) assert(t.includes(n), `${name} does not name ${n}`);
+  }
+  assert(/`lead-ux` → `docs\/foundation\/brand\.md`/.test(run) && /`lead-ba` → `product\.md` and `domain\.md`/.test(run) && /`lead-dev` → `product\.md` and `domain\.md`/.test(run), 'run.md role to file map is missing');
+  assert(/bug fix[\s\S]*typo[\s\S]*chore/.test(run.split('1. **Brief.**')[0]), 'run.md does not auto-skip bug fixes, typos and chores');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
 
