@@ -293,7 +293,7 @@ For a big goal, three levels of real agents work together, defined in **`.harnes
 L1  orchestrator [PO_ARCHITECT]       plans only; read-only. Splits the goal between the leads.
 ├─ L2  lead-ba  [BA_ANALYST]    owns docs/**                                                → plans its own workers
 ├─ L2  lead-dev [DEV_ENGINEER]  owns src/**                                                 → plans its own workers
-├─ L2  lead-ux  [UX_DESIGNER]   owns src/**/*.css, src/**/*.scss, src/**/*.less             → plans its own workers
+├─ L2  lead-ux  [UX_DESIGNER]   owns src/**/*.css, src/**/*.scss, src/**/*.less, docs/ux/**/*.md → plans its own workers
 └─ L2  lead-qa  [QA_AUDITOR]    owns tests/**, test/**, __tests__/**, src/**/*.test.*, *.spec.* → plans its own workers
       └─ L3  workers (created by each lead, with the lead's role): they do the work, in parallel
 (after the real check passes on code changes, read-only `reviewer` and `security` agents audit the diff)
@@ -463,7 +463,7 @@ full-screen dashboard returns whenever the harness is idle.
 | `COORDINATOR` | runs Session A & up to 4 child task sessions (`/harness:sessions`) | none (read-only) | Read, Glob, Grep, `node .harness/sessions.mjs`, read-only git |
 | `BA_ANALYST` | requirements, edge cases, acceptance criteria | `docs/**` | Read + Edit/Write **only its own files**, `git status` |
 | `DEV_ENGINEER` | implements code using Two-Phase Root-Cause protocol (no test edits in team/visible runs) | `**` (code inside `src/**` on team runs) | Read + Edit/Write its own files, `npm`, `node`, read-only git |
-| `UX_DESIGNER` | styles, design tokens, visual states, WCAG contrast | `src/**/*.css`, `src/**/*.scss`, `src/**/*.less` | Read + Edit/Write **only its own files**, `git status` |
+| `UX_DESIGNER` | styles, design tokens, visual states, WCAG contrast; UX flows, copy and wireframes as Markdown | `src/**/*.css`, `src/**/*.scss`, `src/**/*.less`, `docs/ux/**` | Read + Edit/Write **only its own files**, `git status` |
 | `QA_AUDITOR` | writes/runs tests (Red-Green & anti-hardcode coverage) | `tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*` | Read + Edit/Write its own files, `npm test`, `npm run test` |
 | `REVIEWER` | independent read-only audit after PASSED (flags anti-cheating & missing root cause) | none (read-only) | Read, Glob, Grep, read-only git (`diff`/`status`/`log`) |
 | `SECURITY` | read-only security audit (secrets, injection, auth, deps) | none (read-only) | Read, Glob, Grep, `git diff`/`git status` |
@@ -774,8 +774,9 @@ Skills inject targeted rules and allowed tools only when relevant to the task's 
 - **`security-guard`**: Blocks hardcoded secrets/API keys, unsanitized inputs, eval/injection vulnerabilities, and path traversal.
 - **`test-champion`**: Directs QA auditors to cover happy paths, boundary/edge cases, error shapes, and deterministic assertions.
 - **`api-craft`**: Enforces uniform REST/JSON error structures, HTTP status codes, and input validation.
-- **`spec-writer`**: Formulates concise Given/When/Then acceptance criteria and interface contracts without code leaks.
+- **`spec-writer`**: Formulates concise Given/When/Then acceptance criteria and interface contracts without code leaks, plus a Flow & State Table so a whole user flow is specified, not one component.
 - **`ui-craft`**: Enforces token-based styling, WCAG AA contrast, interactive focus/disabled states, mobile-to-desktop responsiveness, and light/dark themes.
+- **`brand-craft`**: Keeps UX/UI work on-brand: reads `docs/foundation/brand.md`, avoids its anti-patterns, and refuses generic "Zombie UI" (default library look, filler copy, missing states).
 - **`template-leak-check`**: For maintainers of this template only (not installed into other projects): keeps an owner's personal settings out of new installs and tests.
 - **`engine-profile-checks`**: For maintainers of this template only (not installed into other projects): rules for adding or fixing an AI CLI engine profile and its probe.
 
@@ -785,7 +786,7 @@ The harness connects to any CLI-driven AI engine (Claude, Codex, Antigravity, lo
 ## Roles on the team
 
 <!-- docs-drift:ignore -->
-Orchestrator (plans) → leads: `lead-ba` (specs, `docs/**`), `lead-dev` (code, `src/**`), `lead-qa` (tests: `tests/**`, `test/**`, `__tests__/**`, `src/**/*.test.*`, `src/**/*.spec.*`), `lead-ux` (UX/UI style files `src/**/*.css`, `*.scss`, `*.less`). Every file has exactly one owner (see `.harness/team.json`). After the check passes, the read-only `reviewer` (checking root-cause fixes & anti-cheating) and `security` (for input, auth, files, network, or dependencies) audit the change and report findings; they never edit.
+Orchestrator (plans) → leads: `lead-ba` (specs, `docs/**`), `lead-dev` (code, `src/**`), `lead-qa` (tests: `tests/**`, `test/**`, `__tests__/**`, `src/**/*.test.*`, `src/**/*.spec.*`), `lead-ux` (UX/UI style files `src/**/*.css`, `*.scss`, `*.less`, and UX specs `docs/ux/**/*.md`). Every file has exactly one owner (see `.harness/team.json`). After the check passes, the read-only `reviewer` (checking root-cause fixes & anti-cheating) and `security` (for input, auth, files, network, or dependencies) audit the change and report findings; they never edit.
 
 ### Built-in Tools & Governance Highlights
 - **Interactive Launcher & Dashboard:** `npm start` (`node .harness/start.mjs`, `--summary`), `node .harness/hook-session.mjs --brief` (4–8 line status), `npm run ui` (`node .harness/ui.mjs`, read-only local web dashboard on `127.0.0.1`), and `npm run usage` (`node .harness/usage.mjs`, with ≥80% daily quota warnings).

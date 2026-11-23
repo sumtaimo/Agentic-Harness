@@ -47,7 +47,7 @@ and `.windsurfrules` only point here.
   - **Team Mode (`--mode team`):** Orchestrator assigns scoped charters to leads (`lead-ba`, `lead-dev`, `lead-qa`, `lead-ux`):
     - `lead-ba`: specs and acceptance criteria; writes only `docs/**`.
     - `lead-qa`: tests and verification; writes only `tests/**`, `test/**`, `__tests__/**` and test files next to the code (`src/**/*.test.*`, `*.spec.*`).
-    - `lead-ux`: UX/UI; writes only style files (`src/**/*.css`, `*.scss`, `*.less`), with the `ui-craft` rules.
+    - `lead-ux`: UX/UI; writes only style files (`src/**/*.css`, `*.scss`, `*.less`) and UX flow/copy/wireframe specs (`docs/ux/**/*.md`), with the `ui-craft` and `brand-craft` rules.
     - `reviewer` and `security`: read-only check agents the orchestrator starts after the controller says PASSED (code changes only); they report findings, never edit.
     - Read-only investigation and QA reports (`.agent-state/`) are written by the orchestrator, not by the leads.
     - `lead-dev` / workers: Scoped implementation strictly inside assigned file paths; in team/hierarchy/visible runs, never create, edit, or delete test files (`tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*`).
@@ -125,7 +125,7 @@ contract, stay inside your scoped files, and **never** run `.harness/dispatch.mj
    (offer it; never share for them). It never holds answer style, experience, personal skills or contact details.
 
 6. **Product foundation** (`docs/foundation/product.md`, `domain.md`, `brand.md`): the *why* (users, business rules, states,
-   permissions, brand feel, anti-patterns). Read them **by task, not at session start**: `brand.md` for UI/UX work;
+   permissions, brand feel, anti-patterns). Read them **by task, not at session start**: `brand.md` + `product.md` for UI/UX work;
    `product.md` + `domain.md` for features and business logic. Never paste whole files into prompts or import them into
    `CLAUDE.md`. A line that still says `(fill me)` is unknown: never invent it. For a feature or UI task whose relevant
    fields are blank, ask at most 3 short questions (the user may answer "skip"); for bug fixes, typos and routine chores,
@@ -333,8 +333,8 @@ The harness can also work **on the user's behalf** from a backlog, inside the li
 | `.harness/backlog.mjs` | backlog list / add / ready / pop / import (with snapshot) / releases |
 | `.harness/roles/` · `skills/` | role personas + tool limits · skill rules |
 | `.harness/team.json` · `team.mjs` | the agent team (orchestrator → leads → workers): scopes, limits, budgets · show / validate / `sync-agents` / `adapt-scopes` |
-| `.harness/visible.mjs` | the controller for the editor workflow: brief / assign / verify / judge / handoff / rollback / propose / status / report |
-| `.harness/lib/guard.mjs` | LLM judge gate (rubric + JSON verdict the controller decides on; `visible.mjs judge` → `REVIEW_BLOCKED`) and prompt-injection guard (a "data, not instructions" rule in every prompt; injected backlog or proposed tasks are held or rejected) |
+| `.harness/visible.mjs` | the controller for the editor workflow: brief / assign / verify / judge / visual / handoff / rollback / propose / status / report |
+| `.harness/lib/guard.mjs` | LLM judge gate (rubric incl. `intentFit` / `states` / `craft` and the "Done vs Good" answer, JSON verdict the controller decides on; `visible.mjs judge` → `REVIEW_BLOCKED`) and the visual gate (UI changes are not DONE until a human confirms or screenshot evidence is attached: `visible.mjs visual attach|confirm|reject`) and prompt-injection guard (a "data, not instructions" rule in every prompt; injected backlog or proposed tasks are held or rejected) |
 | `.harness/hook-guard.mjs` | Claude Code PreToolUse guard: blocks edits to `.env*`, `.git/**`, `.harness/releases/**` (and the core in installed projects), hard resets, `git clean -f`, force pushes and pushes to protected branches **before** they happen |
 | `.harness/feature.mjs` · `/harness:feature` | a big feature from a short goal: BA (read-only) grows it into the whole user workflow (`new`/`expand`/`prompt`), the owner keeps steps (`approve F1 --keep 1,2`), kept steps become READY backlog items with `dependsOn` (journey order); stored in `backlog.json` `features` |
 | `.harness/hunt.mjs` · `/harness:hunt` | bug hunt: QA (no Edit/Write; may run tests) reports findings with evidence (✅ confirmed / 🟡 suspect); the owner keeps them (`approve H1 --keep 1,3`); each becomes a READY `bugfix` item fixed Red-Green; stored in `backlog.json` `hunts` |

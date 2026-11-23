@@ -25,6 +25,8 @@
       "Bash(node .harness/visible.mjs brief:*)",
       "Bash(node .harness/visible.mjs assign:*)",
       "Bash(node .harness/visible.mjs verify:*)",
+      "Bash(node .harness/visible.mjs visual attach:*)",
+      "Bash(node .harness/visible.mjs visual reject:*)",
       "Bash(node .harness/visible.mjs propose:*)",
       "Bash(node .harness/visible.mjs status:*)",
       "Bash(node .harness/visible.mjs report:*)",
@@ -50,6 +52,7 @@
     ],
     "ask": [
       "Bash(node .harness/visible.mjs rollback:*)",
+      "Bash(node .harness/visible.mjs visual confirm:*)",
       "Bash(node .harness/sessions.mjs merge:*)",
       "Bash(node .harness/sessions.mjs cleanup:*)",
       "Edit(.harness/team.json)",

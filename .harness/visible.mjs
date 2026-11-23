@@ -14,6 +14,9 @@
  *   node .harness/visible.mjs assign <run> '<delegation json>' [--editor <name>]       validate delegation, print each agent's prompt
  *   node .harness/visible.mjs verify <run> [--reports '<json {lead: "one-line report"}>']
  *   node .harness/visible.mjs judge  <run> --agent reviewer|security (--verdict '<json or report>' | --file <path>)   LLM judge gate after PASSED
+ *   node .harness/visible.mjs visual attach  <run> --screenshot <png>[,<png>] --note "<what it shows>"   visual gate (UI changed): attach screenshot evidence
+ *   node .harness/visible.mjs visual confirm <run> --by "<name>" [--note "…"]   visual gate: a human looked and said yes (Claude Code asks the human)
+ *   node .harness/visible.mjs visual reject  <run> --reason "<what is wrong>"     visual gate: not good enough (REVIEW_BLOCKED, fix, verify again)
  *   node .harness/visible.mjs handoff [run] [--prompt] [--json]      inspect an unfinished run & print a continuation prompt/command
  *   node .harness/visible.mjs rollback <run>                          restore every file to how it was before the run
  *   node .harness/visible.mjs propose <auto-session> '<tasks json>'   (autonomous mode) add READY tasks to the backlog
@@ -30,7 +33,7 @@ import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, lis
 helpIfAsked(import.meta.url);
 import { fetchSkillsOnDemand } from './lib/skill-fetch.mjs';
 import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor, runsNode, ENGINE_SCRIPTS, isTestFilePath, auditPatchSignals, scanPatchSafety } from './lib/governance.mjs';
-import { JUDGE_AGENTS, JUDGE_DEFAULT_MIN_SCORE, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, UNTRUSTED_CONTENT_RULE, scanInjection, taskText, injectionHoldReason, isReviewableFile, reviewPolicy, judgeApproved, scanAddedInjection } from './lib/guard.mjs';
+import { JUDGE_AGENTS, JUDGE_DEFAULT_MIN_SCORE, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, UNTRUSTED_CONTENT_RULE, scanInjection, taskText, injectionHoldReason, isReviewableFile, reviewPolicy, judgeApproved, scanAddedInjection, isUiFile, visualPending, reviewComplete, checkVisualEvidence } from './lib/guard.mjs';
 import { VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, listVisibleRuns, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
 
 if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must not use the editor workflow.'); process.exit(2); }
@@ -117,10 +120,16 @@ function leadPrompt(run, lead, a, roles, skills) {
   ].filter(Boolean).join('\n');
 }
 
+/** How the visual gate is opened (one sentence, used by the report and by the commands). */
+function gateHow(run) {
+  return `a human confirms it looks right (node .harness/visible.mjs visual confirm ${run.id} --by "<name>", run only after the human said yes), or screenshot evidence of the changed UI is attached (node .harness/visible.mjs visual attach ${run.id} --screenshot <file.png>[,<file2.png>] --note "<what it shows: width, theme, state>"; with the Playwright MCP the orchestrator takes it at phone and desktop width). The reviewer should Read the screenshots to score craft and states.`;
+}
+
 function reportText(run, v) {
   const L = [];
   const head = { PASSED: 'PASSED ✔', FAILED: 'NOT PASSED YET ✖ (can be fixed and re-verified)', HALTED_HITL_REQUIRED: 'STOPPED ✖ — a human decision is needed', ROLLED_BACK: 'ROLLED BACK', ESCALATED: 'ESCALATED — a human decision is needed' }[v.status] || v.status;
   const visual = v.status === 'PASSED' && v.uiFiles?.length;
+  const gated = visual && run.visualRequired;
   const noSignal = v.status === 'PASSED' && run.check?.real === false;
   const sessionLabel = run.editor && run.editor !== 'claude-code' ? `${editorDisplayName(run.editor)} editor session` : 'editor session';
   L.push(`HARNESS REPORT — run ${run.id} — ${head}${noSignal ? ' (NO REAL TEST SIGNAL: the check cannot fail)' : ''}${visual ? ' — NEEDS A VISUAL REVIEW' : ''}`, '', `Task:    ${run.title}`, `Source:  ${run.source === 'backlog' ? `backlog item ${run.backlogId}` : 'goal given by the human'}${run.autonomous ? ' (autonomous mode)' : ''}`,
@@ -147,12 +156,13 @@ function reportText(run, v) {
   if (visual) L.push('', `Visual review needed: ${v.uiFiles.length} UI file(s) changed (${v.uiFiles.slice(0, 6).join(', ')}${v.uiFiles.length > 6 ? ', …' : ''}).`,
     `  Passing tests do not prove a page looks right${v.browserCheck ? '' : ', and this check never opened a browser (a broken page script would still pass)'}.`,
     '  Open it at desktop and phone width, in light and dark, and compare it with the spec before you commit.');
+  if (gated) L.push(`  THIS BLOCKS APPROVAL: the run is not DONE until ${gateHow(run)}`);
   if (v.checkCreated?.length) L.push('', `⚠ The check created ${v.checkCreated.length} file(s) that git does not ignore (${v.checkCreated.slice(0, 4).join(', ')}${v.checkCreated.length > 4 ? ', …' : ''}).`,
     '  Add them (for example dist/) to .gitignore, or they will be committed by accident and counted as out-of-scope changes next time.');
   if (v.violations.length) L.push('', 'Violations (changes outside the assigned files):', ...v.violations.map((x) => `  ✖ ${x}`));
   if (v.reverted.length) L.push(`         The controller reverted ${v.reverted.length} out-of-scope change(s): ${v.reverted.join(', ')}`);
   if (v.revertFailed?.length) L.push(`  ⚠ COULD NOT be reverted automatically (secrets are never copied): ${v.revertFailed.join(', ')} — check and restore them by hand before anything else.`);
-  if (v.status === 'PASSED' && run.reviewRequired) L.push('', 'JUDGE REQUIRED: this code change is not DONE until the reviewer judge approves it.',
+  if (v.status === 'PASSED' && run.reviewRequired) L.push('', 'JUDGE REQUIRED: this code change is not DONE until the reviewer judge approves it (it must also answer "Done vs Good": the original goal, and what is still weak or missing).',
     `  Start the read-only reviewer (and security when input, auth, files, network or secrets are touched), then: node .harness/visible.mjs judge ${run.id} --agent reviewer --file <report>`);
   if (v.status === 'PASSED' && run.acceptanceCriteria?.length) L.push('', 'Acceptance criteria — confirm each one yourself (a passing check does not prove them by itself):', ...run.acceptanceCriteria.map((c) => `  ☐ ${c}`));
   L.push('', `Cycle ${run.cycles}/${config.maxCycles ?? 3}.`);
@@ -205,8 +215,8 @@ function brief() {
   let item = null; const auto = wantNext || !!sid;
   if (auto) {
     if (!charter.autonomous) die('Autonomous mode is off in .harness/charter.md ("- autonomous: off"). Use --goal, or ask the owner to turn it on.', 1);
-    const awaiting = allRuns().find((r) => r.status === 'PASSED' && r.reviewRequired && !judgeApproved(r));
-    if (awaiting) die(`Autonomy is paused: run ${awaiting.id} passed its check but the judge has not approved it yet. Run the reviewer and: node .harness/visible.mjs judge ${awaiting.id} --agent reviewer --file <report>`, 4);
+    const awaiting = allRuns().find((r) => r.status === 'PASSED' && (r.reviewRequired || r.visualRequired) && !reviewComplete(r));
+    if (awaiting) die(`Autonomy is paused: run ${awaiting.id} passed its check but its review is not complete. ${awaiting.reviewRequired && !judgeApproved(awaiting) ? `The judge has not approved it yet (run the reviewer, then: node .harness/visible.mjs judge ${awaiting.id} --agent reviewer --file <report>). ` : ''}${visualPending(awaiting) ? `The changed UI still needs a visual review: ${gateHow(awaiting)}` : ''}`.trim(), 4);
     if (sid) {
       const runs = sessionRuns(sid);
       if (runs.length >= charter.maxAutoTasksPerRun) die(`Auto budget used: ${runs.length}/${charter.maxAutoTasksPerRun} task(s) in this session (charter maxAutoTasksPerRun). Report to the human.`, 3);
@@ -278,7 +288,7 @@ function brief() {
   if (run.acceptanceCriteria.length) console.log(`Acceptance criteria:\n${run.acceptanceCriteria.map((c) => `  - ${c}`).join('\n')}`);
   if (run.interfaceContract) console.log(`Interface contract:\n${run.interfaceContract}`);
   console.log(`\nCheck (run by the controller after the agents finish): ${check.cmd}  [${check.source}]${check.real ? '' : '\n  ⚠ NO REAL CHECK: any result would pass. Tell the human and propose a check.'}`);
-  if (check.real && !BROWSER_CHECK.test(check.cmd) && Object.keys(snap.map).some((f) => UI_FILE.test(f))) console.log('  ⚠ This project has UI files but the check never opens a browser: a page with a broken script or layout can still pass. If this task changes UI, tell the human and suggest a browser smoke test; the report will ask for a visual review.');
+  if (check.real && !BROWSER_CHECK.test(check.cmd) && Object.keys(snap.map).some((f) => isUiFile(f))) console.log('  ⚠ This project has UI files but the check never opens a browser: a page with a broken script or layout can still pass. If this task changes UI, tell the human and suggest a browser smoke test; the report will ask for a visual review.');
   console.log('\nTeam — delegate ONLY to these named agents, each at most once (their scope is enforced):');
   for (const l of run.leads) console.log(`  - ${l.id} (${l.role}) may own: ${l.scope.join(', ')}`);
   if (userAllowed.length) console.log(`The human only allows files inside: ${userAllowed.join(', ')}`);
@@ -376,7 +386,6 @@ function countSkipped(out) {
 }
 
 /** Changed files that render as UI: tests passing does not mean they look right. */
-const UI_FILE = /\.(html?|css|scss|sass|less|svg|jsx|tsx|vue|svelte|astro)$/i;
 /** A check that opens a real browser (so a broken page script or layout can fail it). */
 const BROWSER_CHECK = /playwright|puppeteer|cypress|webdriver|selenium|e2e|visual|screenshot|lighthouse/i;
 
@@ -390,7 +399,7 @@ function runCheck(run) {
 function verify() {
   const run = loadRun(positional[0]);
   if (!['DELEGATED', 'FAILED', 'REVIEW_BLOCKED'].includes(run.status)) die(`Run ${run.id} is ${run.status}; it can only be verified after assign (DELEGATED), after a failed verify, or after the judge blocked it (REVIEW_BLOCKED).`);
-  if (run.status === 'REVIEW_BLOCKED') { delete run.reviews; fs.rmSync(path.join(runDir(run.id), 'judge.md'), { force: true }); } // the code changed: it needs a fresh judge verdict
+  if (run.status === 'REVIEW_BLOCKED') { delete run.reviews; delete run.visual; fs.rmSync(path.join(runDir(run.id), 'judge.md'), { force: true }); } // the code changed: it needs a fresh judge verdict
   const prevTrace = run.lastVerify && !run.lastVerify.passed ? (run.lastVerify.trace || run.lastVerify.check || '') : '';
   let reports = {}; try { reports = flag('--reports') ? JSON.parse(flag('--reports')) : {}; } catch { /* ignore a malformed summary */ }
   run.cycles += 1;
@@ -429,7 +438,8 @@ function verify() {
     // by accident, and the next verify would count them as out-of-scope changes
     checkCreated = Object.keys(snap()).filter((f) => !(f in before));
   }
-  const uiFiles = d.all.filter((f) => !violating.includes(f) && UI_FILE.test(f));
+  // UI that a person can look at: not test files and not docs (isReviewableFile), so a QA-only change to Button.test.tsx never needs a visual review
+  const uiFiles = d.all.filter((f) => !violating.includes(f) && isUiFile(f) && isReviewableFile(f));
   // Quality signals a passing check cannot give by itself:
   // - test files changed AFTER the previous failed check (were the tests fixed, or weakened until they passed?)
   // - test files that existed before the run and were deleted during it
@@ -458,6 +468,12 @@ function verify() {
   const needJudge = passed && policy.required && d.all.some((f) => !violating.includes(f) && isReviewableFile(f));
   delete run.reviews; fs.rmSync(path.join(runDir(run.id), 'judge.md'), { force: true });
   run.reviewRequired = needJudge;
+  // Visual gate: a passing check cannot show that changed UI looks right. Until a human confirms it, or a screenshot is attached
+  // as evidence, the run is not DONE (config.review.visual: false turns the gate off).
+  delete run.visual;
+  run.uiChanged = passed && uiFiles.length > 0; // the rubric: craft may not be "n/a" on a UI change (even when the gate is off)
+  run.uiFiles = run.uiChanged ? uiFiles : [];
+  run.visualRequired = run.uiChanged && policy.visual;
   const maxCycles = config.maxCycles ?? 3;
   const halted = !passed && run.cycles >= maxCycles;
   let autoRolledBack = false;
@@ -516,9 +532,9 @@ function verify() {
   saveRun(run);
 
   if (passed && run.backlogId) {
-    updateBacklogItem(run.backlogId, needJudge
-      ? { status: 'IN_PROGRESS', awaitingJudge: true, cyclesUsed: run.cycles, visibleRun: run.id }
-      : { status: 'DONE', completedAt: new Date().toISOString(), result: 'VERIFIED', cyclesUsed: run.cycles, visibleRun: run.id });
+    updateBacklogItem(run.backlogId, needJudge || run.visualRequired
+      ? { status: 'IN_PROGRESS', awaitingJudge: needJudge || undefined, awaitingVisual: run.visualRequired || undefined, cyclesUsed: run.cycles, visibleRun: run.id }
+      : { status: 'DONE', completedAt: new Date().toISOString(), result: 'VERIFIED', cyclesUsed: run.cycles, visibleRun: run.id, awaitingJudge: undefined, awaitingVisual: undefined });
   }
   if (halted && run.backlogId) updateBacklogItem(run.backlogId, { status: 'BLOCKED', blockedReason: `HALTED_HITL_REQUIRED after ${run.cycles} cycles: ${violations[0] || safety.blocking[0] || check.text.split('\n')[0]}` });
   const recordAuto = (config.memory || {}).autoLessons !== false && !String(run.id).startsWith('V-test');
@@ -542,7 +558,7 @@ function verify() {
       if (recordAuto && !passed) remember(`"${run.title}": editor run ${run.status} — ${(violations[0] || safety.blocking[0] || check.text.split('\n')[0]).replace(/\s+/g, ' ').slice(0, 200)}. Needs a human decision before retrying.`, FILES.autoLessons);
     } catch { /* memory is best effort */ }
   }
-  if (run.baseline.dir && ((passed && !needJudge) || (halted && autoRolledBack)) && fs.existsSync(path.join(ROOT, run.baseline.dir))) {
+  if (run.baseline.dir && ((passed && !needJudge && !run.visualRequired) || (halted && autoRolledBack)) && fs.existsSync(path.join(ROOT, run.baseline.dir))) {
     fs.rmSync(path.join(ROOT, run.baseline.dir), { recursive: true, force: true });
     if (halted && autoRolledBack) { run.baseline.rollbackAvailable = false; run.baseline.autoRolledBack = true; saveRun(run); }
   }
@@ -563,10 +579,10 @@ function judge() {
   if (flag('--file')) { try { raw = fs.readFileSync(path.resolve(flag('--file')), 'utf8'); } catch (e) { die(`Cannot read --file: ${e.message}`); } }
   if (raw === '-') raw = fs.readFileSync(0, 'utf8');
   if (!raw) die(`Give the judge's verdict with --verdict '<json or full report>' or --file <path>.\n${JUDGE_FORMAT}`);
-  const { verdict, errors } = parseJudgeVerdict(raw);
+  const { verdict, errors } = parseJudgeVerdict(raw, { agent });
   if (!verdict) die(`INVALID VERDICT from ${agent} (nothing recorded; ask the agent to answer in the required format):\n  - ${errors.join('\n  - ')}\n${JUDGE_FORMAT}`);
   const minScore = Number.isInteger(config.review?.minScore) ? config.review.minScore : JUDGE_DEFAULT_MIN_SCORE;
-  const decision = decideJudge(verdict, { minScore });
+  const decision = decideJudge(verdict, { minScore, ui: Boolean(run.uiChanged), agent });
   run.reviews = { ...(run.reviews || {}), [agent]: { at: new Date().toISOString(), ...verdict, approved: decision.approved, reasons: decision.reasons } };
   const blockedBy = Object.entries(run.reviews).filter(([, r]) => !r.approved).map(([a]) => a);
   run.status = blockedBy.length ? 'REVIEW_BLOCKED' : 'PASSED';
@@ -575,17 +591,97 @@ function judge() {
   fs.writeFileSync(path.join(runDir(run.id), 'judge.md'), `${text}\n`);
   if (run.backlogId) {
     if (blockedBy.length) updateBacklogItem(run.backlogId, { status: 'BLOCKED', blockedReason: `REVIEW_BLOCKED by ${blockedBy.join(', ')}: ${run.reviews[blockedBy[0]].reasons[0]}. Fix, then verify run ${run.id} again.` });
-    else if (judgeApproved(run)) updateBacklogItem(run.backlogId, { status: 'DONE', completedAt: new Date().toISOString(), result: 'VERIFIED+JUDGED', awaitingJudge: undefined, blockedReason: undefined });
+    else if (judgeApproved(run)) updateBacklogItem(run.backlogId, { awaitingJudge: undefined, blockedReason: undefined });
   }
-  if (!blockedBy.length && judgeApproved(run) && run.baseline?.dir && fs.existsSync(path.join(ROOT, run.baseline.dir))) fs.rmSync(path.join(ROOT, run.baseline.dir), { recursive: true, force: true });
+  if (!blockedBy.length) completeIfReviewed(run);
   if (!decision.approved && (config.memory || {}).autoLessons !== false && !String(run.id).startsWith('V-test')) {
     try { remember(`Judge (${agent}) blocked "${run.title}": ${decision.reasons[0]}${verdict.findings[0] ? ` — ${verdict.findings[0].issue.slice(0, 120)}` : ''}.`, FILES.autoLessons); } catch { /* memory is best effort */ }
   }
   console.log(text);
   console.log(blockedBy.length
     ? `\nREVIEW_BLOCKED: send the findings to the responsible lead, then run: node .harness/visible.mjs verify ${run.id} (and judge it again).`
+    : judgeApproved(run) && visualPending(run) ? `\nJUDGE APPROVED, but the run is NOT DONE: the changed UI still needs a visual review. ${gateHow(run)}`
     : judgeApproved(run) ? '\nJUDGE APPROVED: the human reviews the diff and decides whether to commit.' : '\nRecorded. The reviewer verdict is still needed: node .harness/visible.mjs judge ' + run.id + ' --agent reviewer --file <report>');
   process.exit(blockedBy.length ? 1 : 0);
+}
+
+/** A run is DONE once the judge (when required) approved and the visual gate (when UI changed) is open: close the backlog item and drop the baseline copy. */
+function completeIfReviewed(run) {
+  if (!reviewComplete(run)) return false;
+  if (run.backlogId) updateBacklogItem(run.backlogId, { status: 'DONE', completedAt: new Date().toISOString(), result: run.reviewRequired ? 'VERIFIED+JUDGED' : 'VERIFIED', awaitingJudge: undefined, awaitingVisual: undefined, blockedReason: undefined });
+  if (run.baseline?.dir && fs.existsSync(path.join(ROOT, run.baseline.dir))) fs.rmSync(path.join(ROOT, run.baseline.dir), { recursive: true, force: true });
+  return true;
+}
+
+function loadVisualRun() {
+  const run = loadRun(positional[0]);
+  if (run.status !== 'PASSED') die(`Run ${run.id} is ${run.status}; a visual review applies to a run the controller verified (PASSED).`);
+  if (!run.visualRequired) die(`Run ${run.id} changed no UI files (or the visual gate is off: config.review.visual), so there is nothing to confirm.`);
+  return run;
+}
+
+function afterVisual(run, how) {
+  saveRun(run);
+  fs.writeFileSync(path.join(runDir(run.id), 'visual.md'), `${how}\n`);
+  const done = completeIfReviewed(run);
+  if (!done && run.backlogId) updateBacklogItem(run.backlogId, { awaitingVisual: undefined });
+  console.log(how);
+  console.log(done ? '\nVISUAL REVIEW OK and nothing else is pending: the run is DONE. The human reviews the diff and decides whether to commit.'
+    : `\nVisual review recorded. Still needed before the run is DONE: ${run.reviewRequired && !judgeApproved(run) ? `the reviewer judge (node .harness/visible.mjs judge ${run.id} --agent reviewer --file <report>; pass the screenshots to the reviewer so it can score craft and states).` : 'nothing else.'}`);
+}
+
+/** Visual gate: `visual attach|confirm|reject <run> …` (UI files changed, so a passing check is not enough). */
+function visual() {
+  const action = positional.shift();
+  if (action === 'attach') return visualAttach();
+  if (action === 'confirm') return visualConfirm();
+  if (action === 'reject') return visualReject();
+  die('Usage: visible.mjs visual attach <run> --screenshot <png>[,<png>] --note "<what it shows>"  |  visual confirm <run> --by "<name>"  |  visual reject <run> --reason "<what is wrong>"');
+}
+
+/** Evidence path: attach screenshots of the changed UI (taken with the Playwright MCP, or by a person). */
+function visualAttach() {
+  const run = loadVisualRun();
+  const files = String(flag('--screenshot') || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const note = String(flag('--note') || '').replace(/\s+/g, ' ').trim();
+  if (!files.length || note.length < 10) die(`Give the evidence: --screenshot <file.png>[,<file2.png>] (PNG, JPEG or WebP taken AFTER the change) and --note "<what it shows: width, theme, state>" (at least 10 characters).\nOr, when a human has looked at it and said yes: node .harness/visible.mjs visual confirm ${run.id} --by "<name>".`);
+  // evidence must be newer than the run and than the last change to any changed UI file: a screenshot of the old look proves nothing
+  const newestUi = Math.max(0, ...(run.uiFiles || []).map((f) => { try { return fs.statSync(path.join(ROOT, f)).mtimeMs; } catch { return 0; } }));
+  const since = Math.max(Date.parse(run.createdAt) || 0, newestUi);
+  const checked = files.map((f) => ({ f, r: checkVisualEvidence(path.resolve(f), { since }) }));
+  const bad = checked.filter((c) => !c.r.ok);
+  if (bad.length) die(`Screenshot evidence refused (nothing recorded):\n  - ${bad.map((c) => c.r.reason).join('\n  - ')}`);
+  const dir = path.join(runDir(run.id), 'visual'); fs.mkdirSync(dir, { recursive: true });
+  const kept = checked.map((c, i) => {
+    const to = path.join(dir, `${i + 1}-${path.basename(c.f).replace(/[^\w.-]/g, '_')}`);
+    fs.copyFileSync(path.resolve(c.f), to);
+    return { file: path.relative(ROOT, to).split(path.sep).join('/'), type: c.r.type, bytes: c.r.bytes, sha256: c.r.sha256, ...(c.r.width ? { width: c.r.width, height: c.r.height } : {}) };
+  });
+  run.visual = { ok: true, how: 'screenshot', at: new Date().toISOString(), note: note.slice(0, 300), screenshots: kept };
+  afterVisual(run, `VISUAL EVIDENCE attached to run ${run.id}: ${kept.length} screenshot(s) — "${note.slice(0, 120)}"\n${kept.map((k) => `  ${k.file} (${k.type}${k.width ? `, ${k.width}x${k.height}` : ''}, ${k.bytes} bytes)`).join('\n')}`);
+}
+
+/** Visual gate, human path: only after the human really looked at it and said yes (Claude Code asks the human for this command). */
+function visualConfirm() {
+  const run = loadVisualRun();
+  const by = String(flag('--by') || '').replace(/\s+/g, ' ').trim();
+  if (by.length < 2) die(`Say who looked at it: node .harness/visible.mjs visual confirm ${run.id} --by "<name>" [--note "<what they checked>"]. Run this only after the human said yes.`);
+  run.visual = { ok: true, how: 'human', at: new Date().toISOString(), by: by.slice(0, 80), note: String(flag('--note') || '').replace(/\s+/g, ' ').trim().slice(0, 300) };
+  afterVisual(run, `VISUAL REVIEW CONFIRMED by ${run.visual.by} for run ${run.id}${run.visual.note ? ` — "${run.visual.note}"` : ''}.`);
+}
+
+/** Visual gate, rejection: the UI is not good enough. Same road as a judge block: the item is BLOCKED, fix, then verify again. */
+function visualReject() {
+  const run = loadVisualRun();
+  const reason = String(flag('--reason') || '').replace(/\s+/g, ' ').trim();
+  if (reason.length < 10) die(`Say what is wrong: node .harness/visible.mjs visual reject ${run.id} --reason "<what looks wrong or is missing>" (at least 10 characters).`);
+  run.status = 'REVIEW_BLOCKED'; delete run.visual;
+  run.visualRejected = { at: new Date().toISOString(), reason: reason.slice(0, 400) };
+  saveRun(run);
+  fs.writeFileSync(path.join(runDir(run.id), 'visual.md'), `VISUAL REVIEW REJECTED for run ${run.id}: ${reason}\n`);
+  if (run.backlogId) updateBacklogItem(run.backlogId, { status: 'BLOCKED', awaitingVisual: undefined, blockedReason: `VISUAL REVIEW REJECTED: ${reason.slice(0, 200)}. Fix, then verify run ${run.id} again.` });
+  console.log(`VISUAL REVIEW REJECTED for run ${run.id}: ${reason}\n\nREVIEW_BLOCKED: send this to the responsible lead (lead-ux for look and feel, lead-dev for behavior), then run: node .harness/visible.mjs verify ${run.id}`);
+  process.exit(1);
 }
 
 function rollback() {
@@ -698,7 +794,7 @@ function status() {
         : r.lastVerify.patchSafety?.blocking?.length ? '  [PATCH_SAFETY]' : '')
       : '';
     const job = r.pendingJobId ? `  [headless: ${r.pendingJobId}]` : '';
-    const awaiting = r.status === 'PASSED' && r.reviewRequired && !judgeApproved(r) ? '  [AWAITING JUDGE]' : '';
+    const awaiting = `${r.status === 'PASSED' && r.reviewRequired && !judgeApproved(r) ? '  [AWAITING JUDGE]' : ''}${r.status === 'PASSED' && visualPending(r) ? '  [AWAITING VISUAL REVIEW]' : ''}`;
     console.log(`${r.id}  ${r.status.padEnd(22)} ${r.title}${r.backlogId ? `  [${r.backlogId}]` : ''}${ed}${diag}${job}${awaiting}`);
   }
 }
@@ -708,10 +804,11 @@ switch (cmd) {
   case 'assign': assign(); break;
   case 'verify': verify(); break;
   case 'judge': judge(); break;
+  case 'visual': visual(); break;
   case 'handoff': handoff(); break;
   case 'rollback': rollback(); break;
   case 'propose': propose(); break;
   case 'report': { const f = path.join(runDir(positional[0] || ''), 'report.md'); if (!fs.existsSync(f)) die(`No report for run ${positional[0] || '(none)'} yet (verify it first).`); console.log(fs.readFileSync(f, 'utf8')); const j = path.join(runDir(positional[0]), 'judge.md'); if (fs.existsSync(j)) console.log(fs.readFileSync(j, 'utf8')); break; }
   case 'status': status(); break;
-  default: die(`Unknown command "${cmd}". Use: brief | assign | verify | judge | handoff | rollback | propose | status | report`);
+  default: die(`Unknown command "${cmd}". Use: brief | assign | verify | judge | visual | handoff | rollback | propose | status | report`);
 }

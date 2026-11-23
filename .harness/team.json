@@ -78,7 +78,8 @@
       "scope": [
         "src/**/*.css",
         "src/**/*.scss",
-        "src/**/*.less"
+        "src/**/*.less",
+        "docs/ux/**/*.md"
       ],
       "maxWorkers": 2,
       "budget": {
@@ -86,7 +87,8 @@
         "maxMinutes": 10
       },
       "skills": [
-        "ui-craft"
+        "ui-craft",
+        "brand-craft"
       ]
     }
   ]

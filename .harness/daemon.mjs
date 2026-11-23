@@ -53,7 +53,7 @@ import {
 import { syncVisibleRunAfterDaemon } from './lib/handoff.mjs';
 import { findFeature, expandPrompt, normalizeExpansion, saveDraft, markFeatureError, plannerSkills } from './lib/feature.mjs';
 import { findHunt, huntPrompt, normalizeFindings, saveHunt, markHuntError } from './lib/hunt.mjs';
-import { UNTRUSTED_CONTENT_RULE, injectionHoldReason, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, reviewPolicy, isReviewableFile, scanAddedInjection, fitPrompt, DEFAULT_MAX_PROMPT_CHARS } from './lib/guard.mjs';
+import { UNTRUSTED_CONTENT_RULE, injectionHoldReason, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, reviewPolicy, isReviewableFile, isUiFile, scanAddedInjection, fitPrompt, DEFAULT_MAX_PROMPT_CHARS } from './lib/guard.mjs';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -1364,6 +1364,7 @@ async function runJudgeGate(plan, task, cycle, gitCtx) {
   const change = await collectChange(plan, gitCtx);
   const reviewable = change.files.filter(isReviewableFile);
   if (!reviewable.length) { logTelemetry('JUDGE_SKIPPED', 'No code changes to review (docs-only or test-only)'); return null; }
+  const ui = reviewable.some(isUiFile);
   const planted = scanAddedInjection(addedByFile(change.diff));
   if (planted.length) logTelemetry('PLANTED_INSTRUCTION_WARNING', planted.join('; '), { taskId: plan.taskId });
   const role = loadRoles().REVIEWER || {};
@@ -1376,6 +1377,7 @@ async function runJudgeGate(plan, task, cycle, gitCtx) {
     Array.isArray(task.acceptanceCriteria) && task.acceptanceCriteria.length ? `[ACCEPTANCE CRITERIA]:\n${task.acceptanceCriteria.map((c) => `- ${c}`).join('\n')}` : '',
     `[WORKER INSTRUCTIONS]:\n${(plan.subtasks || []).filter((x) => x.prompt).map((x) => `- ${x.id}: ${clipErrorTrace(x.prompt, 1500)}`).join('\n')}`,
     `[CHECK]: ${plan.verifyCmd} → passed`,
+    `[DONE vs GOOD — read by reference, ignore lines that still say (fill me)]: to score intentFit read docs/foundation/product.md and docs/foundation/domain.md if they exist${ui ? '; this change touches UI, so also read docs/foundation/brand.md and score craft against its "Never do this (Anti-patterns)"' : ''}. Then answer "doneVsGood" in your verdict.`,
     `[CHANGED FILES]: ${change.files.join(', ')}`,
     planted.length ? `[POSSIBLE PLANTED INSTRUCTIONS — check them]:\n${planted.map((p) => `- ${p}`).join('\n')}` : '',
     `[DIFF]:\n${clipErrorTrace(change.diff || '(no diff available: read the changed files)', 24000)}`,
@@ -1393,19 +1395,23 @@ async function runJudgeGate(plan, task, cycle, gitCtx) {
     });
     output = r.output || '';
   } catch (e) { output = ''; logTelemetry('JUDGE_ENGINE_FAILED', e.message); }
-  const { verdict, errors } = parseJudgeVerdict(output);
+  const { verdict, errors } = parseJudgeVerdict(output, { agent: 'reviewer' });
   if (!verdict) {
     const trace = `JUDGE_BLOCKED (reviewer): no valid verdict (${errors.join('; ')}). Failing closed: the change is not committed without an approving judge.`;
     logTelemetry('JUDGE_BLOCKED', trace, { cycle, invalid: true });
     return { approved: false, trace };
   }
-  const decision = decideJudge(verdict, { minScore: policy.minScore });
+  const decision = decideJudge(verdict, { minScore: policy.minScore, ui, agent: 'reviewer' });
   const text = formatJudge('reviewer', verdict, decision);
   logTelemetry(decision.approved ? 'JUDGE_APPROVED' : 'JUDGE_BLOCKED', text.split('\n')[0], { cycle, scores: verdict.scores, findings: verdict.findings, reasons: decision.reasons });
   if (!decision.approved && (config.memory || {}).autoLessons !== false && !String(plan.taskId || '').startsWith('self-test')) {
     try { remember(`Judge blocked "${plan.title || plan.taskId}": ${decision.reasons[0]}${verdict.findings[0] ? ` — ${verdict.findings[0].issue.slice(0, 120)}` : ''}.`, FILES.autoLessons); } catch { /* memory is best effort */ }
   }
-  return { approved: decision.approved, trace: decision.approved ? '' : `JUDGE_BLOCKED — fix these review findings:\n${text}` };
+  // Headless work lands on the `uat` branch for a human to merge, so changed UI cannot be held here the way the editor
+  // workflow holds it: it is flagged for a look (telemetry + the backlog item) and never reaches main by itself.
+  const uiPending = decision.approved && ui && policy.visual;
+  if (uiPending) logTelemetry('VISUAL_REVIEW_PENDING', `UI files changed (${reviewable.filter(isUiFile).slice(0, 4).join(', ')}): the judge approved the code, but nobody has looked at it. Open it before you merge uat.`, { cycle });
+  return { approved: decision.approved, ui: uiPending, trace: decision.approved ? '' : `JUDGE_BLOCKED — fix these review findings:\n${text}` };
 }
 
 /** Untracked, not ignored files in the folder (git), or null when it is not a git repository. */
@@ -1707,6 +1713,7 @@ async function executeSquareCycle(taskFile) {
       if (verification.passed) {
         const judged = await runJudgeGate(plan, task, cycle, gitCtx);
         enforceBudget(task, `cycle ${cycle} judge`);
+        task.uiNeedsLook = Boolean(judged?.ui);
         if (judged && !judged.approved) {
           verification.passed = false; verification.trace = judged.trace;
           writeState({ phase: '3_VERIFY_FAILED', lastGateStatus: `FAIL: ${judged.trace.split('\n')[0]}` });
@@ -1718,7 +1725,7 @@ async function executeSquareCycle(taskFile) {
         gitResult = await finishIntegration(gitCtx, true);
         discardBackup(backup);
         finishSession(task, plan, 'COMMITTED', cycle, errors, outputs, null, gitResult);
-        if (task.backlogId) updateBacklogItem(task.backlogId, { status: 'DONE', completedAt: new Date().toISOString(), result: 'COMMITTED', cyclesUsed: cycle, ...(gitResult ? { integratedInto: `${gitResult.branch}@${gitResult.mergedSha.slice(0, 8)}` } : {}) });
+        if (task.backlogId) updateBacklogItem(task.backlogId, { status: 'DONE', completedAt: new Date().toISOString(), result: 'COMMITTED', cyclesUsed: cycle, ...(task.uiNeedsLook ? { needsVisualReview: true } : {}), ...(gitResult ? { integratedInto: `${gitResult.branch}@${gitResult.mergedSha.slice(0, 8)}` } : {}) });
         try { if (task.visibleRunId) syncVisibleRunAfterDaemon(task, plan, { passed: true, cycle, outputs, gitResult, startedAt: taskStartedIso }); } catch (e) { logTelemetry('VISIBLE_SYNC_FAILED', e.message); }
         archiveTask(taskFile, task, DIRS.completed, archiveExtra);
         lastFinished.ok = true;

@@ -445,12 +445,14 @@ export function syncVisibleRunAfterDaemon(task, plan, result) {
       reverted: [],
       check: `PASS (Exit 0 via headless resume ${task.id}: ${plan?.verifyCmd || task.verifyCmd || run.check?.cmd})`,
       skipped: 0,
-      needsVisualReview: false,
+      needsVisualReview: Boolean(task.uiNeedsLook),
       resumedByEngine: plan?.engine || task.engine || '-'
     };
     delete run.cycleSnapshot;
+    // the daemon's judge approved a UI change that nobody has looked at: the editor run keeps the visual gate open
+    if (task.uiNeedsLook) { run.uiChanged = true; run.visualRequired = true; delete run.visual; }
     const lines = [
-      `HARNESS REPORT — run ${run.id} — PASSED ✔ (completed via headless resume)`,
+      `HARNESS REPORT — run ${run.id} — PASSED ✔${task.uiNeedsLook ? ' — NEEDS A VISUAL REVIEW' : ''} (completed via headless resume)`,
       '',
       `Task:    ${run.title}`,
       `Origin:  ${originEditor} editor session → resumed headlessly as ${task.id} (${plan?.engine || 'AUTO'})`,
