@@ -33,7 +33,7 @@ import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, lis
 helpIfAsked(import.meta.url);
 import { fetchSkillsOnDemand } from './lib/skill-fetch.mjs';
 import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor, runsNode, ENGINE_SCRIPTS, isTestFilePath, auditPatchSignals, scanPatchSafety } from './lib/governance.mjs';
-import { JUDGE_AGENTS, JUDGE_DEFAULT_MIN_SCORE, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, UNTRUSTED_CONTENT_RULE, scanInjection, taskText, injectionHoldReason, isReviewableFile, reviewPolicy, judgeApproved, scanAddedInjection, isUiFile, visualPending, reviewComplete, checkVisualEvidence } from './lib/guard.mjs';
+import { JUDGE_AGENTS, JUDGE_DEFAULT_MIN_SCORE, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, UNTRUSTED_CONTENT_RULE, scanInjection, taskText, injectionHoldReason, isReviewableFile, reviewPolicy, judgeApproved, scanAddedInjection, isUiFile, visualPending, reviewComplete, checkVisualEvidence, checkVisualConfirmOrigin, askVisualConfirm } from './lib/guard.mjs';
 import { VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, listVisibleRuns, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
 
 if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must not use the editor workflow.'); process.exit(2); }
@@ -122,7 +122,7 @@ function leadPrompt(run, lead, a, roles, skills) {
 
 /** How the visual gate is opened (one sentence, used by the report and by the commands). */
 function gateHow(run) {
-  return `a human confirms it looks right (node .harness/visible.mjs visual confirm ${run.id} --by "<name>", run only after the human said yes), or screenshot evidence of the changed UI is attached (node .harness/visible.mjs visual attach ${run.id} --screenshot <file.png>[,<file2.png>] --note "<what it shows: width, theme, state>"; with the Playwright MCP the orchestrator takes it at phone and desktop width). The reviewer should Read the screenshots to score craft and states.`;
+  return `a human confirms it looks right (node .harness/visible.mjs visual confirm ${run.id} --by "<name>", allowed in Claude Code via ask prompt or in a human terminal), or screenshot evidence of the changed UI is attached (node .harness/visible.mjs visual attach ${run.id} --screenshot <file.png>[,<file2.png>] --note "<what it shows: width, theme, state>"; with the Playwright MCP the orchestrator takes it at phone and desktop width). The reviewer should Read the screenshots to score craft and states.`;
 }
 
 function reportText(run, v) {
@@ -291,12 +291,19 @@ function brief() {
   if (check.real && !BROWSER_CHECK.test(check.cmd) && Object.keys(snap.map).some((f) => isUiFile(f))) console.log('  ⚠ This project has UI files but the check never opens a browser: a page with a broken script or layout can still pass. If this task changes UI, tell the human and suggest a browser smoke test; the report will ask for a visual review.');
   console.log('\nTeam — delegate ONLY to these named agents, each at most once (their scope is enforced):');
   for (const l of run.leads) console.log(`  - ${l.id} (${l.role}) may own: ${l.scope.join(', ')}`);
+  const foundStates = ['product.md', 'domain.md', 'brand.md'].map((f) => {
+    const p = path.join(ROOT, 'docs', 'foundation', f);
+    if (!fs.existsSync(p)) return null;
+    const blank = /^- .*\(fill me/im.test(fs.readFileSync(p, 'utf8'));
+    return `${f} (${blank ? 'has blanks' : 'filled'})`;
+  }).filter(Boolean);
+  if (foundStates.length) console.log(`Foundation forms (docs/foundation/, pass by reference for features/UI): ${foundStates.join(', ')}`);
   if (userAllowed.length) console.log(`The human only allows files inside: ${userAllowed.join(', ')}`);
   console.log(`Never allowed: ${charter.forbiddenPaths.join(', ')}${auto && charter.allowedPaths.length ? `\nAutonomous work stays inside: ${charter.allowedPaths.join(', ')}` : ''}`);
   if (run.bugfix) {
     console.log("\nBugfix workflow (Red-Green option): assign lead-qa and lead-dev in ONE assign call (run lead-qa first [Red] to confirm the bug test fails, then run lead-dev [Green] before verify) — or run two separate brief runs — and require Symptom / Root Cause / Blast Radius in lead-dev's report.");
   }
-  console.log(`\nHow to proceed, as the orchestrator (you only plan; the agents do the work):\n  1. Decide which lead gets which files. Write the delegation as JSON:\n     {"interfaceContract":"exact names/signatures/formats the agents share","assignments":[{"lead":"lead-dev","goal":"…","files":["src/x.js"]}]}\n  2. Validate it: node .harness/visible.mjs assign ${id} '<json>'   (it prints each agent's ready-made prompt)\n  3. Start ALL assigned agents in ONE message with the Agent tool (subagent_type = the lead's id) so they run in parallel and are visible.\n  4. When they have reported: node .harness/visible.mjs verify ${id} --reports '{"lead-dev":"<their one-line report>"}'\n  5. Report to the human in plain words, from the controller's report.`);
+  console.log(`\nHow to proceed, as the orchestrator (you only plan; the agents do the work):\n  1. Decide which lead gets which files. Write the delegation as JSON:\n     {"interfaceContract":"exact names/signatures/formats the agents share","assignments":[{"lead":"lead-dev","goal":"…","files":["src/x.js"]}]}\n  2. Validate it: node .harness/visible.mjs assign ${id} '<json>'   (it prints each agent's ready-made prompt)\n  3. Start ALL assigned agents in ONE message with the Agent tool (subagent_type = the lead's id) so they run in parallel and are visible.\n  4. When they have reported: node .harness/visible.mjs verify ${id} --reports '{"lead-dev":"<their one-line report>"}'\n  5. If code changed after PASSED: run read-only reviewer (Done vs Good) -> visible.mjs judge; if UI changed, attach screenshots (visual attach) or have the human run visual confirm in a terminal; then report to the human in plain words.`);
   if (memory) console.log(`\nRules the user taught:\n${memory}`);
   if (repoMap) console.log(`\nRepo summary:\n${repoMap}`);
   console.log(`\nProject files (first ${files.length}):\n${files.join('\n') || '(empty project)'}`);
@@ -631,10 +638,10 @@ function afterVisual(run, how) {
 }
 
 /** Visual gate: `visual attach|confirm|reject <run> …` (UI files changed, so a passing check is not enough). */
-function visual() {
+async function visual() {
   const action = positional.shift();
   if (action === 'attach') return visualAttach();
-  if (action === 'confirm') return visualConfirm();
+  if (action === 'confirm') return await visualConfirm();
   if (action === 'reject') return visualReject();
   die('Usage: visible.mjs visual attach <run> --screenshot <png>[,<png>] --note "<what it shows>"  |  visual confirm <run> --by "<name>"  |  visual reject <run> --reason "<what is wrong>"');
 }
@@ -661,12 +668,15 @@ function visualAttach() {
   afterVisual(run, `VISUAL EVIDENCE attached to run ${run.id}: ${kept.length} screenshot(s) — "${note.slice(0, 120)}"\n${kept.map((k) => `  ${k.file} (${k.type}${k.width ? `, ${k.width}x${k.height}` : ''}, ${k.bytes} bytes)`).join('\n')}`);
 }
 
-/** Visual gate, human path: only after the human really looked at it and said yes (Claude Code asks the human for this command). */
-function visualConfirm() {
+/** Visual gate, human path: requires Claude Code ask protection or an interactive human terminal (never silent orchestrator self-approval). */
+async function visualConfirm() {
   const run = loadVisualRun();
   const by = String(flag('--by') || '').replace(/\s+/g, ' ').trim();
   if (by.length < 2) die(`Say who looked at it: node .harness/visible.mjs visual confirm ${run.id} --by "<name>" [--note "<what they checked>"]. Run this only after the human said yes.`);
-  run.visual = { ok: true, how: 'human', at: new Date().toISOString(), by: by.slice(0, 80), note: String(flag('--note') || '').replace(/\s+/g, ' ').trim().slice(0, 300) };
+  const origin = checkVisualConfirmOrigin({ root: ROOT, run });
+  if (!origin.ok) die(origin.reason);
+  if (origin.needsPrompt && !(await askVisualConfirm(run.id, run.title))) die('Visual review confirmation cancelled (human did not confirm).');
+  run.visual = { ok: true, how: 'human', confirmMethod: origin.how, at: new Date().toISOString(), by: by.slice(0, 80), note: String(flag('--note') || '').replace(/\s+/g, ' ').trim().slice(0, 300) };
   afterVisual(run, `VISUAL REVIEW CONFIRMED by ${run.visual.by} for run ${run.id}${run.visual.note ? ` — "${run.visual.note}"` : ''}.`);
 }
 
@@ -804,7 +814,7 @@ switch (cmd) {
   case 'assign': assign(); break;
   case 'verify': verify(); break;
   case 'judge': judge(); break;
-  case 'visual': visual(); break;
+  case 'visual': await visual(); break;
   case 'handoff': handoff(); break;
   case 'rollback': rollback(); break;
   case 'propose': propose(); break;

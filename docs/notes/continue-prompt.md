@@ -5,7 +5,7 @@ Keep this file current: whoever finishes a piece of work updates it and the hand
 (`docs/notes/handoff-2026-11-23-step2.md`) in the same commit.
 
 ```text
-You are continuing work in the Agentic Harness TEMPLATE repository (sumtaimo/Agentic-Harness). Earlier sessions finished Steps 1, 2, and the Antigravity model update + automatic model fallback on branch `lab`.
+You are continuing work in the Agentic Harness TEMPLATE repository (sumtaimo/Agentic-Harness). Earlier sessions finished Steps 1–4 on branch `lab`: product foundation & intake, Done vs Good + UX `docs/ux/` + visual gate, Antigravity model update + automatic model fallback (`0520001`), charter `UX_DESIGNER` update, old-project design & slash-command upgrade support (`install.mjs`), and non-TTY `visual confirm` hardening.
 
 Start by reading, in this order:
 1. AGENTS.md
@@ -25,7 +25,7 @@ Rules:
 Your tasks, in order:
 1. Run `git checkout lab && git pull --ff-only`, then `git log --oneline -5`. Confirm the latest Step 2/Step 3 commits are present.
 2. Run `npm test`, `npm run audit` and `npm run audit -- --site` if code changed since the last check (if the website build fails once, run `cd website && npm ci` and retry).
-3. Go through the open "Remaining tasks" (items 2–7) in `docs/notes/handoff-2026-11-23-step2.md` one by one. Tell me what needs my decision (skill-library risk check, Skill Foundry, `.harness/charter.md` UX_DESIGNER scope, slash command refresh policy, `visual confirm` hardening, release) and wait for my yes before changing protected settings or releasing.
+3. Check the remaining external/release items (items 2, 3, and 7) in `docs/notes/handoff-2026-11-23-step2.md` (items 1, 4, 5, 6 are done): skill-library risk check with maintainers, Skill Foundry `spec-writer` Flow & State Table (separate repo), and release (`package.json` version bump + `CHANGELOG.md` + `git push origin lab:release`) only when the owner explicitly says "release".
 4. After each finished change: run the tests and the audit, commit on `lab` with specific `git add` paths, and ask me before pushing.
 5. At the end, update the handoff note and this file so they match the real state, and report: what changed, exact test results, and what is still open.
 

@@ -11,7 +11,9 @@
  */
 
 import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
+import readline from 'node:readline/promises';
 
 // ───────────────────────────── 1. LLM judge gate ─────────────────────────────
 
@@ -262,6 +264,55 @@ export function checkVisualEvidence(file, { since = 0 } = {}) {
   else return { ok: false, reason: `${file}: not a PNG, JPEG or WebP image` };
   if (type === 'png' && (width < IMAGE_MIN_SIDE || height < IMAGE_MIN_SIDE)) return { ok: false, reason: `${file}: ${width}x${height} is too small for a screenshot (at least ${IMAGE_MIN_SIDE}px each side)` };
   return { ok: true, type, bytes: st.size, sha256: crypto.createHash('sha256').update(buf).digest('hex'), ...(width ? { width, height } : {}) };
+}
+
+export const VISUAL_CONFIRM_RULE = 'Bash(node .harness/visible.mjs visual confirm:*)';
+
+/**
+ * Guard human `visual confirm` against silent AI self-approval in editors without ask rules (Antigravity, Cursor).
+ * Allows confirmation only from an interactive terminal (where a human answers the prompt), or inside Claude Code
+ * when `.claude/settings.json` places VISUAL_CONFIRM_RULE in `permissions.ask` (and not `allow` or `deny`).
+ */
+export function checkVisualConfirmOrigin({ root, run, env = process.env, isTTY = Boolean(process.stdin.isTTY) } = {}) {
+  if (isTTY === true) return { ok: true, how: 'tty', needsPrompt: true };
+  const otherEditor = Boolean(env.ANTIGRAVITY_AGENT || env.CURSOR_AGENT || env.CURSOR_TRACE_ID || env.CODEX_SANDBOX);
+  const claudeHost = (env.CLAUDECODE === '1' || Boolean(env.CLAUDE_CODE_ENTRYPOINT)) && !otherEditor;
+  const runIsClaude = !run?.editor || run.editor === 'claude-code';
+  let askProtected = false;
+  if (root) {
+    try {
+      const p = JSON.parse(fs.readFileSync(path.join(root, '.claude', 'settings.json'), 'utf8')).permissions || {};
+      const ask = Array.isArray(p.ask) ? p.ask : [];
+      const allow = Array.isArray(p.allow) ? p.allow : [];
+      const deny = Array.isArray(p.deny) ? p.deny : [];
+      askProtected = ask.includes(VISUAL_CONFIRM_RULE) && !allow.includes(VISUAL_CONFIRM_RULE) && !deny.includes(VISUAL_CONFIRM_RULE);
+    } catch { askProtected = false; }
+  }
+  if (claudeHost && runIsClaude && askProtected) return { ok: true, how: 'claude-ask', needsPrompt: false };
+  const id = run?.id || '<run>';
+  return {
+    ok: false,
+    reason: [
+      'VISUAL CONFIRM REFUSED: no interactive terminal (and no Claude Code ask rule is active), so an orchestrator cannot confirm a visual review on its own.',
+      'Ask the human to run this command themselves in their own terminal:',
+      `  node .harness/visible.mjs visual confirm ${id} --by "<their name>" [--note "<what they checked>"]`,
+      'Or attach post-change screenshots as evidence:',
+      `  node .harness/visible.mjs visual attach ${id} --screenshot <file.png>[,<file2.png>] --note "<what it shows: width, theme, state>"`
+    ].join('\n')
+  };
+}
+
+/** Interactive TTY confirmation prompt for `visual confirm`. Returns true only when the human answers y/yes. */
+export async function askVisualConfirm(runId, title = '', { input = process.stdin, output = process.stdout } = {}) {
+  const rl = readline.createInterface({ input, output, terminal: Boolean(input.isTTY) });
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => { if (!settled) { settled = true; try { rl.close(); } catch { /* closed */ } resolve(v); } };
+    rl.once('close', () => finish(false));
+    rl.question(`Confirm that a human inspected the changed UI for run ${runId}${title ? ` ("${title}")` : ''}? [y/N]: `)
+      .then((ans) => finish(['y', 'yes'].includes(String(ans || '').trim().toLowerCase())))
+      .catch(() => finish(false));
+  });
 }
 
 // ───────────────────────────── 4. Planted instructions in a change ─────────────────────────────

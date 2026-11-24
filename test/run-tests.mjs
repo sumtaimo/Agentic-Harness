@@ -6820,7 +6820,7 @@ await test('visual gate (editor): changed UI is NEEDS A VISUAL REVIEW and not DO
   assert(item().status === 'DONE' && item().result === 'VERIFIED+JUDGED' && !item().awaitingVisual, JSON.stringify(item()));
   assert(!/AWAITING VISUAL/.test(vis(d, 'status').stdout), 'status must clear once the gate is open');
 
-  // human path: needs a name, works without screenshots; nothing is done twice
+  // human path: needs a name, refuses silent self-approval in non-TTY editors without ask rules (Antigravity, Cursor), accepts Claude Code ask-protected confirmation
   node(d, ['.harness/backlog.mjs', 'add', 'Restyle invoices', '--goal', 'Restyle invoices', '--files', 'src/', '--check', PASS, '--status', 'READY']);
   const id2 = runIdOf(vis(d, 'brief', '--next'));
   assert(vis(d, 'assign', id2, deleg([{ lead: 'lead-ux', goal: 'restyle', files: ['src/invoices.css'] }])).status === 0);
@@ -6829,8 +6829,14 @@ await test('visual gate (editor): changed UI is NEEDS A VISUAL REVIEW and not DO
   assert(vis(d, 'judge', id2, '--agent', 'reviewer', '--verdict', R()).status === 0);
   const noName = vis(d, 'visual', 'confirm', id2);
   assert(noName.status === 1 && /Say who looked at it/.test(noName.stderr) && runJson(id2).visual === undefined, noName.stderr);
-  const conf = vis(d, 'visual', 'confirm', id2, '--by', 'Sokha (PO)', '--note', 'looked at phone and desktop');
-  assert(conf.status === 0 && /CONFIRMED by Sokha \(PO\)/.test(conf.stdout) && runJson(id2).visual.how === 'human' && runJson(id2).visual.by === 'Sokha (PO)', conf.stdout + conf.stderr);
+  const selfApprove = vis(d, 'visual', 'confirm', id2, '--by', 'Sokha (PO)', '--note', 'looked at phone and desktop');
+  assert(selfApprove.status === 1 && /VISUAL CONFIRM REFUSED/.test(selfApprove.stderr) && /no interactive terminal/.test(selfApprove.stderr) && runJson(id2).visual === undefined, selfApprove.stderr);
+  const noAskCfg = node(d, ['.harness/visible.mjs', 'visual', 'confirm', id2, '--by', 'Sokha (PO)'], { CLAUDECODE: '1', ANTIGRAVITY_AGENT: '' });
+  assert(noAskCfg.status === 1 && /VISUAL CONFIRM REFUSED/.test(noAskCfg.stderr) && runJson(id2).visual === undefined, noAskCfg.stderr);
+  fs.mkdirSync(path.join(d, '.claude'), { recursive: true });
+  fs.copyFileSync(path.join(REPO, '.claude', 'settings.json'), path.join(d, '.claude', 'settings.json'));
+  const conf = node(d, ['.harness/visible.mjs', 'visual', 'confirm', id2, '--by', 'Sokha (PO)', '--note', 'looked at phone and desktop'], { CLAUDECODE: '1', ANTIGRAVITY_AGENT: '' });
+  assert(conf.status === 0 && /CONFIRMED by Sokha \(PO\)/.test(conf.stdout) && runJson(id2).visual.how === 'human' && runJson(id2).visual.confirmMethod === 'claude-ask' && runJson(id2).visual.by === 'Sokha (PO)', conf.stdout + conf.stderr);
   assert(json(path.join(d, '.harness', 'backlog.json')).tasks.find((t) => t.title === 'Restyle invoices').status === 'DONE', 'DONE after the human confirmed');
 
   // rejection takes the same road as a judge block
@@ -7275,6 +7281,108 @@ await test('antigravity auto-fallback end to end: daemon pre-flight MODEL_AUTO_F
   const runCalls2 = agy2.calls().filter((c) => c.cmd === 'run').map((c) => c.model);
   assert(runCalls2.join() === 'gemini-4-argon-medium,gemini-4-carbon-medium', `unexpected run calls: ${runCalls2.join()}`);
   assert(agy2.calls().filter((c) => c.cmd === 'models').length === 2, 'reactive fallback should force-refresh agy models');
+});
+
+await test('old projects upgrading get full design support while keeping custom commands, agents, engine routing and adapted scopes (idempotent); charter & feature prompt route docs/ux to UX_DESIGNER; visual confirm blocks Antigravity/non-TTY self-approval and prompts on TTY', async () => {
+  // 1. charter.md & feature.mjs expandPrompt cover docs/ux/** + foundation refs
+  const chText = fs.readFileSync(path.join(REPO, '.harness', 'charter.md'), 'utf8');
+  assert(/\|\s*\*\*UX_DESIGNER\*\*.*docs\/ux\/\*\*/.test(chText) && /`lead-ux`[^\n]*docs\/ux\/\*\*\/\*\.md/.test(chText), 'charter.md UX_DESIGNER table/objective must include docs/ux');
+  const ft = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'feature.mjs')).href);
+  const ep = ft.expandPrompt({ goal: 'Checkout UI redesign', maxSteps: 6 }, { description: 'BA' }, {});
+  assert(/docs\/foundation\/product\.md/.test(ep) && /brand\.md/.test(ep) && /docs\/ux\/.*UX_DESIGNER/.test(ep), 'feature.mjs expandPrompt must include foundation files and route docs/ux to UX_DESIGNER');
+
+  // 2. Old v1.0.46 project with engine routing + adapted CSS scope + customized status.md + customized lead-dev.md
+  const p = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-old-design-up-'));
+  fs.mkdirSync(path.join(p, '.harness', 'roles'), { recursive: true });
+  fs.mkdirSync(path.join(p, '.harness', 'skills', 'spec-writer'), { recursive: true });
+  fs.mkdirSync(path.join(p, '.claude', 'commands', 'harness'), { recursive: true });
+  fs.mkdirSync(path.join(p, '.claude', 'agents'), { recursive: true });
+  fs.mkdirSync(path.join(p, 'app'), { recursive: true });
+  fs.writeFileSync(path.join(p, 'package.json'), JSON.stringify({ name: 'old-app', scripts: { test: PASS } }));
+
+  const oldUxRole = {
+    name: 'UX_DESIGNER',
+    description: 'UX/UI designer. Owns the look of the product: style files, design tokens, states, accessibility.',
+    mission: "You think like a product designer who ships code. You change only style files (CSS, SCSS, LESS): layout, spacing, type, color, states (hover, focus, disabled, error, loading, empty) and responsive behavior. You reuse the project's design tokens and existing components' patterns instead of new one-off values, you keep text contrast and keyboard focus accessible, and you support light and dark themes when the project has them. You never change behavior or logic; when a UI change needs markup or logic, you say exactly what the developer must add.",
+    allowedTools: ['Read', 'Glob', 'Grep', 'Edit({targetFiles})', 'Write({targetFiles})', 'Bash(git status)', 'mcp__playwright'],
+    writablePaths: ['src/**/*.css', 'src/**/*.scss', 'src/**/*.less', 'app/**/*.css']
+  };
+  const oldRevRole = {
+    name: 'REVIEWER',
+    description: "Independent code reviewer. Read-only: checks the team's change against the goal and acceptance criteria after the controller's check passed.",
+    mission: "You are the independent reviewer: the people who built the change do not review it themselves. You read the diff and the files it touches, and you check it against the goal, the acceptance criteria and the interface contract. You look for real problems: wrong behavior, missing edge cases, broken error handling, things the tests do not cover, and code that does not follow the project's existing patterns. Enforce Root-Cause & Anti-Cheating Diff Audit: when reviewing any bug fix, verify `git diff` proves `lead-dev` resolved the documented Root Cause rather than hardcoding returns, adding test-input `if` hacks, weakening assertions, skipping tests, bypassing/disabling validation, swallowing errors (`try/catch` ignore), or patching symptoms — and reject (flag as your top finding) any fix lacking a clear Root-Cause explanation. You never edit files. You report at most 7 findings, most important first, each with file:line, what is wrong and the smallest fix; if you find nothing real, you say so plainly. End your report with the JSON verdict block (verdict APPROVE|NEEDS_FIX, scores 1-5 for correctness, acceptance, tests, rootCause, safety, findings with severity); the controller (visible.mjs judge) decides from it.",
+    allowedTools: ['Read', 'Glob', 'Grep', 'Bash(git diff:*)', 'Bash(git status)', 'Bash(git log:*)'],
+    writablePaths: []
+  };
+  const oldTeam = json(path.join(REPO, '.harness', 'team.json'));
+  oldTeam.members = oldTeam.members.map((m) => {
+    if (m.id === 'lead-ux') return { ...m, engine: 'claude', scope: ['src/**/*.css', 'src/**/*.scss', 'src/**/*.less', 'app/**/*.css'], skills: ['ui-craft'] };
+    return { ...m, engine: 'claude' };
+  });
+  fs.writeFileSync(path.join(p, '.harness', 'roles', 'ux-designer.json'), JSON.stringify(oldUxRole, null, 2) + '\n');
+  fs.writeFileSync(path.join(p, '.harness', 'roles', 'reviewer.json'), JSON.stringify(oldRevRole, null, 2) + '\n');
+  fs.writeFileSync(path.join(p, '.harness', 'team.json'), JSON.stringify(oldTeam, null, 2) + '\n');
+  fs.writeFileSync(path.join(p, '.harness', 'config.json'), fs.readFileSync(path.join(REPO, '.harness', 'config.json'), 'utf8'));
+  fs.writeFileSync(path.join(p, '.harness', 'skills', 'spec-writer', 'SKILL.md'), '---\nname: spec-writer\ndescription: Makes BA specs short, testable and directly usable by DEV and QA.\nroles: ["BA_ANALYST"]\nallowedTools: ["Read", "Edit", "Write"]\nkeywords: ["spec", "requirement", "acceptance", "docs", "document"]\nautoApply: false\nstarter-stub: agentic-harness\n---\n# Spec Writer Rules\n1. Start with one sentence: what the feature does and for whom.\n2. List acceptance criteria as numbered Given / When / Then lines; each must be testable.\n3. List edge cases and error states explicitly.\n4. Copy the exact names, signatures and formats from the shared interface contract; do not invent new ones.\n5. Keep it under one page. No code.\n');
+  const oldFeatureCmd = '---\ndescription: Big feature from a short goal — BA grows it into the whole user workflow, I keep the steps I want, then autopilot builds them\nargument-hint: a short goal, e.g. login\n---\nGrow my short goal into a whole feature, the way a business analyst would, then build only the steps I keep.\n\n1. Run `node .harness/feature.mjs new "$ARGUMENTS" --no-expand` and note the feature id (`F1`, …).\n2. Run `node .harness/feature.mjs prompt <id>`. Start the `lead-ba` agent with that prompt and these rules: **read only, write no file**; read the project first; reply with the JSON only. Save its JSON reply to `.agent-state/feature-<id>.json` (you write it, not the agent).\n3. Run `node .harness/feature.mjs expand <id> --from .agent-state/feature-<id>.json`. If it prints `FEATURE_EXPAND_FAILED`, send the error back to `lead-ba` once and try again; a second failure: tell me why and stop.\n4. Show me the numbered steps in plain words: what the user does at each step, its size, which steps come first, and every 🟡 decision as a question. Point me to the spec page it wrote (`docs/features/…`). Then **stop and ask me which steps to keep.** Do not choose for me.\n5. After my answer, run `node .harness/feature.mjs approve <id> --keep <my numbers>` (or `--all` if I said all). Tell me any `!` warning it prints.\n6. Ask whether to build now. If yes, run `/harness:auto` (autonomous mode on the `uat` branch; big runs stay held for my OK). Progress any time: `node .harness/feature.mjs status`.\n\nNever approve steps, answer a 🟡 decision, or run `backlog.mjs approve` for me. Never commit, push or merge.\n';
+  fs.writeFileSync(path.join(p, '.claude', 'commands', 'harness', 'feature.md'), oldFeatureCmd);
+  fs.writeFileSync(path.join(p, '.claude', 'commands', 'harness', 'status.md'), 'MY CUSTOM STATUS\n');
+  fs.writeFileSync(path.join(p, '.claude', 'agents', 'lead-ux.md'), gov.expectedAgentFiles(oldTeam, { UX_DESIGNER: oldUxRole }, json(path.join(REPO, '.harness', 'config.json')))['lead-ux.md']);
+  fs.writeFileSync(path.join(p, '.claude', 'agents', 'lead-dev.md'), 'MY CUSTOM DEV AGENT\n');
+  fs.writeFileSync(path.join(p, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\ndescription: reviewer (REVIEWER), the independent read-only code reviewer. The orchestrator starts it after the controller\'s check PASSED, to review the team\'s change against the goal. It never edits files.\ntools: Read, Glob, Grep, Bash\nmodel: sonnet\n---\n<!-- Persona from .harness/roles/reviewer.json. Not generated by sync-agents: edit this file and the role together. -->\nYou are **reviewer**, the independent code reviewer of the agent team. The agents who built the change do not review their own work; you do.\n\nYou read the change (`git diff`, `git status`) and the files it touches, and you check it against the goal, the acceptance criteria and the interface contract the orchestrator gives you. You look for real problems: wrong behavior, missing edge cases, broken error handling, things the tests do not cover, and code that does not follow the project\'s existing patterns.\n\n## How you work\n- **Read only.** Never create, edit or delete a file, and never run anything except `git diff`, `git status` and `git log`.\n- **Root-Cause & Anti-Cheating Diff Audit (bug fixes):** verify `git diff` proves `lead-dev` resolved the documented Root Cause rather than hardcoding returns, adding test-input `if` hacks, weakening assertions, skipping tests, bypassing/disabling validation, swallowing errors (`try/catch` ignore), or patching symptoms. Reject (flag as your top finding) any fix lacking a clear Root-Cause explanation.\n- Report at most 7 findings, most important first, each as: `file:line` — what is wrong — the smallest fix.\n- Report only real problems you can point to in the code; no style preferences, no guesses.\n- If you find nothing real, say exactly that in one line. Do not invent findings to look useful.\n\n## Your verdict (the controller reads it)\nEnd your report with ONE fenced ```json block, exactly this shape:\n```json\n{"verdict": "APPROVE", "scores": {"correctness": 5, "acceptance": 5, "tests": 4, "rootCause": 5, "safety": 5}, "findings": [], "summary": "one sentence"}\n```\n- `verdict`: `"APPROVE"` or `"NEEDS_FIX"` (anything that must change before commit).\n- `scores`: each 1-5 (5 clearly good, 3 acceptable, 1-2 a real problem): correctness, acceptance, tests, rootCause, safety.\n- `findings`: at most 7, each `{"severity": "high"|"medium"|"low", "file": "path", "line": 12, "issue": "...", "fix": "..."}`.\n- The orchestrator passes this to `node .harness/visible.mjs judge <run> --agent <you> --file <report>`. The controller decides, not you: `NEEDS_FIX`, any `high` finding, or any score below 3 blocks the run (REVIEW_BLOCKED). Score honestly; an inconsistent verdict counts as a block.\n');
+
+  const up1 = node(REPO, ['install.mjs', p, '--no-auto-assign', '--no-skills']);
+  assert(up1.status === 0, up1.stdout + up1.stderr);
+  assert(fs.existsSync(path.join(p, 'docs', 'foundation', 'brand.md')) && fs.existsSync(path.join(p, '.harness', 'skills', 'brand-craft', 'SKILL.md')), 'foundation & brand-craft added on upgrade');
+  assert(/Flow & State Table/.test(read(p, '.harness/skills/spec-writer/SKILL.md')), 'spec-writer starter stub refreshed with Flow & State Table');
+  const upUxRole = json(path.join(p, '.harness', 'roles', 'ux-designer.json'));
+  assert(upUxRole.writablePaths.includes('docs/ux/**') && upUxRole.writablePaths.includes('app/**/*.css') && /brand\.md/.test(upUxRole.mission), JSON.stringify(upUxRole));
+  assert(/doneVsGood/.test(json(path.join(p, '.harness', 'roles', 'reviewer.json')).mission), 'reviewer role updated to Done vs Good');
+  const upTeam = json(path.join(p, '.harness', 'team.json'));
+  const upUxLead = upTeam.members.find((m) => m.id === 'lead-ux');
+  assert(upUxLead.engine === 'claude' && upUxLead.scope.includes('docs/ux/**/*.md') && upUxLead.scope.includes('app/**/*.css') && upUxLead.skills.includes('brand-craft'), JSON.stringify(upUxLead));
+  assert(/Intake/.test(read(p, '.claude/commands/harness/feature.md')) && read(p, '.claude/commands/harness/status.md') === 'MY CUSTOM STATUS\n', 'stock command refreshed, custom kept');
+  assert(/docs\/ux\/\*\*\/\*\.md/.test(read(p, '.claude/agents/lead-ux.md')) && /app\/\*\*\/\*\.css/.test(read(p, '.claude/agents/lead-ux.md')) && /doneVsGood/.test(read(p, '.claude/agents/reviewer.md')) && read(p, '.claude/agents/lead-dev.md') === 'MY CUSTOM DEV AGENT\n', 'synced/stock agents refreshed, custom agent kept');
+  assert(node(p, ['.harness/team.mjs', 'validate']).status === 0, 'upgraded team validates');
+
+  // If owner intentionally drops brand-craft AFTER upgrading to post-Step-2, re-install respects it (idempotent)
+  upUxLead.skills = ['ui-craft'];
+  fs.writeFileSync(path.join(p, '.harness', 'team.json'), JSON.stringify(upTeam, null, 2) + '\n');
+  const up2 = node(REPO, ['install.mjs', p, '--no-auto-assign', '--no-skills']);
+  assert(up2.status === 0 && !json(path.join(p, '.harness', 'team.json')).members.find((m) => m.id === 'lead-ux').skills.includes('brand-craft'), 're-install must not re-add intentionally removed brand-craft');
+
+  // 3. Pre-1.0.7 3-lead project (missing lead-ux) receives lead-ux + docs/ux + brand-craft on upgrade
+  const p3 = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-preux-up-'));
+  fs.mkdirSync(path.join(p3, '.harness'), { recursive: true });
+  const preUxTeam = { ...json(path.join(REPO, '.harness', 'team.json')), members: json(path.join(REPO, '.harness', 'team.json')).members.filter((m) => m.id !== 'lead-ux').map((m) => (m.id === 'orchestrator' ? { ...m, canDelegateTo: ['lead-ba', 'lead-dev', 'lead-qa'] } : m)) };
+  fs.writeFileSync(path.join(p3, '.harness', 'team.json'), JSON.stringify(preUxTeam, null, 2) + '\n');
+  assert(node(REPO, ['install.mjs', p3, '--no-auto-assign', '--no-skills']).status === 0);
+  const migratedTeam = json(path.join(p3, '.harness', 'team.json'));
+  assert(migratedTeam.members.some((m) => m.id === 'lead-ux' && m.scope.includes('docs/ux/**/*.md')) && migratedTeam.members[0].canDelegateTo.includes('lead-ux') && fs.existsSync(path.join(p3, '.claude', 'agents', 'lead-ux.md')), JSON.stringify(migratedTeam));
+  assert(node(p3, ['.harness/team.mjs', 'validate']).status === 0 && node(p3, ['.harness/team.mjs', 'sync-agents', '--check']).status === 0, '3-lead upgrade agents in sync');
+
+  // 4. Visual confirm hardening across editors + interactive TTY prompt
+  const gd = await import(pathToFileURL(path.join(REPO, '.harness', 'lib', 'guard.mjs')).href);
+  const { PassThrough } = await import('node:stream');
+  const dAgy = sandbox(); judgeOn(dAgy);
+  fs.mkdirSync(path.join(dAgy, '.claude'), { recursive: true });
+  fs.copyFileSync(path.join(REPO, '.claude', 'settings.json'), path.join(dAgy, '.claude', 'settings.json'));
+  const agyId = runIdOf(vis(dAgy, 'brief', '--goal', 'Style card', '--editor', 'antigravity', '--check', PASS));
+  assert(vis(dAgy, 'assign', agyId, deleg([{ lead: 'lead-ux', goal: 'css', files: ['src/c.css'] }])).status === 0);
+  agentsWrite(dAgy, [['src/c.css', '.c{color:red}\n']]);
+  assert(vis(dAgy, 'verify', agyId).status === 0);
+  // Even if CLAUDECODE=1 is spoofed, an Antigravity run or ANTIGRAVITY_AGENT env refuses non-TTY self-approval
+  const agyDeny = node(dAgy, ['.harness/visible.mjs', 'visual', 'confirm', agyId, '--by', 'Tester'], { CLAUDECODE: '1', ANTIGRAVITY_AGENT: '' });
+  assert(agyDeny.status === 1 && /VISUAL CONFIRM REFUSED/.test(agyDeny.stderr), agyDeny.stderr);
+  assert(gd.checkVisualConfirmOrigin({ root: dAgy, run: { id: 'V-1', editor: 'claude-code' }, env: { CLAUDECODE: '1' }, isTTY: false }).ok === true);
+  assert(gd.checkVisualConfirmOrigin({ root: dAgy, run: { id: 'V-1', editor: 'claude-code' }, env: { ANTIGRAVITY_AGENT: '1' }, isTTY: false }).ok === false);
+  const ttyAsk = async (reply) => {
+    const input = new PassThrough(); const output = new PassThrough(); input.isTTY = true;
+    const pAns = gd.askVisualConfirm('V-1', 'Card', { input, output });
+    if (reply !== null) input.end(reply); else input.end();
+    return pAns;
+  };
+  assert(await ttyAsk('y\n') === true && await ttyAsk('yes\n') === true && await ttyAsk('n\n') === false && await ttyAsk(null) === false, 'interactive TTY prompt y/n check');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
