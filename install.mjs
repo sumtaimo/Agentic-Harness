@@ -107,11 +107,16 @@ function cleanConfig(text) {
   if (REMOVED_PROFILES.includes(String(cfg.activeProfile).toLowerCase())) cfg.activeProfile = 'auto';
   return JSON.stringify(cfg, null, 2) + '\n';
 }
+// Known retired Antigravity template model defaults so existing projects migrate off discontinued IDs on upgrade
+// while keeping any model ID the owner chose themselves.
+const RETIRED_ANTIGRAVITY_MODEL = /^(?:gemini-3\.8-flash-|gemini-4-argon-)/i;
+
 /**
  * Update an existing project's config.json from the template without overwriting the owner's choices:
  * removed engines are dropped (as on a new install), engine profiles the project lacks are added, keys a
- * profile lacks (e.g. new binaryCandidates) are filled in, and an unverified profile takes the template's
- * invocation once the template marks that engine verified. Returns { text, added[] } or null if either side is unreadable.
+ * profile lacks (e.g. new binaryCandidates) are filled in, retired Antigravity template defaults are refreshed,
+ * and an unverified profile takes the template's invocation once the template marks that engine verified.
+ * Returns { text, added[] } or null if either side is unreadable.
  */
 function upgradeConfig(existingText, templateText) {
   let cur = null; let tpl = null;
@@ -130,6 +135,23 @@ function upgradeConfig(existingText, templateText) {
     }
     for (const [key, val] of Object.entries(prof)) {
       if (!(key in cleaned.profiles[name])) { cleaned.profiles[name][key] = val; added.push(`${name}.${key}`); }
+    }
+  }
+  const migrateModels = (curModels, tplModels, prefix) => {
+    if (!curModels || !tplModels) return;
+    for (const tier of ['fast', 'medium', 'high']) {
+      const oldM = String(curModels[tier] || '');
+      const nextM = tplModels[tier];
+      if (nextM && RETIRED_ANTIGRAVITY_MODEL.test(oldM) && oldM !== nextM) {
+        curModels[tier] = nextM;
+        added.push(`${prefix}.${tier}`);
+      }
+    }
+  };
+  migrateModels(cleaned.profiles.antigravity?.models, tpl.profiles?.antigravity?.models, 'antigravity.models');
+  if (cleaned.quotaFallback && typeof cleaned.quotaFallback === 'object' && tpl.quotaFallback) {
+    for (const [k, fb] of Object.entries(cleaned.quotaFallback)) {
+      if (fb?.engine === 'antigravity') migrateModels(fb.models, tpl.quotaFallback[k]?.models, `quotaFallback.${k}.models`);
     }
   }
   return { text: JSON.stringify(cleaned, null, 2) + '\n', added };

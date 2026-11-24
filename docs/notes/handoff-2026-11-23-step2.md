@@ -5,14 +5,14 @@ Read this first in the next session. Then read `AGENTS.md` and `.harness/memory/
 Branch: `lab` only. Do NOT create branches. Do NOT `git push` or touch `release` until the owner says so in chat.
 No version bump / CHANGELOG entry until the owner says so. Ask before editing `.harness/charter.md` or `.harness/config.json`.
 
-## State (everything below is committed and pushed to `lab`)
+## State (Steps 1–2 on `lab`; Step 3 Antigravity model refresh + auto-fallback ready on `lab`)
 - Step 1 `9b69c98`: `docs/foundation/{product,domain,brand}.md` blank forms (installer never overwrites a filled file) and a skippable role-aware intake in `/harness:run` and `/harness:feature`.
 - Step 2 `37330d7`: reviewer rubric adds `intentFit`, `states`, `craft` and a required `doneVsGood` ({intent, weak}); visual gate for changed UI (`visible.mjs visual attach|confirm|reject`, Claude Code asks the human for `confirm`); new `brand-craft` skill; Flow & State Table in `spec-writer`; `lead-ux` / `ux-designer` may write `docs/ux/**/*.md`; `lead-ux` reads `brand.md` + `product.md`.
-- Last verified: `npm test` 241 passed, 0 failed (+14/14 engine-probe); `npm run audit` 23 passed, 0 failed.
-- Key files: `.harness/lib/guard.mjs` (rubric, `checkVisualEvidence`), `.harness/visible.mjs` (gate + `visual` command), `.harness/daemon.mjs` (headless reviewer prompt, `VISUAL_REVIEW_PENDING`), `test/run-tests.mjs`, `test/evals/golden.json`.
+- Step 3 (2026-11-24): updated Antigravity `fast` and `medium` tiers in `.harness/config.json` (`profiles.antigravity.models` and `quotaFallback.codex.models`) off the models retiring on 2026-11-30, and verified both tiers with real scratch smoke runs on `agy` 1.5.14 (`COMMITTED` on Cycle 1). Added automatic `agy models` pre-flight check (`listAvailableModels`, `pickModelFromAvailable`, 6 h cache in `.harness/engine-probe.json`), reactive `MODEL_AUTO_FALLBACK` retry (`isModelUnavailableError`) in `.harness/daemon.mjs`, runtime fallback hints in `.harness/doctor.mjs`, and automatic upgrade migration of discontinued template defaults in `install.mjs` (preserving custom owner models), plus docs (`docs/ENGINES.md`, `docs/MULTI-MODEL-SETUP.md`) and unit/e2e tests (`test/engine-probe.test.mjs`, `test/run-tests.mjs`). Also updated `sandbox()` in `test/run-tests.mjs` to skip git-ignored runtime caches.
+- Key files: `.harness/lib/guard.mjs`, `.harness/visible.mjs`, `.harness/lib/common.mjs`, `.harness/daemon.mjs`, `.harness/doctor.mjs`, `.harness/config.json`, `install.mjs`, `test/run-tests.mjs`, `test/engine-probe.test.mjs`, `test/evals/golden.json`.
 
 ## Remaining tasks (in order)
-1. `git pull` on `lab`, then run `npm test`, `npm run audit` and `npm run audit -- --site` (not yet run on the final tree; if the website build fails once, run `cd website && npm ci` and retry). Fix anything red.
+1. **Done (2026-11-24):** `git pull` on `lab`, `cd website && npm ci`, `npm run audit -- --site`, `npm test`, and Antigravity model update + automatic `agy models` fallback.
 2. Skill-library risk check (owner contacts the skill library maintainers): required by `AGENTS.md` BEFORE release, because skills/roles changed (`brand-craft`, `spec-writer`, `ux-designer`, `reviewer`). Read the owner's local coordination notes first if the owner mentions it (`docs/notes/`).
 3. Skill Foundry: the template's `spec-writer` is a "starter stub" that Skill Foundry's real `spec-writer` replaces on install, so the Flow & State Table must also be added in the Skill Foundry repo (separate repo, owner decides).
 4. `.harness/charter.md` role table still lists the old UX_DESIGNER scope (style files only): update with the owner's OK (add `docs/ux/**`).

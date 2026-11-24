@@ -25,7 +25,10 @@ architecture planning gets `high`, and a failed check escalates one tier. The ti
 - Codex: one model with a reasoning effort per tier, written `name@effort` and passed as `--model name -c model_reasoning_effort=effort`.
   This also overrides a high default effort in `~/.codex/config.toml`. Names come from `codex debug models`.
 - Antigravity: `agy` has no aliases, so its tiers use exact IDs from `agy models`. Real runs on all three tiers passed on
-  2026-11-14 (create a file, write add(a, b), write mul(a, b); each checked by a real command and COMMITTED).
+  2026-11-14 (create a file, write add(a, b), write mul(a, b); each checked by a real command and COMMITTED), and the
+  updated `fast` and `medium` tiers passed real scratch smoke runs on 2026-11-24 with `agy` 1.5.14 (both COMMITTED on
+  Cycle 1). When a configured ID is retired or missing from `agy models`, the controller falls back automatically at run
+  time (see *Renamed / retired models* below).
 - The model names themselves live only in `.harness/config.json` → `profiles.<engine>.models`.
 
 ## Every agent gets a model that fits its job
@@ -71,7 +74,19 @@ Each tier maps to one model per engine in `.harness/config.json`; `node .harness
   engine and model. Antigravity does not report tokens, so it is counted in calls. Whenever today's UTC usage reaches
   **≥ 80%** of any configured `dailyLimits` threshold, `usage.mjs` (`--json` + text), `dispatch.mjs` (non-blocking pre-flight,
   pointing out any configured `quotaFallback` partner), and `start.mjs` (`--summary` / `--json`) emit a quota warning.
-- **Renamed models.** `doctor` runs `agy models` and warns when a configured model ID no longer exists.
+- **Renamed / retired models (automatic `agy` fallback).**
+  - **Pre-flight check (cached):** before spawning an engine that exposes a model list (`supportsModelListing`, e.g.
+    `agy models`), the controller checks the selected ID against `listAvailableModels` (parsed via `parseAvailableModels`
+    and cached for 6 hours in `.harness/engine-probe.json`). If the ID is missing from a non-empty list,
+    `pickModelFromAvailable` selects an available replacement for that tier (matching family, newer generation, and tier
+    effort) and `.harness/daemon.mjs` logs `MODEL_AUTO_FALLBACK` to `.harness/telemetry.log`. If `agy models` cannot be read
+    (e.g. offline), the run proceeds as configured without blocking.
+  - **Reactive retry:** if `agy` exits with a retired or unknown model error (`isModelUnavailableError`), `.harness/daemon.mjs`
+    forces a fresh `agy models` check, excludes already-tried IDs, emits `MODEL_AUTO_FALLBACK`, and retries the same agent
+    on the replacement model.
+  - **`doctor` warning:** when `antigravity` is installed and allowed, `node .harness/doctor.mjs` checks configured IDs in
+    both `profiles.antigravity.models` and `quotaFallback` entries targeting `antigravity` against a fresh `agy models` run,
+    warning with a `→ runtime auto-fallback:` replacement hint for any missing ID (helpers in `.harness/lib/common.mjs`).
 
 ## Each AI tool is allowed once
 
@@ -123,7 +138,10 @@ node .harness/doctor.mjs     # or: npm run doctor
 ```
 
 Doctor runs `<binary> --help` for each engine, lists any configured flag that is missing, and warns if multiple `agy`
-binaries appear on `PATH` (shadowing an active binary with another version). An engine with a missing flag will not be used.
+binaries appear on `PATH` (shadowing an active binary with another version). When `antigravity` is installed and allowed,
+it also compares configured Antigravity model IDs (`profiles.antigravity.models` and `quotaFallback`) against a live
+`agy models` check and warns with a `→ runtime auto-fallback:` hint if any configured ID is no longer offered. An engine
+with a missing flag will not be used.
 
 ## What ENGINE_FALLBACK means
 
@@ -144,7 +162,9 @@ Profiles in `.harness/config.json` have `"verified": false` until a real run wit
 succeeds. Today `claude`, `antigravity` and `codex` are `"verified": true`.
 
 When you update an existing project with `node install.mjs <project>`, its `config.json` keeps your own values, gains
-any engine profile or profile key it lacks (for example `binaryCandidates`), drops removed engines, and an unverified
+any engine profile or profile key it lacks (for example `binaryCandidates`), drops removed engines, automatically migrates
+discontinued Antigravity template defaults (in `profiles.antigravity.models` and `quotaFallback`) to the template's
+current defaults while keeping any custom model IDs you chose yourself, and an unverified
 profile takes the template's tested `args`/models once the template marks that engine verified. The installer prints
 every such change as `update .harness/config.json (...)`.
 

@@ -31,7 +31,7 @@ function sandbox({ worktrees = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-test-'));
   fs.cpSync(path.join(REPO, '.harness'), path.join(dir, '.harness'), {
     recursive: true,
-    filter: (src) => !/(state\.json|telemetry\.log|daemon\.pid|approvals\.json)$/.test(src) && !/[\\/](inbox|completed|failed|sessions)[\\/][^.]/.test(src)
+    filter: (src) => !/(state\.json|telemetry\.log|daemon\.pid|approvals\.json|skill-registry\.json|foundry-check\.json|update-check\.json|engine-probe\.json|skill-fetch\.lock|auto-state\.json|live\.log)$/.test(src) && !/[\\/](inbox|completed|failed|sessions)[\\/][^.]/.test(src)
   });
   // Isolate from any live harness run in the repo: clean backlog, no active visible-run state.
   fs.rmSync(path.join(dir, '.harness', 'visible'), { recursive: true, force: true });
@@ -2302,7 +2302,7 @@ await test('model tiers (pure): low → fast, standard → medium, architecture/
   // Aliases only, except antigravity and codex: neither CLI has aliases, so it uses the exact IDs from 'agy models' (owner decision).
   for (const [name, p] of Object.entries(cfg.profiles)) if (!['antigravity', 'codex'].includes(name)) for (const m of Object.values(p.models || {})) assert(m === null || !/\d/.test(m), `${name}: model "${m}" looks like a pinned version; use an alias`);
   const ag = cfg.profiles.antigravity;
-  assert(ag.models.fast === 'gemini-3.8-flash-medium' && ag.models.medium === 'gemini-4-argon-medium' && ag.models.high === 'gemini-4-hydrogen-high' && ag.modelArgs.join(' ') === '--model {model}', `antigravity tiers: ${JSON.stringify(ag.models)}`);
+  assert(ag.models.fast === 'gemini-4-carbon-low' && ag.models.medium === 'gemini-4-carbon-medium' && ag.models.high === 'gemini-4-hydrogen-high' && ag.modelArgs.join(' ') === '--model {model}', `antigravity tiers: ${JSON.stringify(ag.models)}`);
   assert(common.resolveModel(c, { tier: 'fast' }).model === 'haiku' && common.resolveModel(c, { tier: 'high' }).model === 'opus', 'claude tier → alias');
   assert(common.resolveModel(cfg.profiles.codex, { tier: 'fast' }).model === 'gpt-6-luna@low' && common.resolveModel(cfg.profiles.codex, { tier: 'high' }).model === 'gpt-6-luna@high', 'codex: one model, reasoning effort per tier');
   assert(!Object.values(cfg.profiles).some((p) => common.usesCliDefault(p)), 'no engine may silently run on its CLI default model');
@@ -7166,6 +7166,115 @@ await test('product foundation: the installer writes docs/foundation blank forms
   }
   assert(/`lead-ux` → `docs\/foundation\/brand\.md` and `product\.md`/.test(run) && /`lead-ba` → `product\.md` and `domain\.md`/.test(run) && /`lead-dev` → `product\.md` and `domain\.md`/.test(run), 'run.md role to file map is missing');
   assert(/bug fix[\s\S]*typo[\s\S]*chore/.test(run.split('1. **Brief.**')[0]), 'run.md does not auto-skip bug fixes, typos and chores');
+});
+
+await test('antigravity auto-fallback end to end: daemon pre-flight MODEL_AUTO_FALLBACK, reactive retry on unavailable-model error, and doctor fallback hint', () => {
+  const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+  const agTpl = json(path.join(REPO, '.harness', 'config.json')).profiles.antigravity;
+  const setupFakeAgy = (d, agyState, models) => {
+    const binDir = path.join(d, 'fake-bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    const stateFile = path.join(binDir, 'agy-state.json');
+    const callsFile = path.join(binDir, 'agy-calls.jsonl');
+    fs.writeFileSync(stateFile, JSON.stringify(agyState));
+    const script = path.join(binDir, 'agy-cli.mjs');
+    fs.writeFileSync(script, [
+      "import fs from 'node:fs';",
+      "import path from 'node:path';",
+      `const stateFile = ${JSON.stringify(stateFile)};`,
+      `const callsFile = ${JSON.stringify(callsFile)};`,
+      'const args = process.argv.slice(2);',
+      "if (args.includes('--help')) { console.log('Usage: agy [options]\\n  -p, --prompt <text>  Run one prompt headless and exit\\n  --model <model>      Model\\n  -h, --help           Show help'); process.exit(0); }",
+      "const st = JSON.parse(fs.readFileSync(stateFile, 'utf8'));",
+      "if (args[0] === 'models') { fs.appendFileSync(callsFile, JSON.stringify({ cmd: 'models', models: st.models }) + '\\n'); console.log('Fetching available models...\\n' + st.models.map((m) => '  ' + m).join('\\n')); process.exit(0); }",
+      "const mIdx = args.indexOf('--model'); const model = mIdx > -1 ? args[mIdx + 1] : null;",
+      "const pIdx = args.indexOf('-p'); const prompt = pIdx > -1 ? args[pIdx + 1] : '';",
+      "fs.appendFileSync(callsFile, JSON.stringify({ cmd: 'run', model }) + '\\n');",
+      'if (model && (st.rejectModels || []).includes(model)) {',
+      '  if (Array.isArray(st.modelsAfterReject)) { st.models = st.modelsAfterReject; fs.writeFileSync(stateFile, JSON.stringify(st)); }',
+      "  console.error(\"Error: model '\" + model + \"' is no longer available\"); process.exit(1);",
+      '}',
+      "const task = prompt.split('[TASK INSTRUCTIONS]:')[1] || prompt;",
+      "for (const m of task.matchAll(/WRITE\\s+(\\S+)\\s+(\\S+)/g)) { fs.mkdirSync(path.dirname(m[1]), { recursive: true }); fs.writeFileSync(m[1], m[2]); }",
+      "console.log('agy done on ' + (model || 'default'));"
+    ].join('\n'));
+    if (process.platform === 'win32') {
+      fs.writeFileSync(path.join(binDir, 'agy.cmd'), `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+    } else {
+      const sh = path.join(binDir, 'agy');
+      fs.writeFileSync(sh, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+      fs.chmodSync(sh, 0o755);
+    }
+    withProfiles(d, { antigravity: { ...agTpl, models } });
+    const cfgFile = path.join(d, '.harness', 'config.json');
+    const cfg = json(cfgFile);
+    cfg.activeProfile = 'antigravity';
+    cfg.autoOrder = ['antigravity'];
+    cfg.quotaFallback = {};
+    fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2));
+    return {
+      calls: () => fs.readFileSync(callsFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)),
+      extraEnv: { [pathKey]: `${binDir}${path.delimiter}${env[pathKey]}` }
+    };
+  };
+
+  // 1. Pre-flight MODEL_AUTO_FALLBACK + doctor.mjs fallback hint when configured agy models are missing from live 'agy models'.
+  const d1 = sandbox();
+  setCharter(d1, { autonomous: 'off' });
+  const agy1 = setupFakeAgy(
+    d1,
+    { models: ['gemini-4-carbon-low', 'gemini-4-carbon-medium', 'gemini-4-hydrogen-high'] },
+    { fast: 'gemini-3.8-flash-medium', medium: 'gemini-4-argon-medium', high: 'gemini-4-hydrogen-high' }
+  );
+  drop(d1, { id: 'pre1', title: 'pre-flight fallback', verifyCmd: existsCheck('a.txt'), subtasks: [{ id: 'w1', targetFiles: ['a.txt'], prompt: 'WRITE a.txt ok' }] });
+  const r1 = node(d1, ['.harness/daemon.mjs', '--once'], agy1.extraEnv);
+  assert(r1.status === 0 && stateOf(d1).phase === '4_COMMITTED' && fs.existsSync(path.join(d1, 'a.txt')), `pre-flight failed: ${r1.stderr} ${JSON.stringify(stateOf(d1))}`);
+  const preFb = log(d1).find((e) => e.phase === 'MODEL_AUTO_FALLBACK');
+  assert(preFb && preFb.engine === 'antigravity' && preFb.from === 'gemini-3.8-flash-medium' && preFb.to === 'gemini-4-carbon-low' && preFb.tier === 'fast', `bad pre-flight telemetry: ${JSON.stringify(preFb)}`);
+  assert(tierLog(d1).some((e) => e.worker === 'w1' && e.model === 'gemini-4-carbon-low'), `MODEL_TIER did not record auto-fallback model: ${JSON.stringify(tierLog(d1))}`);
+  const runCalls1 = agy1.calls().filter((c) => c.cmd === 'run').map((c) => c.model);
+  assert(runCalls1.join() === 'gemini-4-carbon-low', `pre-flight should avoid calling retired model: ${runCalls1.join()}`);
+
+  const doc1 = node(d1, ['.harness/doctor.mjs'], agy1.extraEnv);
+  assert(doc1.status === 0, doc1.stderr);
+  assert(/Antigravity model names/.test(doc1.stdout) && /model ID\(s\) no longer offered by agy:/.test(doc1.stdout), doc1.stdout);
+  assert(/gemini-3\.8-flash-medium → runtime auto-fallback: gemini-4-carbon-low/.test(doc1.stdout), doc1.stdout);
+  assert(/gemini-4-argon-medium → runtime auto-fallback: gemini-4-carbon-medium/.test(doc1.stdout), doc1.stdout);
+
+  // Once config.json matches live 'agy models', doctor reports all configured IDs present.
+  const cfg1 = json(path.join(d1, '.harness', 'config.json'));
+  cfg1.profiles.antigravity.models = { fast: 'gemini-4-carbon-low', medium: 'gemini-4-carbon-medium', high: 'gemini-4-hydrogen-high' };
+  fs.writeFileSync(path.join(d1, '.harness', 'config.json'), JSON.stringify(cfg1, null, 2));
+  const docOk = node(d1, ['.harness/doctor.mjs'], agy1.extraEnv);
+  assert(docOk.status === 0 && /all 3 configured model IDs exist in agy/.test(docOk.stdout), docOk.stdout);
+
+  // 2. Reactive MODEL_AUTO_FALLBACK retry when CLI rejects a previously-cached model at runtime.
+  const d2 = sandbox();
+  const agy2 = setupFakeAgy(
+    d2,
+    {
+      models: ['gemini-4-argon-medium', 'gemini-4-carbon-low', 'gemini-4-carbon-medium', 'gemini-4-hydrogen-high'],
+      rejectModels: ['gemini-4-argon-medium'],
+      modelsAfterReject: ['gemini-4-carbon-low', 'gemini-4-carbon-medium', 'gemini-4-hydrogen-high']
+    },
+    { fast: 'gemini-4-carbon-low', medium: 'gemini-4-argon-medium', high: 'gemini-4-hydrogen-high' }
+  );
+  drop(d2, {
+    id: 'react1',
+    title: 'reactive fallback',
+    verifyCmd: existsCheck('src/a.js', 'src/b.js', 'src/c.js'),
+    subtasks: [{ id: 'w2', targetFiles: ['src/a.js', 'src/b.js', 'src/c.js'], prompt: 'WRITE src/a.js a WRITE src/b.js b WRITE src/c.js c' }]
+  });
+  const r2 = node(d2, ['.harness/daemon.mjs', '--once'], agy2.extraEnv);
+  assert(r2.status === 0 && stateOf(d2).phase === '4_COMMITTED' && stateOf(d2).cycle === 1, `reactive fallback failed: ${r2.stderr} ${JSON.stringify(stateOf(d2))}`);
+  for (const f of ['src/a.js', 'src/b.js', 'src/c.js']) assert(fs.existsSync(path.join(d2, f)), `missing ${f}`);
+  const reactFb = log(d2).find((e) => e.phase === 'MODEL_AUTO_FALLBACK');
+  assert(reactFb && reactFb.engine === 'antigravity' && reactFb.from === 'gemini-4-argon-medium' && reactFb.to === 'gemini-4-carbon-medium' && reactFb.tier === 'medium' && /rejected model/.test(reactFb.message), `bad reactive telemetry: ${JSON.stringify(reactFb)}`);
+  const usage2 = log(d2).filter((e) => e.phase === 'AGENT_USAGE');
+  assert(usage2.length === 2 && usage2[0].ok === false && usage2[0].model === 'gemini-4-argon-medium' && usage2[1].ok === true && usage2[1].model === 'gemini-4-carbon-medium', JSON.stringify(usage2));
+  const runCalls2 = agy2.calls().filter((c) => c.cmd === 'run').map((c) => c.model);
+  assert(runCalls2.join() === 'gemini-4-argon-medium,gemini-4-carbon-medium', `unexpected run calls: ${runCalls2.join()}`);
+  assert(agy2.calls().filter((c) => c.cmd === 'models').length === 2, 'reactive fallback should force-refresh agy models');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

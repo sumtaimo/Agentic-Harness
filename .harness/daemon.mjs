@@ -32,7 +32,7 @@ import {
   ROOT, DIRS, FILES, ensureDirs, loadConfig, atomicWriteJson, readJsonSafe, which, engineBinary,
   resolveProfile, memoryContext, recordSession, remember, listLessons, detectVerifyCmd, buildRepoMap, clipErrorTrace, diagnoseVerifyFailure, formatDiagnosis,
   listProjectFiles, safeTarget, normalizeTarget, isSecretFile, isSameDir, validateExternalWorkRoot,
-  winQuote, winCommandLine, needsWinShell, MODEL_TIERS, chooseModelTier, resolveModel, compatibleModelFor, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
+  winQuote, winCommandLine, needsWinShell, MODEL_TIERS, chooseModelTier, resolveModel, compatibleModelFor, listAvailableModels, pickModelFromAvailable, isModelUnavailableError, pendingCostReasons, loadApprovals, engineUsable, helpIfAsked, aiUsageSince, usageLine, usageTodayLine,
   harnessPidAlive, workerName
 } from './lib/common.mjs';
 helpIfAsked(import.meta.url); // "--help" prints the usage; it must never start the controller
@@ -302,6 +302,18 @@ function spawnEngine(opts, tried = new Set()) {
   return spawnEngineOnce(opts).catch((e) => {
     tried.add(e.engineName);
     tried.add(`${e.engineName}:${e.modelUsed || ''}`);
+    if (!e.quotaLimit && e.modelUnavailable && e.modelUsed && !opts.noModelFallback) {
+      const prof = config.profiles?.[e.engineName];
+      const liveList = listAvailableModels(prof, { force: true });
+      const triedModels = [...tried].filter((x) => x.startsWith(`${e.engineName}:`)).map((x) => x.slice(e.engineName.length + 1)).filter(Boolean);
+      const rep = liveList.models ? pickModelFromAvailable(liveList.models, { tier: e.tierUsed || 'medium', preferred: e.modelUsed, exclude: triedModels }) : null;
+      if (rep && rep.model && !tried.has(`${e.engineName}:${rep.model}`)) {
+        logTelemetry('MODEL_AUTO_FALLBACK', `${opts.id}: ${e.engineName} rejected model '${e.modelUsed}' → retrying with '${rep.model}' [${e.tierUsed || 'medium'}]`, { worker: opts.id, engine: e.engineName, from: e.modelUsed, to: rep.model, tier: e.tierUsed || 'medium' });
+        if (liveOn()) livePrint(opts.id, `↻ ${e.engineName} model "${e.modelUsed}" unavailable → continuing on "${rep.model}"`);
+        writeState({ history: pushHistory(`↻ ${e.engineName} model ${e.modelUsed} → ${rep.model}`) });
+        return spawnEngine({ ...opts, engine: e.engineName, model: rep.model, modelSourceEngine: e.engineName, excludeModels: triedModels, skipPreFlightModelCheck: true }, tried);
+      }
+    }
     if (!e.quotaLimit || opts.noQuotaFallback) throw e;
     const fb = (config.quotaFallback || {})[e.engineName] || null;
     let targetEngine = fb?.engine || null;
@@ -332,7 +344,7 @@ function spawnEngine(opts, tried = new Set()) {
 }
 
 /** Spawn an AI engine with a prompt. Resolves { engine, output, denials }. Streams activity live when enabled. */
-function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallowedTools, tier = null, model: modelOverride = null, modelSourceEngine = null }) {
+function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, disallowedTools, tier = null, model: modelOverride = null, modelSourceEngine = null, excludeModels = [], skipPreFlightModelCheck = false }) {
   return new Promise((resolve, reject) => {
     let profile;
     try { profile = resolveProfile(config, engine); } catch (e) { return reject(e); }
@@ -343,7 +355,18 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
       t = { tier: 'medium', reasons: [...(t.reasons || []), 'capped high → medium: autonomous run, the high model needs your OK (node .harness/backlog.mjs approve <id>)'] };
       logTelemetry('AUTO_TIER_CAPPED', `${id}: high tier capped to medium (autonomous; high model not approved)`, { worker: id });
     }
-    const pick = resolveModel(profile, { tier: t.tier, override: safeOverride });
+    let pick = resolveModel(profile, { tier: t.tier, override: safeOverride });
+    if (pick.model && !skipPreFlightModelCheck) {
+      const liveList = listAvailableModels(profile);
+      if (liveList.supported && Array.isArray(liveList.models) && !liveList.models.includes(pick.model)) {
+        const rep = pickModelFromAvailable(liveList.models, { tier: pick.tier, preferred: pick.model, exclude: excludeModels });
+        if (rep && rep.model && rep.model !== pick.model) {
+          logTelemetry('MODEL_AUTO_FALLBACK', `${id}: ${profile.name} model '${pick.model}' not listed by CLI → using '${rep.model}' [${pick.tier}]`, { worker: id, engine: profile.name, from: pick.model, to: rep.model, tier: pick.tier });
+          if (liveOn()) livePrint(id, `↻ ${profile.name} model "${pick.model}" unavailable → using "${rep.model}" [${pick.tier}]`);
+          pick = { ...pick, model: rep.model, source: `auto-fallback from ${pick.model}` };
+        }
+      }
+    }
     const over = dailyLimitReached(profile.name);
     if (over) {
       logTelemetry('DAILY_LIMIT', `${id}: ${profile.name} reached its daily cap (${over}); not started`, { worker: id, engine: profile.name });
@@ -425,11 +448,11 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
         // The engine's own error (e.g. Claude's JSON {"is_error":true,"result":"You've hit your limit"}) is on stdout;
         // stderr may only hold unrelated warnings, so prefer the engine's message when there is one.
         try { summarizeOutput(stdout); } catch (e) {
-          if (e.engineError) return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${e.message}`), { fatal: e.fatal, engineName: profile.name, tierUsed: pick.tier, modelUsed: pick.model, quotaLimit: QUOTA_LIMIT_RE.test(e.message) }));
+          if (e.engineError) return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${e.message}`), { fatal: e.fatal, engineName: profile.name, tierUsed: pick.tier, modelUsed: pick.model, quotaLimit: QUOTA_LIMIT_RE.test(e.message), modelUnavailable: isModelUnavailableError(e.message) }));
         }
         const raw = `${stderr}\n${stdout}`.trim();
         const fatal = engineErrorIsFatal(raw);
-        return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${(stderr || stdout).trim().slice(0, 4000)}${fatal ? ' (account/login problem: retrying cannot fix it)' : ''}`), { fatal, engineName: profile.name, tierUsed: pick.tier, modelUsed: pick.model, quotaLimit: QUOTA_LIMIT_RE.test(raw) }));
+        return done(reject, Object.assign(new Error(`${id} (${profile.name}) exited with code ${code}: ${(stderr || stdout).trim().slice(0, 4000)}${fatal ? ' (account/login problem: retrying cannot fix it)' : ''}`), { fatal, engineName: profile.name, tierUsed: pick.tier, modelUsed: pick.model, quotaLimit: QUOTA_LIMIT_RE.test(raw), modelUnavailable: isModelUnavailableError(raw) }));
       }
       try {
         const r = summarizeOutput(stdout);

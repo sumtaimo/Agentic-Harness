@@ -152,9 +152,11 @@ Claude Code resolves its aliases to the newest release of each family itself
 (`claude --help`: "Provide an alias for the latest model"). A test fails if anyone puts a pinned version
 number in `models`.
 
-- **`agy` (Antigravity):** exact model IDs from `agy models`, because agy has no "latest" aliases (the one exception to the alias rule):
-
-  one ID per tier in `profiles.antigravity.models`. When Google renames a model, run `agy models` and update `profiles.antigravity.models` in `.harness/config.json`.
+- **`agy` (Antigravity):** exact model IDs from `agy models`, because `agy` has no "latest" aliases (the one exception to the alias rule):
+  one ID per tier in `profiles.antigravity.models`. When Google renames or retires a model, runs stay resilient while you update `.harness/config.json`:
+  - **Pre-flight check (cached):** before spawning `agy`, the controller checks the selected ID against `agy models` (cached for 6 hours in `.harness/engine-probe.json`) and automatically substitutes an available tier-matched ID if missing (`MODEL_AUTO_FALLBACK` in `.harness/telemetry.log`). If `agy models` cannot be read (e.g. offline), the run proceeds as configured without blocking.
+  - **Reactive retry:** if `agy` still exits with a retired or unknown model error, the controller forces a fresh `agy models` check, excludes already-tried IDs, logs `MODEL_AUTO_FALLBACK`, and retries the agent on the replacement model.
+  - **`doctor` warning & upgrade migration:** `node .harness/doctor.mjs` checks configured IDs in `profiles.antigravity.models` and `quotaFallback` against a live `agy models` run and warns with a `→ runtime auto-fallback:` suggestion when any ID is missing; running `node install.mjs <project>` automatically migrates discontinued template defaults to current defaults while keeping any custom model IDs you chose yourself.
 - **`codex`:** one model (the newest listed by `codex debug models`) with the reasoning effort per tier, written
   `<name>@low` / `@medium` / `@high`; it becomes `--model <name> -c model_reasoning_effort=<effort>`. This also
   overrides a high default effort in your `~/.codex/config.toml`. When OpenAI renames it, update `profiles.codex.models`.
@@ -176,5 +178,6 @@ number in `models`.
 | A tool works in your terminal but the doctor says `not installed` | The harness looks on `PATH`. Open a new terminal after installing, or add the tool's folder to `PATH`. |
 | `--help does NOT list: …` | Your tool version has different flags. Fix that profile's `args` in `.harness/config.json`. |
 | `ENGINE_FALLBACK` in `.harness/telemetry.log` | A routed engine was not usable at run time. Run the doctor, log in again, then `auto-assign`. |
+| `MODEL_AUTO_FALLBACK` in `.harness/telemetry.log` or `doctor` warns `model ID(s) no longer offered by agy` | An `agy` model ID was renamed or retired. Runs continue automatically on the tier-matched replacement (`→ runtime auto-fallback:` shown by `doctor`); run `agy models` and update `profiles.antigravity.models` (and `quotaFallback`) in `.harness/config.json`, or run `node install.mjs <project>` to migrate discontinued template defaults while keeping custom choices. |
 | `--help does NOT list: --model` | You configured a model alias for a CLI whose version has no `--model` flag. Set its `models` back to `null`. |
 | A job keeps using a strong model | Look at the `MODEL_TIER` lines in the telemetry log for the reason. A retry escalates, and a member `"model"` or `--model` forces a tier. |

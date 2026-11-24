@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, which, helpIfAsked, REMOVED_ENGINES, personStatus, ME_SETUP_CMD, meFile, readPeople } from './lib/common.mjs';
+import { ROOT, FILES, DIRS, ensureDirs, loadConfig, resolveProfile, engineUsable, listLessons, probeEngine, profileFlags, engineConsent, usesCliDefault, winCommandLine, needsWinShell, findAllOnPath, checkCore, detectVerifyCmd, listProjectFiles, which, helpIfAsked, REMOVED_ENGINES, personStatus, ME_SETUP_CMD, meFile, readPeople, listAvailableModels, pickModelFromAvailable } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { SKILL_MATCH, SKILL_SCHEMA_MAX, unsupportedSkillPointers, readCharter, loadRoles, loadSkills, skillRulesNotGranted, skillToolsFor, readBacklog, backlogCounts, validateBacklog, listReleases, loadTeam, validateTeam, syncAgents, planScopeAdaptation } from './lib/governance.mjs';
 
@@ -91,16 +91,17 @@ if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.G
   const agProbe = ag ? probeEngine(ag) : null;
   if (ag && agProbe?.installed && engineConsent('antigravity') === true) {
     const wanted = new Set([...Object.values(ag.models || {}), ...Object.values(config.quotaFallback || {}).filter((f) => f?.engine === 'antigravity').flatMap((f) => Object.values(f.models || {}))].filter(Boolean));
-    const r = needsWinShell(agProbe.binPath)
-      ? spawnSync(winCommandLine(agProbe.binPath, ['models']), { encoding: 'utf8', timeout: 30000, shell: true })
-      : spawnSync(agProbe.binPath, ['models'], { encoding: 'utf8', timeout: 30000 });
-    const listed = new Set(String(r.stdout || '').split('\n').map((l) => l.trim().split(/\s+/)[0]).filter((x) => /^[a-z0-9][\w.-]+$/i.test(x || '')));
+    const live = listAvailableModels(ag, { force: true });
     console.log('\nAntigravity model names (config.json vs. "agy models")');
-    if (r.status !== 0 || !listed.size) warn(`could not list agy models (${(r.stderr || r.error?.message || 'no output').toString().trim().slice(0, 120)}); model names not checked`);
+    if (!live.models?.length) warn(`could not list agy models (${live.error || 'no output'}); model names not checked`);
     else {
+      const listed = new Set(live.models);
       const gone = [...wanted].filter((m) => !listed.has(m));
-      if (gone.length) warn(`model ID(s) no longer offered by agy: ${gone.join(', ')}. Runs on that tier would fail. Run  agy models  and update profiles.antigravity.models (and quotaFallback) in config.json.`);
-      else ok(`all ${wanted.size} configured model IDs exist in agy (${[...wanted].join(', ')})`);
+      if (gone.length) {
+        const tierFor = (id) => Object.entries(ag.models || {}).find(([, v]) => v === id)?.[0] || Object.values(config.quotaFallback || {}).filter((f) => f?.engine === 'antigravity').flatMap((f) => Object.entries(f.models || {})).find(([, v]) => v === id)?.[0] || 'medium';
+        const hints = gone.map((m) => { const alt = pickModelFromAvailable(live.models, { tier: tierFor(m), preferred: m }); return alt ? `${m} → runtime auto-fallback: ${alt.model}` : m; });
+        warn(`model ID(s) no longer offered by agy: ${hints.join('; ')}. Run  agy models  and update profiles.antigravity.models (and quotaFallback) in config.json.`);
+      } else ok(`all ${wanted.size} configured model IDs exist in agy (${[...wanted].join(', ')})`);
     }
   }
 }

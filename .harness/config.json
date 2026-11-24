@@ -126,11 +126,11 @@
         "Bash"
       ],
       "models": {
-        "fast": "gemini-3.8-flash-medium",
-        "medium": "gemini-4-argon-medium",
+        "fast": "gemini-4-carbon-low",
+        "medium": "gemini-4-carbon-medium",
         "high": "gemini-4-hydrogen-high"
       },
-      "modelsNote": "Exact model IDs from 'agy models' (agy 1.5.8, 2026-11-14); agy has no 'latest' aliases, so these are the one exception to the alias-only rule. fast (docs, QA, small edits) = Gemini 3.8 Flash; medium (normal coding) = Gemini 4 Argon; high (planning, architecture, retry after a failed check) = Gemini 4 Hydrogen. All three passed real runs on 2026-11-14. When Google renames a model, run 'agy models' and update these three.",
+      "modelsNote": "Exact model IDs from 'agy models' (agy 1.5.14, 2026-11-24); agy has no 'latest' aliases, so these are the one exception to the alias-only rule (with automatic live fallback against 'agy models' if a configured ID is retired). fast (docs, QA, small edits) = Gemini 4 Carbon (Low); medium (normal coding) = Gemini 4 Carbon (Medium); high (planning, architecture, retry after a failed check) = Gemini 4 Hydrogen (High). Real scratch runs on fast and medium passed (COMMITTED on Cycle 1) on 2026-11-24 with agy 1.5.14. When Google retires a model, the controller auto-selects an available replacement from 'agy models' and doctor warns so these three can be updated.",
       "modelArgs": [
         "--model",
         "{model}"
@@ -179,8 +179,8 @@
     "codex": {
       "engine": "antigravity",
       "models": {
-        "fast": "gemini-3.8-flash-medium",
-        "medium": "gemini-4-argon-medium",
+        "fast": "gemini-4-carbon-low",
+        "medium": "gemini-4-carbon-medium",
         "high": "gemini-4-hydrogen-high"
       }
     },

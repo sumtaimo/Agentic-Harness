@@ -21,7 +21,34 @@ process.env.HARNESS_ROOT = tmpRoot;
 delete process.env.HARNESS_AGENT;
 const nodeDir = path.dirname(process.execPath);
 
-const { probeEngine, profileFlags, resolveProfile } = await import('../.harness/lib/common.mjs');
+const {
+  probeEngine,
+  profileFlags,
+  resolveProfile,
+  supportsModelListing,
+  parseAvailableModels,
+  listAvailableModels,
+  pickModelFromAvailable,
+  isModelUnavailableError,
+  FILES
+} = await import('../.harness/lib/common.mjs');
+
+const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+function useNodeBin(name, scripts) {
+  const dir = fs.mkdtempSync(path.join(tmpRoot, `bin-node-${name}-`));
+  for (const [bin, code] of Object.entries(scripts)) {
+    const js = path.join(dir, `${bin}.impl.mjs`);
+    fs.writeFileSync(js, code);
+    const file = path.join(dir, bin);
+    if (process.platform === 'win32') {
+      fs.writeFileSync(`${file}.cmd`, `@echo off\r\n"${process.execPath}" "${js}" %*\r\n`);
+    } else {
+      fs.writeFileSync(file, `#!/bin/sh\nexec "${process.execPath}" "${js}" "$@"\n`);
+      fs.chmodSync(file, 0o755);
+    }
+  }
+  return { dir, env: { ...process.env, [pathKey]: `${dir}${path.delimiter}${nodeDir}` } };
+}
 
 /**
  * Create a bin dir holding fake executables and restrict PATH to it plus the node dir.
@@ -240,4 +267,286 @@ test('winQuote keeps an empty argument on Windows, collapses newlines for cmd.ex
   assert.deepEqual(['--approval-mode', 'yolo', '-p', ''].map(winQuote), ['--approval-mode', 'yolo', '-p', '""']);
   assert.equal(needsWinShell('C:\\Users\\x\\AppData\\Local\\agy\\bin\\agy.EXE'), false, 'native .exe must never use cmd.exe');
   assert.equal(needsWinShell('C:\\Users\\x\\AppData\\Roaming\\npm\\claude.CMD'), process.platform === 'win32');
+});
+
+test('supportsModelListing detects agy and explicit modelsCommand profiles only', () => {
+  assert.equal(supportsModelListing(profiles.antigravity), true);
+  assert.equal(supportsModelListing({ binary: 'C:\\tools\\agy.exe' }), true);
+  assert.equal(supportsModelListing({ binary: 'custom-cli', modelsCommand: ['list-models'] }), true);
+  assert.equal(supportsModelListing(profiles.claude), false);
+  assert.equal(supportsModelListing(profiles.codex), false);
+  assert.equal(supportsModelListing({ binary: 'other' }), false);
+  assert.equal(supportsModelListing(null), false);
+});
+
+test('parseAvailableModels extracts deduplicated model IDs and skips headers, usage lines, and flags', () => {
+  const sample = [
+    'Fetching available models...',
+    'Available models:',
+    '',
+    '  gemini-4-carbon-low       Gemini 4 Carbon (Low)',
+    '  gemini-4-carbon-medium    Gemini 4 Carbon (Medium)',
+    '  gemini-4-hydrogen-high    Gemini 4 Hydrogen (High)',
+    '  claude-sonnet-5-5-medium  Claude Sonnet 5.5',
+    '  gemini-3.8-flash-medium   Legacy Flash',
+    '  gemini-4-carbon-low       duplicate should be ignored',
+    '  -p, --prompt <text>       CLI flag',
+    '  Usage: agy models',
+    '  Error: transient notice',
+    '  Warning: deprecated notice',
+    '  Models                    single word header',
+    '  sonnet                    single word alias'
+  ].join('\n');
+  assert.deepEqual(parseAvailableModels(sample), [
+    'gemini-4-carbon-low',
+    'gemini-4-carbon-medium',
+    'gemini-4-hydrogen-high',
+    'claude-sonnet-5-5-medium',
+    'gemini-3.8-flash-medium'
+  ]);
+  assert.deepEqual(parseAvailableModels('Usage: agy [options]\n  -p, --prompt <text>  Run headless\n  --model  Model\n'), []);
+  assert.deepEqual(parseAvailableModels(''), []);
+  assert.deepEqual(parseAvailableModels(null), []);
+});
+
+test('pickModelFromAvailable keeps available preferred models, picks best tier/family fallback, and respects exclude', () => {
+  const listed = [
+    'gemini-4-orchestrator-medium',
+    'gemini-3.8-flash-medium',
+    'gemini-4-carbon-low',
+    'gemini-4-carbon-medium',
+    'gemini-4-hydrogen-high',
+    'claude-sonnet-5-5-medium',
+    'claude-opus-5-5-high'
+  ];
+
+  assert.deepEqual(pickModelFromAvailable(listed, { tier: 'fast', preferred: 'gemini-4-carbon-low' }), {
+    model: 'gemini-4-carbon-low',
+    autoPicked: false,
+    reason: null
+  });
+  assert.equal(pickModelFromAvailable([], { tier: 'medium', preferred: 'gemini-4-argon-medium' }), null);
+  assert.equal(pickModelFromAvailable(['a-model'], { tier: 'medium', exclude: ['a-model'] }), null);
+
+  const fastPick = pickModelFromAvailable(listed, { tier: 'fast', preferred: 'gemini-3.8-flash-low' });
+  assert.equal(fastPick.model, 'gemini-4-carbon-low');
+  assert.equal(fastPick.autoPicked, true);
+  assert.match(fastPick.reason, /gemini-3\.8-flash-low.*gemini-4-carbon-low.*\[fast\]/);
+
+  const medPick = pickModelFromAvailable(listed, { tier: 'medium', preferred: 'gemini-4-argon-medium' });
+  assert.equal(medPick.model, 'gemini-4-carbon-medium');
+  assert.equal(medPick.autoPicked, true);
+
+  const highPick = pickModelFromAvailable(listed, { tier: 'high', preferred: 'gemini-4-argon-high' });
+  assert.equal(highPick.model, 'gemini-4-hydrogen-high');
+  assert.equal(highPick.autoPicked, true);
+
+  const claudeHigh = pickModelFromAvailable(listed, { tier: 'high', preferred: 'claude-opus-4-5-high' });
+  assert.equal(claudeHigh.model, 'claude-opus-5-5-high');
+  assert.equal(claudeHigh.autoPicked, true);
+
+  const claudeMed = pickModelFromAvailable(listed, { tier: 'medium', preferred: 'claude-sonnet-4-5-medium' });
+  assert.equal(claudeMed.model, 'claude-sonnet-5-5-medium');
+  assert.equal(claudeMed.autoPicked, true);
+
+  const excludedPick = pickModelFromAvailable(listed, {
+    tier: 'medium',
+    preferred: 'gemini-4-carbon-medium',
+    exclude: ['gemini-4-carbon-medium']
+  });
+  assert.notEqual(excludedPick.model, 'gemini-4-carbon-medium');
+  assert.equal(excludedPick.autoPicked, true);
+});
+
+test('listAvailableModels uses fake agy binary, honors 6h cache and force refresh, and returns null gracefully when binary prints help or fails', () => {
+  assert.deepEqual(listAvailableModels(profiles.claude), { supported: false, models: null });
+
+  const emptyEnv = { ...process.env, [pathKey]: nodeDir };
+  const missing = listAvailableModels(profiles.antigravity, { env: emptyEnv });
+  assert.equal(missing.supported, true);
+  assert.equal(missing.models, null);
+  assert.equal(missing.error, 'not installed');
+
+  const cfgFile = path.join(tmpRoot, 'agy-live-state.json');
+  const countFile = path.join(tmpRoot, 'agy-live-count.txt');
+  fs.writeFileSync(cfgFile, JSON.stringify({
+    mode: 'list',
+    models: ['gemini-4-carbon-low', 'gemini-4-carbon-medium', 'gemini-4-hydrogen-high']
+  }));
+  fs.writeFileSync(countFile, '0');
+
+  const fake = useNodeBin('agy-live', {
+    agy: `
+import fs from 'node:fs';
+const st = JSON.parse(fs.readFileSync(${JSON.stringify(cfgFile)}, 'utf8'));
+const c = Number(fs.readFileSync(${JSON.stringify(countFile)}, 'utf8') || '0') + 1;
+fs.writeFileSync(${JSON.stringify(countFile)}, String(c));
+if (st.mode === 'help') {
+  console.log('Usage: agy [options]\\n  -p, --prompt <text>  Run one prompt headless and exit\\n  --model              Model');
+  process.exit(0);
+}
+if (st.mode === 'fail') {
+  console.error('models subcommand failed');
+  process.exit(1);
+}
+if (process.argv[2] !== 'models') process.exit(2);
+console.log('Available models:\\n' + st.models.map((m) => '  ' + m + '  Desc').join('\\n'));
+`
+  });
+
+  const first = listAvailableModels(profiles.antigravity, { env: fake.env });
+  assert.equal(first.supported, true);
+  assert.equal(first.cached, false);
+  assert.deepEqual(first.models, ['gemini-4-carbon-low', 'gemini-4-carbon-medium', 'gemini-4-hydrogen-high']);
+  assert.equal(fs.readFileSync(countFile, 'utf8'), '1');
+
+  // Within the 6h cache window, updated binary output is not re-queried.
+  fs.writeFileSync(cfgFile, JSON.stringify({
+    mode: 'list',
+    models: ['gemini-4-carbon-low', 'gemini-4-carbon-medium', 'gemini-5-nova-high']
+  }));
+  const second = listAvailableModels(profiles.antigravity, { env: fake.env });
+  assert.equal(second.cached, true);
+  assert.deepEqual(second.models, ['gemini-4-carbon-low', 'gemini-4-carbon-medium', 'gemini-4-hydrogen-high']);
+  assert.equal(fs.readFileSync(countFile, 'utf8'), '1');
+
+  // After 6h expires, the cache refreshes automatically.
+  const probeCache = JSON.parse(fs.readFileSync(FILES.probe, 'utf8'));
+  const modelKey = Object.keys(probeCache).find((k) => k.startsWith('models|v1|') && k.includes(fake.dir));
+  assert.ok(modelKey, 'model list cache entry should exist in FILES.probe');
+  probeCache[modelKey].checkedAt = Date.now() - (6 * 3600 * 1000 + 5000);
+  fs.writeFileSync(FILES.probe, JSON.stringify(probeCache, null, 2));
+
+  const expired = listAvailableModels(profiles.antigravity, { env: fake.env });
+  assert.equal(expired.cached, false);
+  assert.deepEqual(expired.models, ['gemini-4-carbon-low', 'gemini-4-carbon-medium', 'gemini-5-nova-high']);
+  assert.equal(fs.readFileSync(countFile, 'utf8'), '2');
+
+  // force: true bypasses a still-fresh 6h cache.
+  fs.writeFileSync(cfgFile, JSON.stringify({
+    mode: 'list',
+    models: ['gemini-5-nova-low', 'gemini-5-nova-high']
+  }));
+  assert.equal(listAvailableModels(profiles.antigravity, { env: fake.env }).cached, true);
+  const forced = listAvailableModels(profiles.antigravity, { force: true, env: fake.env });
+  assert.equal(forced.cached, false);
+  assert.deepEqual(forced.models, ['gemini-5-nova-low', 'gemini-5-nova-high']);
+  assert.equal(fs.readFileSync(countFile, 'utf8'), '3');
+
+  // Graceful null when binary prints help instead of model IDs (and force clears stale cache).
+  fs.writeFileSync(cfgFile, JSON.stringify({ mode: 'help' }));
+  const helpOut = listAvailableModels(profiles.antigravity, { force: true, env: fake.env });
+  assert.equal(helpOut.supported, true);
+  assert.equal(helpOut.models, null);
+  assert.equal(helpOut.error, 'empty model list');
+
+  // Graceful null when binary exits non-zero.
+  fs.writeFileSync(cfgFile, JSON.stringify({ mode: 'fail' }));
+  const failOut = listAvailableModels(profiles.antigravity, { force: true, env: fake.env });
+  assert.equal(failOut.supported, true);
+  assert.equal(failOut.models, null);
+  assert.match(failOut.error, /models subcommand failed/);
+});
+
+test('isModelUnavailableError matches retired/unknown model errors and ignores quota/auth/generic errors', () => {
+  for (const msg of [
+    'Error: unknown model gemini-4-argon-medium',
+    "Invalid model: 'gemini-3.8-flash-medium'",
+    'Model "gemini-4-argon-medium" not found',
+    'Model gemini-4-argon-medium is no longer available',
+    'Model gemini-3.8-flash-medium has been retired',
+    'Cannot find model gemini-4-argon-low',
+    'Does not support model gemini-3.8-flash-medium',
+    'Unsupported model specified'
+  ]) {
+    assert.equal(isModelUnavailableError(msg), true, `expected unavailable error match: ${msg}`);
+  }
+  for (const msg of [
+    '',
+    null,
+    undefined,
+    "You've hit your 5-hour limit",
+    'ERROR: You exceeded your current quota (RESOURCE_EXHAUSTED)',
+    'Error: not logged in. Please log in.',
+    'Model gemini-4-argon-medium is available',
+    'TypeError: Cannot read properties of undefined'
+  ]) {
+    assert.equal(isModelUnavailableError(msg), false, `must not match non-model error: ${msg}`);
+  }
+});
+
+test('install.mjs upgradeConfig migrates retired Antigravity defaults in profiles.antigravity.models and quotaFallback.codex.models while keeping custom owner models', () => {
+  const proj = fs.mkdtempSync(path.join(tmpRoot, 'inst-agy-migrate-'));
+  fs.mkdirSync(path.join(proj, '.harness'), { recursive: true });
+  const existing = {
+    maxCycles: 9,
+    activeProfile: 'auto',
+    autoOrder: ['antigravity', 'claude', 'codex'],
+    profiles: {
+      claude: realConfig.profiles.claude,
+      codex: realConfig.profiles.codex,
+      antigravity: {
+        ...realConfig.profiles.antigravity,
+        models: {
+          fast: 'gemini-3.8-flash-medium',
+          medium: 'gemini-4-argon-medium',
+          high: 'owner-custom-high'
+        }
+      }
+    },
+    quotaFallback: {
+      claude: realConfig.quotaFallback.claude,
+      codex: {
+        engine: 'antigravity',
+        models: {
+          fast: 'gemini-3.8-flash-low',
+          medium: 'gemini-4-argon-medium',
+          high: 'owner-fallback-high'
+        }
+      },
+      antigravity: realConfig.quotaFallback.antigravity
+    }
+  };
+  fs.writeFileSync(path.join(proj, '.harness', 'config.json'), JSON.stringify(existing, null, 2));
+
+  const installer = path.join(here, '..', 'install.mjs');
+  const r = spawnSync(process.execPath, [installer, proj, '--no-skills', '--no-auto-assign'], {
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_OFFLINE: '1' }
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /update \.harness[\\/]config\.json/);
+
+  const upgraded = JSON.parse(fs.readFileSync(path.join(proj, '.harness', 'config.json'), 'utf8'));
+  assert.equal(upgraded.maxCycles, 9);
+  assert.equal(upgraded.profiles.antigravity.models.fast, realConfig.profiles.antigravity.models.fast);
+  assert.equal(upgraded.profiles.antigravity.models.medium, realConfig.profiles.antigravity.models.medium);
+  assert.equal(upgraded.profiles.antigravity.models.high, 'owner-custom-high', 'custom owner model must stay');
+  assert.equal(upgraded.quotaFallback.codex.models.fast, realConfig.quotaFallback.codex.models.fast);
+  assert.equal(upgraded.quotaFallback.codex.models.medium, realConfig.quotaFallback.codex.models.medium);
+  assert.equal(upgraded.quotaFallback.codex.models.high, 'owner-fallback-high', 'custom owner quotaFallback model must stay');
+
+  // Second install must preserve everything cleanly without touching custom models.
+  const again = spawnSync(process.execPath, [installer, proj, '--no-skills', '--no-auto-assign'], {
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_OFFLINE: '1' }
+  });
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /kept\s+\.harness[\\/]config\.json/);
+
+  // Fully custom Antigravity models (non-retired IDs) are never overwritten.
+  const customProj = fs.mkdtempSync(path.join(tmpRoot, 'inst-agy-custom-'));
+  fs.mkdirSync(path.join(customProj, '.harness'), { recursive: true });
+  const customCfg = JSON.parse(JSON.stringify(realConfig));
+  customCfg.profiles.antigravity.models = { fast: 'my-fast', medium: 'my-medium', high: 'my-high' };
+  customCfg.quotaFallback.codex.models = { fast: 'fb-fast', medium: 'fb-medium', high: 'fb-high' };
+  fs.writeFileSync(path.join(customProj, '.harness', 'config.json'), JSON.stringify(customCfg, null, 2));
+  const rc = spawnSync(process.execPath, [installer, customProj, '--no-skills', '--no-auto-assign'], {
+    encoding: 'utf8',
+    env: { ...process.env, HARNESS_OFFLINE: '1' }
+  });
+  assert.equal(rc.status, 0, rc.stderr);
+  const kept = JSON.parse(fs.readFileSync(path.join(customProj, '.harness', 'config.json'), 'utf8'));
+  assert.deepEqual(kept.profiles.antigravity.models, { fast: 'my-fast', medium: 'my-medium', high: 'my-high' });
+  assert.deepEqual(kept.quotaFallback.codex.models, { fast: 'fb-fast', medium: 'fb-medium', high: 'fb-high' });
 });

@@ -5,7 +5,7 @@ Keep this file current: whoever finishes a piece of work updates it and the hand
 (`docs/notes/handoff-2026-11-23-step2.md`) in the same commit.
 
 ```text
-You are continuing work in the Agentic Harness TEMPLATE repository (sumtaimo/Agentic-Harness). Earlier sessions finished Steps 1 and 2 and pushed them to branch `lab`.
+You are continuing work in the Agentic Harness TEMPLATE repository (sumtaimo/Agentic-Harness). Earlier sessions finished Steps 1, 2, and the Antigravity model update + automatic model fallback on branch `lab`.
 
 Start by reading, in this order:
 1. AGENTS.md
@@ -23,9 +23,9 @@ Rules:
 - Do not edit .harness/releases/ or anything under node_modules.
 
 Your tasks, in order:
-1. Run `git checkout lab && git pull --ff-only`, then `git log --oneline -5`. Confirm the commits "Add product foundation forms...", "Add Done vs Good review rubric..." and "Update handoff note..." are there. If not, tell me and stop.
-2. Run `npm test`, `npm run audit` and `npm run audit -- --site`. If the website build fails once, run `cd website && npm ci` and retry. Fix only real failures, and report the exact results.
-3. Go through "Remaining tasks" in the handoff note one by one. For each, tell me what it needs from me, then wait for my answer. Do the ones that only need code or docs on `lab`. Never do the ones that need my decision (skill-library risk check, Skill Foundry, charter edit, release) without my yes.
+1. Run `git checkout lab && git pull --ff-only`, then `git log --oneline -5`. Confirm the latest Step 2/Step 3 commits are present.
+2. Run `npm test`, `npm run audit` and `npm run audit -- --site` if code changed since the last check (if the website build fails once, run `cd website && npm ci` and retry).
+3. Go through the open "Remaining tasks" (items 2–7) in `docs/notes/handoff-2026-11-23-step2.md` one by one. Tell me what needs my decision (skill-library risk check, Skill Foundry, `.harness/charter.md` UX_DESIGNER scope, slash command refresh policy, `visual confirm` hardening, release) and wait for my yes before changing protected settings or releasing.
 4. After each finished change: run the tests and the audit, commit on `lab` with specific `git add` paths, and ask me before pushing.
 5. At the end, update the handoff note and this file so they match the real state, and report: what changed, exact test results, and what is still open.
 

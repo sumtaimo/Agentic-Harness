@@ -526,6 +526,131 @@ function nearestModel(profile, tier, source) {
   return { tier, model: null, source };
 }
 
+/** True when this CLI profile exposes a live model list command (Antigravity `agy models`, or an explicit `modelsCommand`). */
+export function supportsModelListing(profile) {
+  if (!profile) return false;
+  if (Array.isArray(profile.modelsCommand) && profile.modelsCommand.length) return true;
+  const base = path.basename(String(profile.binary || '')).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+  return base === 'agy';
+}
+
+/** Parse valid model IDs from `agy models` stdout while ignoring status headers, usage lines, and flags. */
+export function parseAvailableModels(stdout) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of String(stdout || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || /^(?:usage|fetching|available|error|warning)\b/i.test(line)) continue;
+    const tok = line.split(/\s+/)[0];
+    if (!/^[a-z][a-z0-9.]*(?:-[a-z0-9.]+)+$/i.test(tok)) continue;
+    if (!seen.has(tok)) { seen.add(tok); out.push(tok); }
+  }
+  return out;
+}
+
+const MODEL_LIST_TTL_MS = 6 * 3600 * 1000;
+
+/**
+ * Query and cache the live list of available model IDs for engines that expose one (e.g. `agy models`).
+ * Returns `{ supported, models: string[] | null, cached?: boolean, error?: string }`.
+ * Never throws or blocks normal runs: returns `models: null` when unsupported, offline, or unparseable.
+ */
+export function listAvailableModels(profile, { ttlMs = MODEL_LIST_TTL_MS, force = false, env = process.env } = {}) {
+  if (!supportsModelListing(profile)) return { supported: false, models: null };
+  const binPath = engineBinary(profile, env);
+  if (!binPath) return { supported: true, models: null, error: 'not installed' };
+  let mtime = 0;
+  try { mtime = fs.statSync(binPath).mtimeMs; } catch { /* ignore */ }
+  const args = Array.isArray(profile.modelsCommand) && profile.modelsCommand.length ? profile.modelsCommand : ['models'];
+  const key = `models|v1|${binPath}|${mtime}|${args.join(' ')}`;
+  const cache = readJsonSafe(FILES.probe, {});
+  const cached = cache[key];
+  if (!force && cached && Array.isArray(cached.models) && cached.models.length && (Date.now() - (cached.checkedAt || 0)) < ttlMs) {
+    return { supported: true, models: cached.models, cached: true };
+  }
+  const r = needsWinShell(binPath)
+    ? spawnSync(winCommandLine(binPath, args), { encoding: 'utf8', timeout: 30000, shell: true, env: { ...env, NO_COLOR: '1' } })
+    : spawnSync(binPath, args, { encoding: 'utf8', timeout: 30000, env: { ...env, NO_COLOR: '1' } });
+  const models = r.status === 0 ? parseAvailableModels(r.stdout) : [];
+  if (r.status !== 0 || !models.length) {
+    if (force && cache[key]) { delete cache[key]; try { atomicWriteJson(FILES.probe, cache); } catch { /* ignore */ } }
+    const err = (r.stderr || r.error?.message || (r.status === 0 ? 'empty model list' : `exit ${r.status}`)).toString().trim().slice(0, 160);
+    return { supported: true, models: null, error: err };
+  }
+  try { cache[key] = { models, checkedAt: Date.now() }; atomicWriteJson(FILES.probe, cache); } catch { /* read-only is fine */ }
+  return { supported: true, models, cached: false };
+}
+
+/**
+ * Pick the best available model ID for `tier` when `preferred` is absent from `listed` (e.g. after a model retirement).
+ * Pure: prefers matching family (or native non-orchestrator Gemini models), newer generation numbers, and tier-appropriate effort.
+ */
+export function pickModelFromAvailable(listed, { tier = 'medium', preferred = null, exclude = [] } = {}) {
+  const skip = new Set((exclude || []).filter(Boolean));
+  const avail = (Array.isArray(listed) ? listed : []).filter((m) => m && !skip.has(m));
+  if (!avail.length) return null;
+  if (preferred && avail.includes(preferred)) return { model: preferred, autoPicked: false, reason: null };
+
+  const normTier = MODEL_TIERS.includes(String(tier || '').toLowerCase()) ? String(tier).toLowerCase() : 'medium';
+  const pref = String(preferred || '').toLowerCase();
+  const wantClaude = pref.startsWith('claude-');
+  const wantGpt = pref.startsWith('gpt-');
+  const prefSub = wantClaude ? (pref.split('-')[1] || '') : '';
+  const effortOrder = normTier === 'fast'
+    ? ['low', 'medium', 'high', 'xhigh']
+    : normTier === 'high'
+      ? ['high', 'xhigh', 'medium', 'low']
+      : ['medium', 'low', 'high', 'xhigh'];
+
+  const score = (id, idx) => {
+    const s = id.toLowerCase();
+    const isOrch = /\borchestrator\b/.test(s);
+    const isGemini = s.startsWith('gemini-');
+    const isClaude = s.startsWith('claude-');
+    const isGpt = s.startsWith('gpt-');
+    let fam = 0;
+    if (wantClaude) fam = isClaude ? (prefSub && s.includes(`-${prefSub}-`) ? 320 : 280) : isGemini && !isOrch ? 150 : isOrch ? 10 : 80;
+    else if (wantGpt) fam = isGpt ? 300 : isGemini && !isOrch ? 150 : isOrch ? 10 : 80;
+    else fam = isGemini && !isOrch ? 300 : isOrch ? 10 : 120;
+
+    // Extract generation number (e.g. 4, 3.8, 5.5) so newer families outrank older ones.
+    const verMatch = s.match(/^[a-z]+(?:-[a-z]+)?-(\d+)(?:[.-](\d+))?(?:-|$)/);
+    const ver = verMatch ? Number(verMatch[1]) * 100 + Number(verMatch[2] || 0) : 0;
+
+    const effMatch = s.match(/-(xhigh|high|medium|low)$/);
+    const effIdx = effMatch ? effortOrder.indexOf(effMatch[1]) : -1;
+    const effScore = effIdx >= 0 ? (4 - effIdx) * 20 : 0;
+    const flashBoost = normTier === 'fast' ? (s.includes('flash') ? 30 : 0) : (s.includes('flash') ? -10 : 10);
+
+    return [fam, ver, flashBoost + effScore, -idx];
+  };
+
+  let best = avail[0];
+  let bestScore = score(best, 0);
+  for (let i = 1; i < avail.length; i++) {
+    const sc = score(avail[i], i);
+    for (let k = 0; k < sc.length; k++) {
+      if (sc[k] !== bestScore[k]) {
+        if (sc[k] > bestScore[k]) { best = avail[i]; bestScore = sc; }
+        break;
+      }
+    }
+  }
+  return {
+    model: best,
+    autoPicked: true,
+    reason: preferred
+      ? `configured model "${preferred}" is not available; auto-selected "${best}" for [${normTier}]`
+      : `auto-selected "${best}" for [${normTier}]`
+  };
+}
+
+/** True when CLI stderr/stdout indicates the configured `--model` ID was retired, removed, or unknown. */
+export function isModelUnavailableError(text) {
+  const s = String(text || '');
+  return /(?:unknown|invalid|unsupported|deprecated|retired|unavailable)\s+model|\bmodel\s+['"`]?[a-z0-9._-]+['"`]?\s+(?:not\s+found|is\s+not\s+(?:available|supported)|(?:is\s+)?no\s+longer\s+(?:available|offered|supported)|is\s+(?:invalid|unknown|unavailable|deprecated|retired)|has\s+been\s+(?:deprecated|retired|removed))|(?:does\s+not\s+support|cannot\s+find|no\s+such)\s+model/i.test(s);
+}
+
 /** True when the engine has no model name for any tier, so every call runs on the CLI's own default. */
 export const usesCliDefault = (profile) => !MODEL_TIERS.some((t) => profile?.models?.[t]);
 
