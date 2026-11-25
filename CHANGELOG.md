@@ -10,6 +10,28 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.48 — 2026-11-25
+
+- **Dynamic UX slot 2 & Skill-Foundry keyword coordination:** `.harness/team.json` (`lead-ux`) now pins only
+  `["brand-craft"]` (1/2 of `SKILL_LIMIT_PER_WORKER = 2`) instead of `["ui-craft", "brand-craft"]`, freeing slot 2 to
+  load `ui-craft` on CSS tasks or dynamically pick installed/fetched Skill-Foundry UX skills (`design-system`,
+  `ux-review`, `component-kit`, `browser-check`, `motion-craft`, `svg-mechanism`).
+- **Focused `brand-craft` keywords & token-script handoff:** `.harness/skills/brand-craft/SKILL.md` removes
+  overlapping keywords (`"design system"`, `"user flow"`, `"microcopy"`) and clarifies in rule 7 that creating or
+  updating `design/` token files via a `design-system` engine script goes to `DEV_ENGINEER`, while `UX_DESIGNER` keeps
+  no `node` access and consumes tokens in CSS and `docs/ux/` specs.
+- **Subsumed-keyword protection in `matchSkills()`:** `.harness/lib/governance.mjs` (used by runtime skill injection
+  and `skill-fetch.mjs`) stops double-counting generic single-word hits whose every match falls strictly inside a longer
+  phrase matched by another candidate skill (for example, `ui-craft`'s `"design"` inside `design-system`'s `"design
+  system"`), while leaving `ui-craft/SKILL.md` untouched to preserve Skill-Foundry's `STARTER_SHA` compatibility.
+- **Seamless `1.0.47` -> `1.0.48` upgrades & rule `L3`:** `install.mjs` updates untouched `1.0.47` `team.json` and
+  `brand-craft/SKILL.md` (unpinning `ui-craft` from slot 2 while keeping customized teams/skills intact), and
+  `.harness/memory/lessons.md` records `L3` on cross-repo ownership between Agentic-Harness and Skill-Foundry.
+- *Affects:* UX/design leads (`lead-ux`), on-demand Skill-Foundry users, and existing `1.0.47` projects upgrading.
+  *Permission change:* none.
+  *Config / Migration:* re-run `npx github:sumtaimo/Agentic-Harness#release .` to receive the updated core, `brand-craft`
+  rules, and `lead-ux` 1/2 skill slot (customized `team.json` or edited `brand-craft/SKILL.md` files are preserved).
+
 ## 1.0.47 — 2026-11-25
 
 - **Product foundation & skippable role-aware intake:** `install.mjs` now writes blank, lightweight forms in

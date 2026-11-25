@@ -5,7 +5,7 @@ Keep this file current: whoever finishes a piece of work updates it and the hand
 (`docs/notes/handoff-2026-11-23-step2.md`) in the same commit.
 
 ```text
-You are working in the Agentic Harness TEMPLATE repository (sumtaimo/Agentic-Harness). `v1.0.47` is released (`lab` synced to `release`), including product foundation & intake, Done vs Good + UX `docs/ux/` + visual gate, Antigravity model fallback (`0520001`), old-project design & command upgrades (`install.mjs`), and hardened `visual confirm`.
+You are working in the Agentic Harness TEMPLATE repository (sumtaimo/Agentic-Harness). `v1.0.48` is released (`lab` synced to `release`), adding UX slot-2 Skill-Foundry coordination (`lead-ux` pins `brand-craft` only, subsumed-keyword protection in `matchSkills()`, focused `brand-craft` keywords/token-handoff, and `1.0.47 -> 1.0.48` installer upgrades) on top of `v1.0.47` (product foundation & intake, Done vs Good + UX `docs/ux/` + visual gate, Antigravity model fallback, hardened `visual confirm`).
 
 Start by reading, in this order:
 1. AGENTS.md
@@ -25,7 +25,7 @@ Rules:
 Your tasks, in order:
 1. Run `git checkout lab && git pull --ff-only`, then `git log --oneline -5`. Confirm the latest Step 2/Step 3 commits are present.
 2. Run `npm test`, `npm run audit` and `npm run audit -- --site` if code changed since the last check (if the website build fails once, run `cd website && npm ci` and retry).
-3. Check `docs/notes/handoff-2026-11-23-step2.md` for current release history (all `1.0.47` release items 1–7 are done; ask the user what next feature/maintenance goal to work on).
+3. Check `docs/notes/handoff-2026-11-23-step2.md` for current release history (`1.0.48` released; ask the user what next feature/maintenance goal to work on).
 4. After each finished change: run the tests and the audit, commit on `lab` with specific `git add` paths, and ask me before pushing.
 5. At the end, update the handoff note and this file so they match the real state, and report: what changed, exact test results, and what is still open.
 
