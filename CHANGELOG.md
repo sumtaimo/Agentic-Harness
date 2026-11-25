@@ -10,6 +10,36 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.47 — 2026-11-25
+
+- **Product foundation & skippable role-aware intake:** `install.mjs` now writes blank, lightweight forms in
+  `docs/foundation/{product.md, domain.md, brand.md}` (including a `"Never do this (Anti-patterns)"` section in
+  `brand.md`) without ever overwriting filled files. `/harness:run`, `/harness:feature`, `visible.mjs brief`, and
+  `AGENTS.md` pass them *by reference* per role (never imported whole into `CLAUDE.md`) and run a skippable ≤3-question
+  intake only on feature/UI work with blank fields (auto-skipped on bug fixes, typos, and chores).
+- **"Done ≠ Good" reviewer rubric & visual review gate:** `REVIEWER` now scores `intentFit`, `states`, and `craft`
+  (cannot be `"n/a"` on UI changes), must include `doneVsGood` (`{ intent, weak }`), reads `docs/foundation/*` by
+  reference, and reads attached screenshots on UI work; older-format reviewer verdicts are refused while `security` keeps
+  its smaller format. Changed UI in editor runs is held at **NEEDS A VISUAL REVIEW** until screenshot evidence is
+  attached (`node .harness/visible.mjs visual attach`) or a human confirms (`node .harness/visible.mjs visual confirm`),
+  hardened so editors without `ask` rules (Antigravity, Cursor, Codex, non-TTY shells) require an interactive `[y/N]`
+  terminal confirmation. Headless runs flag UI changes on `uat` (`VISUAL_REVIEW_PENDING`, `needsVisualReview`).
+<!-- docs-drift:ignore -->
+- **UX flow specs & `brand-craft`:** added the scoped `brand-craft` skill (anti-"Zombie UI" & token rules), widened
+  `UX_DESIGNER` / `lead-ux` (roles, `team.json`, `charter.md`, `feature.mjs`) to author UX flows, copy, and wireframes
+  under `docs/ux/`, routed `brand.md` + `product.md` to `lead-ux`, and added a **Flow & State Table** to `spec-writer`.
+- **Upgrades for existing projects & Antigravity auto-fallback:** `install.mjs` now refreshes untouched prior template
+  slash commands, `.claude/agents/*.md`, starter-stub `spec-writer`, roles (`UX_DESIGNER`, `REVIEWER`), and template
+  `team.json` (adding `docs/ux/**/*.md` + `brand-craft`, or `lead-ux` for pre-1.0.7 3-lead teams) while preserving every
+  custom file, engine routing, and adapted path. Also refreshed Antigravity template defaults off retiring models and
+  added cached CLI model discovery + automatic pre-flight and reactive `MODEL_AUTO_FALLBACK` retries in `daemon.mjs`
+  (`upgradeConfig()` migrates discontinued template defaults while keeping custom model choices).
+- *Affects:* all users (editor workflows, headless UI tasks, Antigravity setups, and existing projects upgrading).
+  *Permission change:* `.claude/settings.json` adds 2 allow rules (`visible.mjs visual attach:*`, `visual reject:*`)
+  and 1 ask rule (`visible.mjs visual confirm:*`), merged into existing projects.
+  *Config / Migration:* re-run `npx github:sumtaimo/Agentic-Harness#release .` in existing projects; in-flight runs using
+  old-format `reviewer` verdicts must re-run `reviewer` with the new rubric.
+
 ## 1.0.46 — 2026-11-22
 
 - **Claude Code no longer asks permission for every `/harness:feature` and `/harness:hunt` command.** `.claude/settings.json`
