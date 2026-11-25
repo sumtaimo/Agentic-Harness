@@ -7383,6 +7383,37 @@ await test('old projects upgrading get full design support while keeping custom 
     return pAns;
   };
   assert(await ttyAsk('y\n') === true && await ttyAsk('yes\n') === true && await ttyAsk('n\n') === false && await ttyAsk(null) === false, 'interactive TTY prompt y/n check');
+
+  // 5. Skill-Foundry UX slot & keyword coordination (1/2 slot pinned on lead-ux, zero keyword collision, 1.0.47 -> latest migration)
+  const teamNow = json(path.join(REPO, '.harness', 'team.json'));
+  const uxLeadNow = teamNow.members.find((m) => m.id === 'lead-ux');
+  assert(JSON.stringify(uxLeadNow.skills) === JSON.stringify(['brand-craft']), `lead-ux should pin 1/2 skills so slot 2 stays open: ${JSON.stringify(uxLeadNow.skills)}`);
+  const bcNow = gov.loadSkills()['brand-craft'];
+  for (const droppedKw of ['design system', 'user flow', 'microcopy']) assert(!bcNow.keywords.includes(droppedKw), `brand-craft still holds overlapping keyword "${droppedKw}"`);
+  assert(/DEV_ENGINEER/.test(bcNow.body) && /no `node` access/.test(bcNow.body), 'brand-craft rule 7 must document DEV_ENGINEER token script handoff');
+  const fakeDesignSys = { name: 'design-system', description: 'ds', roles: ['BA_ANALYST', 'DEV_ENGINEER', 'UX_DESIGNER'], allowedTools: ['Read', 'Edit', 'Write'], keywords: ['design system', 'design token'], autoApply: false, body: 'ds' };
+  const allWithDs = { ...gov.loadSkills(), 'design-system': fakeDesignSys };
+  const dsPick = gov.matchSkills({ skills: uxLeadNow.skills, prompt: 'Build the design system tokens for light and dark theme' }, 'UX_DESIGNER', allWithDs);
+  assert(dsPick.chosen.map((s) => s.name).join(',') === 'brand-craft,design-system', `slot 2 should dynamically pick design-system: ${dsPick.chosen.map((s) => s.name)}`);
+  const cssPick = gov.matchSkills({ skills: uxLeadNow.skills, prompt: 'Style the checkout card CSS' }, 'UX_DESIGNER', allWithDs);
+  assert(cssPick.chosen.map((s) => s.name).join(',') === 'brand-craft,ui-craft', `slot 2 should still pick ui-craft for CSS tasks: ${cssPick.chosen.map((s) => s.name)}`);
+  const designStandalonePick = gov.matchSkills({ skills: uxLeadNow.skills, prompt: 'Design a clean dark UI layout' }, 'UX_DESIGNER', allWithDs);
+  assert(designStandalonePick.chosen.map((s) => s.name).join(',') === 'brand-craft,ui-craft', `standalone design task without design-system should pick ui-craft: ${designStandalonePick.chosen.map((s) => s.name)}`);
+  const kwNoOverlap = gov.matchSkills({ skills: [], prompt: 'Design system user flow microcopy audit' }, 'UX_DESIGNER', allWithDs);
+  assert(!kwNoOverlap.chosen.some((s) => s.name === 'brand-craft'), `brand-craft must not steal design-system/user-flow/microcopy keywords: ${kwNoOverlap.chosen.map((s) => s.name)}`);
+
+  // Upgrading a routed 1.0.47 project unpins ui-craft from slot 2 and refreshes untouched brand-craft
+  const p47 = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-1047-up-'));
+  fs.mkdirSync(path.join(p47, '.harness', 'skills', 'brand-craft'), { recursive: true });
+  fs.writeFileSync(path.join(p47, '.harness', 'skills', 'brand-craft', 'SKILL.md'), '---\nname: brand-craft\ndescription: Keeps UI and UX work on-brand and un-generic. Reads docs/foundation/brand.md, avoids its anti-patterns, and warns against "Zombie UI" (default library look, filler copy, missing states).\nroles: ["UX_DESIGNER"]\nallowedTools: ["Read", "Edit", "Write", "Bash(git status)"]\nkeywords: ["brand", "wireframe", "microcopy", "user flow", "anti-pattern", "visual identity", "tone of voice", "design system"]\nautoApply: false\n---\n# Brand Craft Rules\n1. Read first, by reference: `docs/foundation/brand.md` (point of view, tone, visual direction, "Never do this (Anti-patterns)") and `docs/foundation/product.md` (who it is for and why). A line that still says `(fill me)` is unknown: never invent a brand or a user. Follow the project\'s existing tokens and say in your report which brand fields were blank.\n2. Before you work, state in one line the brand point of view you follow and which anti-patterns apply to this task. After you finish, check your work against every anti-pattern and say so in your report.\n3. No Zombie UI. Refuse these unless the brand says otherwise: a default component-library look with no choices made; filler copy ("Lorem ipsum", "Welcome to our platform", a bare "Submit", "Something went wrong"); the same centered hero or card grid for every screen; decoration that has no job.\n4. Real copy: words that the target user would actually meet. Buttons say a verb and its object, errors say what happened and what to do next, empty states say what will live there and the first step.\n5. Every screen has all its states designed, not only the happy path: loading, empty, error, long content, and what the user sees after a reload.\n6. Design the whole flow, not a component: for a task with more than one screen, write the entry point, the steps, the exits and a state table in `docs/ux/<flow>.md` (one page, text or Mermaid wireframes), then style against it. Write only the `docs/ux/` files you were assigned.\n7. Tokens before taste: a new look is a new design token, not a one-off value (see `ui-craft`), so a brand decision can change in one place.\n8. If the request itself matches an anti-pattern, do not comply silently: report the conflict for the owner to decide.\n9. You still change only style files and `docs/ux/` Markdown. When the flow needs markup, logic or copy in code, write exactly what the developer must add, in your report.\n');
+  const team47 = json(path.join(REPO, '.harness', 'team.json'));
+  team47.members = team47.members.map((m) => (m.id === 'lead-ux' ? { ...m, engine: 'claude', skills: ['ui-craft', 'brand-craft'] } : { ...m, engine: 'claude' }));
+  fs.writeFileSync(path.join(p47, '.harness', 'team.json'), JSON.stringify(team47, null, 2) + '\n');
+  const r47 = node(REPO, ['install.mjs', p47, '--no-auto-assign', '--no-skills']);
+  assert(r47.status === 0, r47.stdout + r47.stderr);
+  assert(JSON.stringify(json(path.join(p47, '.harness', 'team.json')).members.find((m) => m.id === 'lead-ux').skills) === JSON.stringify(['brand-craft']), '1.0.47 upgrade should free slot 2 on lead-ux');
+  const p47Brand = fs.readFileSync(path.join(p47, '.harness', 'skills', 'brand-craft', 'SKILL.md'), 'utf8');
+  assert(!/"design system"/.test(p47Brand) && /DEV_ENGINEER/.test(p47Brand), '1.0.47 upgrade should refresh untouched brand-craft');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -203,6 +203,10 @@ const OLD_STOCK_SHA = {
     '0a642d0497663af6fc6e18bb34a46bf11b273a8e2f3696f3fe14747cddff755c',
     'ba4cf22872dff3ca5e88903d9afe2f5b5636d9333761f4ab7a98b48711c3a08e'
   ],
+  '.harness/skills/brand-craft/SKILL.md': [
+    'efc60b3ed5f0040788c644bb0ebc924aebcdd3478ee0b72052062dd064926275',
+    'd08ee6b32761dbae79812481fb63a2c397b99e254a7b46827d3a3743c129dc98'
+  ],
   '.harness/skills/spec-writer/SKILL.md': [
     '90b9bddfc8cff8b02c4ab6f78d1abb750c1ba8963e14d1b0c8e58cbff57026e7',
     'f14d673bad4efe2ef816f55dd6f894a06603d7805eeec73dde88aa902ff6ca21',
@@ -217,7 +221,9 @@ const OLD_STOCK_SHA = {
     '3730a85e6931d4921aa9683a6ba4c459f28654d2abd7b1537aa779e9ec9b76b9',
     '36dad7d9c893930c08b7baa06647e6a95ef14957b49db9604a9e2d77b7fac030',
     '86945d3152be59c81e0bd28696fb7b80a6c24d0337fa899cd9fa4c5add405814',
-    '74fcf26dbc50cc10cebb311e101bac0d67701e062c1d3bbdc2517fad7c53e5d3'
+    '74fcf26dbc50cc10cebb311e101bac0d67701e062c1d3bbdc2517fad7c53e5d3',
+    '00edacf9c449a01a8c7c73d7e25b1c072910ff916fc5162dcc69feb70140b974',
+    '12168e266edd01822f798385bf25702ff4991bfbe6b50f2f0807e3af4cf20c50'
   ]
 };
 const OLD_ROLE_MISSION_SHA = {
@@ -267,7 +273,9 @@ const OLD_SKILL_KEYWORDS = {
 };
 function untouchedOldSkill(relPath, mine, theirs) {
   const relPosix = relPath.split(path.sep).join('/');
-  if (matchesStock(relPosix, mine) && sha256Norm(mine, false) !== sha256Norm(theirs, false)) return 'starter stub -> Flow & State Table + foundation ref';
+  if (matchesStock(relPosix, mine) && sha256Norm(mine, false) !== sha256Norm(theirs, false)) {
+    return relPosix.includes('brand-craft') ? 'untouched built-in UX skill -> non-overlapping keywords & token handoff' : 'starter stub -> Flow & State Table + foundation ref';
+  }
   const m = relPosix.match(/^\.harness\/skills\/([^/]+)\/SKILL\.md$/);
   const olds = m && OLD_SKILL_KEYWORDS[m[1]];
   if (!olds) return '';
@@ -366,7 +374,7 @@ function copyDir(from, to, rel = '.harness') {
     if (relPath === path.join('.harness', 'memory', 'people.md')) continue; // the template team's page never travels; a project's own is kept
     if (fs.existsSync(d)) {
       const oldSkillHow = untouchedOldSkill(relPath, fs.readFileSync(d, 'utf8'), fs.readFileSync(s, 'utf8'));
-      if (oldSkillHow) { fs.copyFileSync(s, d); report.push(`update ${relPath} (${oldSkillHow})`); continue; }
+      if (oldSkillHow) { fs.copyFileSync(s, d); report.push(`update ${relPath} (${oldSkillHow})`); upgradedSkills.add(relPath.split(path.sep).join('/')); continue; }
       if (/^\.harness[\\/]roles[\\/][^\\/]+\.json$/.test(relPath)) {
         const roleUp = upgradeRole(fs.readFileSync(d, 'utf8'), fs.readFileSync(s, 'utf8'), entry.name);
         if (roleUp) { fs.writeFileSync(d, roleUp.text); report.push(`update ${relPath} (${roleUp.how})`); upgradedRoles.add(entry.name); continue; }
@@ -450,6 +458,7 @@ const preRoles = (() => {
 const preHadBrandCraft = fs.existsSync(path.join(target, '.harness', 'skills', 'brand-craft', 'SKILL.md'));
 const preManifestVersion = readJsonIf(path.join(target, '.harness', 'MANIFEST.json'))?.version || null;
 const upgradedRoles = new Set();
+const upgradedSkills = new Set();
 
 copyDir(path.join(SRC, '.harness'), path.join(target, '.harness'));
 
@@ -508,8 +517,11 @@ const postCharter = readCharter(path.join(target, '.harness', 'charter.md'));
           const hasBrandSkill = fs.existsSync(path.join(target, '.harness', 'skills', 'brand-craft', 'SKILL.md'));
           const sk = Array.isArray(ux.skills) ? ux.skills : [];
           if (shouldAddBrand && hasBrandSkill && !sk.includes('brand-craft') && (sk.length === 0 || (sk.length === 1 && sk[0] === 'ui-craft'))) {
-            ux.skills = sk.length ? [...sk, 'brand-craft'] : ['ui-craft', 'brand-craft'];
-            changes.push('brand-craft');
+            ux.skills = ['brand-craft'];
+            changes.push('brand-craft (slot 2 free)');
+          } else if (upgradedSkills.has('.harness/skills/brand-craft/SKILL.md') && JSON.stringify(sk) === JSON.stringify(['ui-craft', 'brand-craft'])) {
+            ux.skills = ['brand-craft'];
+            changes.push('unpinned ui-craft from slot 2 (kept brand-craft)');
           }
         }
         if (changes.length) {

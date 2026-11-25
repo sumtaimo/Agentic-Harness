@@ -121,12 +121,17 @@ export const SKILL_MATCH = 'keywords-with-explicit';
  */
 export const SKILL_KEYWORD_MATCH = 'word';
 
+function keywordRegex(keyword, global = false) {
+  const k = String(keyword || '').trim().toLowerCase();
+  if (!k) return null;
+  const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  return new RegExp(`(?<![a-z0-9])${esc}(?:s|es)?(?![a-z0-9])`, global ? 'gi' : 'i');
+}
+
 /** Does this skill keyword appear in the text as a whole word or phrase (plural allowed)? See SKILL_KEYWORD_MATCH. */
 export function keywordMatches(text, keyword) {
-  const k = String(keyword || '').trim().toLowerCase();
-  if (!k) return false;
-  const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-  return new RegExp(`(?<![a-z0-9])${esc}(?:s|es)?(?![a-z0-9])`, 'i').test(String(text || ''));
+  const re = keywordRegex(keyword, false);
+  return re ? re.test(String(text || '')) : false;
 }
 /** Highest SKILL.md `schema_version` (format of the skill pointer) this harness understands; a missing value means 1. */
 export const SKILL_SCHEMA_MAX = 1;
@@ -317,18 +322,42 @@ export function matchSkills(sub, roleName, allSkills) {
       else if (!chosen.includes(s)) chosen.push(s);
     }
   }
-  const text = String(sub.prompt || '').toLowerCase();
+  const rawText = String(sub.prompt || '');
   const scored = [];
   for (const s of Object.values(allSkills)) {
     if (chosen.includes(s) || !fits(s) || s.roles.length === 0) continue;
     // added to the explicit list: autoApply skills, and skills whose keyword appears in the task (with or without a list)
-    const hit = s.keywords.filter((k) => keywordMatches(text, k));
-    if (s.autoApply || hit.length) scored.push({ s, hits: hit.length, longest: Math.max(0, ...hit.map((k) => String(k).length)), keyword: hit.sort((a, b) => b.length - a.length)[0] || null });
+    const hitMatches = [];
+    for (const k of s.keywords) {
+      const re = keywordRegex(k, true);
+      if (!re) continue;
+      const spans = [...rawText.matchAll(re)].map((m) => [m.index, m.index + m[0].length]);
+      if (spans.length) hitMatches.push({ k, len: String(k).length, spans });
+    }
+    if (s.autoApply || hitMatches.length) scored.push({ s, hitMatches });
   }
-  // Ranking: the explicit list first (in its order), then most keyword hits, then the longest matched phrase.
-  scored.sort((a, b) => b.hits - a.hits || b.longest - a.longest || a.s.name.localeCompare(b.s.name));
-  const why = new Map(scored.map((x) => [x.s.name, x.keyword]));
-  const ranked = [...chosen, ...scored.map((x) => x.s)];
+  // Ignore a hit whose every occurrence falls strictly inside a longer phrase matched by another candidate skill
+  // (e.g. ui-craft's "design" inside design-system's "design system"), so generic single words don't double-count.
+  const metrics = scored.map((entry) => {
+    const eff = entry.hitMatches.filter((hm) =>
+      hm.spans.some(([a, b]) => !scored.some((other) => other !== entry && other.hitMatches.some((oh) => oh.spans.some(([A, B]) => A <= a && b <= B && (B - A) > (b - a)))))
+    );
+    const byLen = (arr) => [...arr].sort((x, y) => y.len - x.len);
+    const topEff = byLen(eff);
+    const topAll = byLen(entry.hitMatches);
+    return {
+      s: entry.s,
+      effHits: eff.length,
+      effLongest: topEff[0]?.len || 0,
+      hits: entry.hitMatches.length,
+      longest: topAll[0]?.len || 0,
+      keyword: (topEff[0] || topAll[0])?.k || null
+    };
+  });
+  // Ranking: the explicit list first (in its order), then most independent keyword hits, then the longest matched phrase.
+  metrics.sort((a, b) => b.effHits - a.effHits || b.effLongest - a.effLongest || b.hits - a.hits || b.longest - a.longest || a.s.name.localeCompare(b.s.name));
+  const why = new Map(metrics.map((x) => [x.s.name, x.keyword]));
+  const ranked = [...chosen, ...metrics.map((x) => x.s)];
   // At most SKILL_LIMIT_PER_WORKER skills reach one worker (owner's decision: one by one, never many at once, so the
   // context stays small); the rest are named, not loaded.
   return { chosen: ranked.slice(0, SKILL_LIMIT_PER_WORKER), notLoaded: ranked.slice(SKILL_LIMIT_PER_WORKER).map((s) => s.name), why, mismatched, unknown };

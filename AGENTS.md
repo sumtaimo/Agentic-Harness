@@ -47,7 +47,7 @@ and `.windsurfrules` only point here.
   - **Team Mode (`--mode team`):** Orchestrator assigns scoped charters to leads (`lead-ba`, `lead-dev`, `lead-qa`, `lead-ux`):
     - `lead-ba`: specs and acceptance criteria; writes only `docs/**`.
     - `lead-qa`: tests and verification; writes only `tests/**`, `test/**`, `__tests__/**` and test files next to the code (`src/**/*.test.*`, `*.spec.*`).
-    - `lead-ux`: UX/UI; writes only style files (`src/**/*.css`, `*.scss`, `*.less`) and UX flow/copy/wireframe specs (`docs/ux/**/*.md`), with the `ui-craft` and `brand-craft` rules.
+    - `lead-ux`: UX/UI; writes only style files (`src/**/*.css`, `*.scss`, `*.less`) and UX flow/copy/wireframe specs (`docs/ux/**/*.md`), with `brand-craft` pinned (slot 2 stays free for the best-matching UX/design skill).
     - `reviewer` and `security`: read-only check agents the orchestrator starts after the controller says PASSED (code changes only); they report findings, never edit.
     - Read-only investigation and QA reports (`.agent-state/`) are written by the orchestrator, not by the leads.
     - `lead-dev` / workers: Scoped implementation strictly inside assigned file paths; in team/hierarchy/visible runs, never create, edit, or delete test files (`tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*`).
@@ -174,7 +174,7 @@ The rules, in short (the controller enforces them; do not try to get around them
 0. For feature or UI/UX work (skip without a word on bugfixes/chores): read relevant `docs/foundation/` files (`product.md` + `brand.md` for UI/UX; `product.md` + `domain.md` for features), ask at most 3 skippable questions for blanks still marked `(fill me)`, and pass existing foundation files to leads by reference ("First read …") — never paste whole files.
 1. `node .harness/visible.mjs brief …` first: it gives you the task, the check, the team and each lead's scope.
 <!-- docs-drift:ignore -->
-2. You only **plan and delegate**: give every file to exactly one lead, inside that lead's scope (`docs/ux/**/*.md` + styles belong to `lead-ux` with `ui-craft` + `brand-craft`; test files `tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*` belong strictly to `lead-qa`, never `lead-dev`), and put the exact shared names/formats in
+2. You only **plan and delegate**: give every file to exactly one lead, inside that lead's scope (`docs/ux/**/*.md` + styles belong to `lead-ux` with `brand-craft` + matching UX/design skill; test files `tests/**`, `test/**`, `__tests__/**`, `*.test.*`, `*.spec.*` belong strictly to `lead-qa`, never `lead-dev`), and put the exact shared names/formats in
    the interface contract. `visible.mjs assign <run> '<json>'` validates it before anything starts (3 bad tries escalate to the user).
 3. Start **all** assigned named agents (`lead-ba`, `lead-dev`, `lead-qa`, `lead-ux`; subagent_type = the lead's id) **in one message** so they run in
    parallel and the user sees them work. Use the prompts `assign` prints. **Never do their work or edit project files yourself.**
