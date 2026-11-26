@@ -375,6 +375,54 @@ console.log('\nEditor & cross-tool rules');
   }
 }
 
+console.log('\nRuntime guards & hooks (Claude Code + Antigravity)');
+{
+  // 1. Claude Code (.claude/settings.json)
+  const claudeSet = path.join(ROOT, '.claude', 'settings.json');
+  if (!fs.existsSync(claudeSet)) {
+    note('no .claude/settings.json (Claude Code SessionStart / PreToolUse / Stop hooks not wired; re-run install.mjs to add)');
+  } else {
+    try {
+      const s = JSON.parse(fs.readFileSync(claudeSet, 'utf8'));
+      const hooks = s.hooks || {};
+      const missingH = [];
+      if (!JSON.stringify(hooks.SessionStart || []).includes('hook-session.mjs')) missingH.push('SessionStart (hook-session.mjs)');
+      if (!JSON.stringify(hooks.PreToolUse || []).includes('hook-guard.mjs')) missingH.push('PreToolUse (hook-guard.mjs)');
+      if (!JSON.stringify(hooks.Stop || []).includes('hook-stop.mjs')) missingH.push('Stop (hook-stop.mjs)');
+      if (missingH.length) warn(`.claude/settings.json is missing hook(s): ${missingH.join(', ')}. Re-install from the template to restore runtime guards.`);
+      else ok('.claude/settings.json hooks active: SessionStart, PreToolUse (hook-guard.mjs), Stop (hook-stop.mjs)');
+      if (!isTemplate && fs.existsSync(path.join(ROOT, '.harness', 'MANIFEST.json'))) {
+        const deny = s.permissions?.deny || [];
+        const needDeny = ['Edit(.harness/*.mjs)', 'Edit(.harness/lib/**)', 'Edit(.claude/settings.json)', 'Edit(.agents/hooks.json)'];
+        const missingDeny = needDeny.filter((r) => !deny.includes(r));
+        if (missingDeny.length) warn(`.claude/settings.json is missing core/hook deny rule(s): ${missingDeny.join(', ')}. Re-install to harden.`);
+      }
+    } catch (e) {
+      warn(`.claude/settings.json is not valid JSON (${e.message}); Claude Code runtime hooks will not run`);
+    }
+  }
+
+  // 2. Antigravity (.agents/hooks.json)
+  const agyHooks = path.join(ROOT, '.agents', 'hooks.json');
+  if (!fs.existsSync(agyHooks)) {
+    note('no .agents/hooks.json (Antigravity SessionStart / PreToolUse / Stop hooks not wired; re-run install.mjs to add)');
+  } else {
+    try {
+      const raw = JSON.parse(fs.readFileSync(agyHooks, 'utf8'));
+      const activeEntries = Object.values(raw || {}).filter((v) => v && typeof v === 'object' && v.enabled !== false);
+      const blob = (ev) => JSON.stringify(activeEntries.flatMap((e) => (Array.isArray(e[ev]) ? e[ev] : [])));
+      const missingA = [];
+      if (!blob('SessionStart').includes('hook-session.mjs')) missingA.push('SessionStart (hook-session.mjs)');
+      if (!blob('PreToolUse').includes('hook-guard.mjs')) missingA.push('PreToolUse (hook-guard.mjs)');
+      if (!blob('Stop').includes('hook-stop.mjs')) missingA.push('Stop (hook-stop.mjs)');
+      if (missingA.length) warn(`.agents/hooks.json is missing or has disabled hook(s): ${missingA.join(', ')}. Re-install from the template to restore Antigravity guards.`);
+      else ok('.agents/hooks.json hooks active: SessionStart, PreToolUse (hook-guard.mjs), Stop (hook-stop.mjs)');
+    } catch (e) {
+      warn(`.agents/hooks.json is not valid JSON (${e.message}); Antigravity runtime hooks will not run`);
+    }
+  }
+}
+
 console.log('\nDaemon');
 try {
   const pid = Number(fs.readFileSync(FILES.pid, 'utf8')); process.kill(pid, 0);

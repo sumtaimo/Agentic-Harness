@@ -25,6 +25,7 @@ helpIfAsked(import.meta.url);
 import { readBacklog, writeBacklog } from './lib/governance.mjs';
 import { engineGate } from './lib/feature.mjs';
 import { createHunt, findHunt, markHuntError, approveHunt, huntProgress, renderHuntDoc, readHunts, HUNT_MAX_FINDINGS } from './lib/hunt.mjs';
+import { checkHumanApprovalOrigin } from './lib/guard.mjs';
 
 ensureDirs();
 const argv = process.argv.slice(2);
@@ -86,6 +87,8 @@ switch (cmd) {
     const h = need();
     const spec = flag('--all') ? 'all' : val('--keep');
     if (!spec) die(`Say which bugs to fix: node .harness/hunt.mjs approve ${h.id} --keep 1,3   (or --keep 1-3, or --all)`);
+    const origin = checkHumanApprovalOrigin({ root: ROOT, actionRule: 'Bash(node .harness/hunt.mjs approve:*)', commandHint: `node .harness/hunt.mjs approve ${h.id} ${spec === 'all' ? '--all' : `--keep ${spec}`}` });
+    if (!origin.ok) die(origin.reason);
     let r; try { r = approveHunt(h.id, spec); } catch (e) { die(e.message); }
     console.log(`${r.hunt.id} APPROVED: ${r.added.length} bug fix(es) are READY in the backlog (${r.added.map((t) => t.id).join(', ')}), most severe first.`);
     for (const w of r.warnings) console.log(`! ${w}`);
@@ -94,6 +97,8 @@ switch (cmd) {
   }
   case 'cancel': {
     const h = need();
+    const origin = checkHumanApprovalOrigin({ root: ROOT, actionRule: 'Bash(node .harness/hunt.mjs cancel:*)', commandHint: `node .harness/hunt.mjs cancel ${h.id}` });
+    if (!origin.ok) die(origin.reason);
     if (h.status === 'APPROVED') die(`${h.id} is approved: its fixes are backlog items now. Block them instead: node .harness/backlog.mjs block <id> "reason"`);
     const b = readBacklog();
     b.hunts = readHunts(b).map((x) => (x.id === h.id ? { ...x, status: 'CANCELLED', cancelledAt: new Date().toISOString() } : x));

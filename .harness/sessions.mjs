@@ -26,6 +26,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { ROOT, loadConfig, readJsonSafe, atomicWriteJson, detectVerifyCmd, helpIfAsked, isSecretFile } from './lib/common.mjs';
 import { usableEngines } from './lib/handoff.mjs';
 import { removeLink } from './lib/integration.mjs';
+import { checkHumanApprovalOrigin } from './lib/guard.mjs';
 helpIfAsked(import.meta.url);
 
 const config = (() => { try { return loadConfig(); } catch { return {}; } })();
@@ -482,6 +483,8 @@ switch (cmd) {
   }
   case 'merge': {
     const b = load(); const t = find(b, positional[0]); const st = statusOf(t);
+    const origin = checkHumanApprovalOrigin({ root: ROOT, actionRule: 'Bash(node .harness/sessions.mjs merge:*)', commandHint: `node .harness/sessions.mjs merge ${t.id}` });
+    if (!origin.ok) die(origin.reason);
     if (st.status !== 'DONE') die(`${t.id} is ${st.status}, not DONE: only a task its child reported done can be merged. ${st.note}`);
     const base = t.base || baseBranch(); const p = primary(); const info = branchInfo(t);
     const failed = (reason, detail) => { t.checkFailed = { at: new Date().toISOString(), tip: info.tip, reason }; save(b); console.error(detail); process.exitCode = 1; };
@@ -535,7 +538,12 @@ switch (cmd) {
     if (t.mergedAt) cleanup(load(), t.id);
     break;
   }
-  case 'cleanup': cleanup(load()); break;
+  case 'cleanup': {
+    const origin = checkHumanApprovalOrigin({ root: ROOT, actionRule: 'Bash(node .harness/sessions.mjs cleanup:*)', commandHint: 'node .harness/sessions.mjs cleanup' });
+    if (!origin.ok) die(origin.reason);
+    cleanup(load());
+    break;
+  }
   case 'board': {
     const b = load();
     const rows = b.tasks.map((t) => ({ ...t, ...statusOf(t) }));

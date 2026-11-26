@@ -10,6 +10,40 @@ npx github:sumtaimo/Agentic-Harness#release .
 The installer keeps your `config.json`, charter, team, backlog and memory; it replaces the harness core and prints
 the entries newer than the version you had.
 
+## 1.0.49 — 2026-11-26
+
+- **Antigravity native runtime hooks (`.agents/hooks.json`) & multi-editor hook engine:** added `.agents/hooks.json`
+  (installed and merged safely by `install.mjs`, keeping any user hooks) wiring `SessionStart` (`hook-session.mjs --agy`),
+  `PreToolUse` (`hook-guard.mjs --agy`), and `Stop` (`hook-stop.mjs --agy`). Both `hook-guard.mjs` and `hook-session.mjs`
+  now support Claude Code and Antigravity JSON protocols natively (`write_file`, `edit_file`, `run_command`, camelCase
+  `toolCall`, `force_ask`, and `injectSteps`), and `.claude/settings.json` also wires the new `Stop` hook.
+- **Controller-First Gate & pre-tool scope enforcement:** in installed projects (`.harness/MANIFEST.json` exists; opt out
+  via `"guard": { "controllerFirst": false }` in `.harness/config.json`), `hook-guard.mjs` now blocks edits to governed
+  project paths (`src/**`, `docs/**`, `tests/**`, and lead scopes in `team.json`) unless there is an active delegated
+  `visible.mjs` run (`.harness/visible/*/run.json` in `DELEGATED`, `FAILED`, or `REVIEW_BLOCKED`) and the file is inside
+  `run.assignments` (enforcing per-lead slices when agent identity is provided, and logging attribution to
+  `.harness/visible/<id>/edits.jsonl` audited by `visible.mjs verify`).
+- **Hardened `hook-guard.mjs` (shell-write bypasses, hook immutability, charter policy):** shell commands (`Bash`,
+  `PowerShell`, `run_command`) that write/delete protected or un-delegated paths (`>`, `>>`, `tee`, `rm`, `mv`, `cp`,
+  `sed -i`, `Set-Content`, `node -e` / `python -c` write APIs) are checked against the same file guard; `.claude/settings.json`
+  and `.agents/hooks.json` are read-only in installed projects (both in `hook-guard.mjs` and `.claude/settings.json`
+  `permissions.deny`); charter `forbiddenPaths` and `forbiddenTools` (`rm -rf`, `npm publish`, mutating `git remote`) are
+  blocked pre-tool; and Antigravity gets `force_ask` parity for governance files and human-approval CLI commands.
+- **Cross-editor human-approval gates & headless worker bounds:** generalized `checkHumanApprovalOrigin()` in
+  `.harness/lib/guard.mjs` to block silent AI self-approval of `backlog.mjs approve|import`, `feature.mjs approve|cancel`,
+  `hunt.mjs approve|cancel`, `sessions.mjs merge|cleanup`, and `visible.mjs rollback` in editors lacking active
+  confirmation hooks. `daemon.mjs` now propagates `HARNESS_WORKER_READONLY` and `HARNESS_WORKER_FILES` to headless
+  workers (enforced pre-tool by `.agents/hooks.json` for `agy`) and tightens Codex `--sandbox workspace-write` to
+  `--sandbox read-only` for read-only roles.
+- **Stop gate & doctor hook integrity checks:** `.harness/hook-stop.mjs` prevents premature completion while a `visible.mjs`
+  run is still `DELEGATED`/`FAILED`/`REVIEW_BLOCKED` or awaiting required judge/visual review (with loop-prevention guards),
+  and `.harness/doctor.mjs` now verifies that Claude Code and Antigravity hooks and deny rules are wired and valid.
+- *Affects:* all Claude Code, Antigravity, Cursor/Windsurf, and headless (`agy` / `codex`) users.
+  *Permission / Hook change:* adds `.agents/hooks.json`, adds `Stop` hook (`hook-stop.mjs`) to `.claude/settings.json`,
+  and adds `Edit(.claude/settings.json)` + `Edit(.agents/hooks.json)` to installed projects' `permissions.deny`.
+  *Config / Migration:* re-run `npx github:sumtaimo/Agentic-Harness#release .` in existing projects; set
+  `"guard": { "controllerFirst": false }` in `.harness/config.json` only if you want direct chat edits outside `visible.mjs`.
+
 ## 1.0.48 — 2026-11-25
 
 - **Dynamic UX slot 2 & Skill-Foundry keyword coordination:** `.harness/team.json` (`lead-ux`) now pins only

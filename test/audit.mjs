@@ -41,7 +41,9 @@ const manifest = (() => { try { return JSON.parse(fs.readFileSync(path.join(proj
 check('MANIFEST.json records the core fingerprints', !!manifest && Object.keys(manifest.files || {}).length > 5, 'missing or empty');
 check('personal approvals.json is never copied into a project', !fs.existsSync(path.join(proj, '.harness', 'approvals.json')));
 const deny = (() => { try { return JSON.parse(fs.readFileSync(path.join(proj, '.claude', 'settings.json'), 'utf8')).permissions.deny || []; } catch { return []; } })();
-check('the core is read-only for Claude Code in a project (valid Edit(...) rules only)', ['Edit(.harness/*.mjs)', 'Edit(.harness/lib/**)'].every((r) => deny.includes(r)) && !deny.some((r) => r.startsWith("Write(")), deny.join(', '));
+check('the core and hook configs are read-only for Claude Code in a project (valid Edit(...) rules only)', ['Edit(.harness/*.mjs)', 'Edit(.harness/lib/**)', 'Edit(.claude/settings.json)', 'Edit(.agents/hooks.json)'].every((r) => deny.includes(r)) && !deny.some((r) => r.startsWith("Write(")), deny.join(', '));
+const agyHooks = (() => { try { return JSON.parse(fs.readFileSync(path.join(proj, '.agents', 'hooks.json'), 'utf8')); } catch { return null; } })();
+check('Antigravity runtime hooks (.agents/hooks.json) are installed with SessionStart, PreToolUse, and Stop', Boolean(agyHooks?.['agentic-harness']?.SessionStart && agyHooks?.['agentic-harness']?.PreToolUse && agyHooks?.['agentic-harness']?.Stop), JSON.stringify(agyHooks));
 const tplDeny = JSON.parse(read('.claude/settings.json')).permissions.deny || [];
 check('the template itself stays editable for maintainers', !tplDeny.includes('Edit(.harness/*.mjs)'));
 
@@ -54,6 +56,7 @@ const doc = run(['.harness/doctor.mjs'], proj, { HARNESS_ENGINES: '' });
 const fails = (doc.stdout.match(/Failures: (\d+)/) || [])[1];
 check('doctor on a fresh project: 0 failures', fails === '0' || /No AI tool is allowed yet|No AI engine/.test(doc.stdout) && !/✖(?!.*AI engine)/.test(doc.stdout.replace(/✖.*(no AI engine|No AI engine).*/g, '')), doc.stdout.split('\n').filter((l) => /✖|Failures/.test(l)).join('\n'));
 check('doctor sees an unchanged core', /unchanged since install/.test(doc.stdout), doc.stdout.split('\n').filter((l) => /core/i.test(l)).join('\n'));
+check('doctor verifies both Claude Code and Antigravity runtime hooks', /\.claude\/settings\.json hooks active/.test(doc.stdout) && /\.agents\/hooks\.json hooks active/.test(doc.stdout), doc.stdout.split('\n').filter((l) => /hook/i.test(l)).join('\n'));
 const hook = run(['.harness/hook-session.mjs'], proj);
 check('session hook tells AIs to use, not edit, the harness', /never edit \.harness\/\*\.mjs/.test(hook.stdout), hook.stdout.slice(0, 300));
 

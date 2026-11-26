@@ -199,6 +199,7 @@ function buildArgs(profile, prompt, allowedTools, disallowedTools = [], stream =
   const effAllowed = Array.isArray(allowedTools)
     ? (allowedTools.length ? allowedTools : ((profile.args || []).some((a) => a.includes('{allowedTools}')) ? ['Read'] : []))
     : (profile.allowedTools || []);
+  const isReadOnly = Array.isArray(allowedTools) && !allowedTools.some((r) => /^(?:Edit|Write|MultiEdit|NotebookEdit)\b/.test(String(r)));
   const allowed = effAllowed.join(',');
   const disallowed = (disallowedTools || []).join(',');
   const via = profile.promptVia || ((profile.args || []).includes('{prompt}') ? 'arg' : 'stdin');
@@ -209,6 +210,8 @@ function buildArgs(profile, prompt, allowedTools, disallowedTools = [], stream =
     const v = a.replace('{allowedTools}', allowed).replace('{disallowedTools}', disallowed);
     // A placeholder that expands to nothing drops itself AND the flag before it (e.g. "--disallowedTools" "").
     if (v === '' && a !== '' && /^-/.test(args[args.length - 1] || '')) { args.pop(); continue; }
+    // For read-only workers on engines that use `--sandbox workspace-write` (Codex), tighten to `--sandbox read-only`.
+    if (isReadOnly && v === 'workspace-write' && args[args.length - 1] === '--sandbox') { args.push('read-only'); continue; }
     args.push(v);
   }
   // Model tier: only when the tier maps to an alias; otherwise no flag, so the CLI uses its own newest default.
@@ -400,7 +403,18 @@ function spawnEngineOnce({ id, engine, prompt, cwd, timeoutMs, allowedTools, dis
     const { args, viaStdin } = buildArgs(profile, spawnPrompt, allowedTools, disallowedTools, stream, pick.model);
     const dropPromptFile = () => { if (promptFile) { try { fs.rmSync(promptFile, { force: true }); } catch { /* ignore */ } } };
     const useShell = needsWinShell(binPath);
-    const env = { ...process.env, HARNESS_WORKER: '1', HARNESS_WORKER_ID: id };
+    // Propagate read-only & target-file bounds via env so runtime hooks (e.g. Antigravity `.agents/hooks.json`) enforce them pre-tool.
+    const workerGuardEnv = {};
+    if (Array.isArray(allowedTools)) {
+      const writeRules = allowedTools.filter((r) => /^(?:Edit|Write|MultiEdit|NotebookEdit)\b/.test(String(r)));
+      if (!writeRules.length) {
+        workerGuardEnv.HARNESS_WORKER_READONLY = '1';
+      } else if (!writeRules.some((r) => /^(?:Edit|Write|MultiEdit|NotebookEdit)$/.test(String(r).trim()))) {
+        const scoped = [...new Set(writeRules.map((r) => (String(r).match(/\((.*)\)$/) || [])[1]).filter(Boolean))];
+        if (scoped.length) workerGuardEnv.HARNESS_WORKER_FILES = JSON.stringify(scoped);
+      }
+    }
+    const env = { ...process.env, HARNESS_WORKER: '1', HARNESS_WORKER_ID: id, ...workerGuardEnv };
     const child = useShell
       ? spawn(winCommandLine(binPath, args), { cwd, env, shell: true, stdio: ['pipe', 'pipe', 'pipe'] })
       : spawn(binPath, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });

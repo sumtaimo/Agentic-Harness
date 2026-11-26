@@ -692,8 +692,12 @@ else {
         mine.hooks.PreToolUse = mine.hooks.PreToolUse || [];
         const guardPresent = JSON.stringify(mine.hooks.PreToolUse).includes('hook-guard.mjs');
         if (!guardPresent && srcSet.hooks.PreToolUse?.[0]) mine.hooks.PreToolUse.push(srcSet.hooks.PreToolUse[0]);
+        // Stop gate (hook-stop.mjs): added once; a project's own Stop hooks stay
+        mine.hooks.Stop = mine.hooks.Stop || [];
+        const stopPresent = JSON.stringify(mine.hooks.Stop).includes('hook-stop.mjs');
+        if (!stopPresent && srcSet.hooks.Stop?.[0]) mine.hooks.Stop.push(srcSet.hooks.Stop[0]);
         fs.writeFileSync(setPath, JSON.stringify(mine, null, 2) + '\n');
-        report.push(`merged harness rules${present ? '' : ' + SessionStart hook'}${guardPresent ? '' : ' + PreToolUse guard'} into existing .claude/settings.json`);
+        report.push(`merged harness rules${present ? '' : ' + SessionStart hook'}${guardPresent ? '' : ' + PreToolUse guard'}${stopPresent ? '' : ' + Stop gate'} into existing .claude/settings.json`);
       } catch {
         fs.writeFileSync(path.join(target, '.claude', 'settings.harness.json'), JSON.stringify(srcSet, null, 2) + '\n');
         report.push('! .claude/settings.json is not valid JSON — wrote .claude/settings.harness.json; merge it by hand');
@@ -702,12 +706,43 @@ else {
   }
 }
 
-// In a PROJECT the harness core is read-only for Claude Code (people and agents use the harness, they do not edit it;
-// a fix belongs in the template). The template repository itself has no such rule, so maintainers can work on it.
+// Antigravity runtime hooks (.agents/hooks.json): SessionStart, PreToolUse guard, Stop gate.
+// Merged by top-level hook key ("agentic-harness"), preserving any custom hooks the project already defined.
+{
+  const srcAgyHooks = path.join(SRC, '.agents', 'hooks.json');
+  if (fs.existsSync(srcAgyHooks)) {
+    const srcObj = JSON.parse(fs.readFileSync(srcAgyHooks, 'utf8'));
+    const dstPath = path.join(target, '.agents', 'hooks.json');
+    fs.mkdirSync(path.dirname(dstPath), { recursive: true });
+    if (!fs.existsSync(dstPath)) {
+      fs.writeFileSync(dstPath, JSON.stringify(srcObj, null, 2) + '\n');
+      report.push('wrote  .agents/hooks.json (Antigravity SessionStart + PreToolUse guard + Stop gate)');
+    } else {
+      try {
+        const mine = JSON.parse(fs.readFileSync(dstPath, 'utf8'));
+        const before = JSON.stringify(mine['agentic-harness'] || null);
+        const next = JSON.stringify(srcObj['agentic-harness']);
+        if (before !== next) {
+          mine['agentic-harness'] = srcObj['agentic-harness'];
+          fs.writeFileSync(dstPath, JSON.stringify(mine, null, 2) + '\n');
+          report.push('merged harness hooks into existing .agents/hooks.json');
+        } else {
+          report.push('kept   .agents/hooks.json (harness hooks already present)');
+        }
+      } catch {
+        fs.writeFileSync(path.join(target, '.agents', 'hooks.harness.json'), JSON.stringify(srcObj, null, 2) + '\n');
+        report.push('! .agents/hooks.json is not valid JSON — wrote .agents/hooks.harness.json; merge it by hand');
+      }
+    }
+  }
+}
+
+// In a PROJECT the harness core and runtime hook configs are read-only for Claude Code (people and agents use the harness,
+// they do not edit it; a fix belongs in the template). The template repository itself has no such rule, so maintainers can work on it.
 {
   const setPath = path.join(target, '.claude', 'settings.json');
   // Only Edit(path) rules exist for files: Claude Code applies them to every file-editing tool (Edit, Write, ...). A Write(path) rule is reported as invalid.
-  const CORE_DENY = ['Edit(.harness/*.mjs)', 'Edit(.harness/lib/**)', 'Edit(.harness/MANIFEST.json)'];
+  const CORE_DENY = ['Edit(.harness/*.mjs)', 'Edit(.harness/lib/**)', 'Edit(.harness/MANIFEST.json)', 'Edit(.claude/settings.json)', 'Edit(.agents/hooks.json)'];
   try {
     const s = JSON.parse(fs.readFileSync(setPath, 'utf8'));
     s.permissions = s.permissions || {};
@@ -743,7 +778,7 @@ for (const [line, what] of [['.harness/update-check.json', 'update check cache']
 // with core.autocrlf=true a teammate's clone would get CRLF and those rules could misread them, so pin LF for the files
 // the harness owns. Only these paths: the project's own code keeps whatever line endings it already uses.
 const GA_MARK = '# agentic-harness: keep its files LF on every OS';
-const GA_BLOCK = `${GA_MARK} (its scripts parse them; CRLF from core.autocrlf would break that)\n.harness/** text eol=lf\n.claude/** text eol=lf\nAGENTS.md text eol=lf\nCLAUDE.md text eol=lf\nGEMINI.md text eol=lf\n`;
+const GA_BLOCK = `${GA_MARK} (its scripts parse them; CRLF from core.autocrlf would break that)\n.harness/** text eol=lf\n.claude/** text eol=lf\n.agents/** text eol=lf\nAGENTS.md text eol=lf\nCLAUDE.md text eol=lf\nGEMINI.md text eol=lf\n`;
 {
   const ga = path.join(target, '.gitattributes');
   const have = fs.existsSync(ga) ? fs.readFileSync(ga, 'utf8') : '';

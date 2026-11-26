@@ -70,6 +70,16 @@ const env = { ...process.env, HARNESS_SILENT: '1', HARNESS_AGENT: '', HARNESS_LI
   process.env[key] = env[key]; // also for the tests that spawn with process.env directly
 }
 delete env.HARNESS_WORKER;
+delete env.HARNESS_WORKER_ID;
+delete env.HARNESS_WORKER_READONLY;
+delete env.HARNESS_WORKER_FILES;
+delete env.ANTIGRAVITY_AGENT;
+delete env.CLAUDECODE;
+delete env.CLAUDE_CODE_ENTRYPOINT;
+delete env.CURSOR_AGENT;
+delete env.CURSOR_TRACE_ID;
+delete env.CODEX_SANDBOX;
+delete env.WINDSURF_AGENT;
 const node = (dir, args, extraEnv = {}) => spawnSync(process.execPath, args, { cwd: dir, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 60000 });
 const json = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
 const log = (dir) => fs.readFileSync(path.join(dir, '.harness', 'telemetry.log'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
@@ -7414,6 +7424,169 @@ await test('old projects upgrading get full design support while keeping custom 
   assert(JSON.stringify(json(path.join(p47, '.harness', 'team.json')).members.find((m) => m.id === 'lead-ux').skills) === JSON.stringify(['brand-craft']), '1.0.47 upgrade should free slot 2 on lead-ux');
   const p47Brand = fs.readFileSync(path.join(p47, '.harness', 'skills', 'brand-craft', 'SKILL.md'), 'utf8');
   assert(!/"design system"/.test(p47Brand) && /DEV_ENGINEER/.test(p47Brand), '1.0.47 upgrade should refresh untouched brand-craft');
+});
+
+await test('v1.0.49 multi-editor runtime guards: Antigravity .agents/hooks.json, Controller-First Gate, shell-write bypass block, charter forbiddenPaths/Tools, cross-editor human approval gates, headless worker bounds, Stop gate, and doctor hook checks', async () => {
+  const PASS = 'node -e "process.exit(0)"';
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-v1049-'));
+  spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: proj });
+  spawnSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: proj });
+  fs.writeFileSync(path.join(proj, 'package.json'), JSON.stringify({ name: 'p49', private: true, scripts: { test: PASS } }));
+  // Pre-seed a custom Antigravity hook to verify install.mjs merges without overwriting user hooks
+  fs.mkdirSync(path.join(proj, '.agents'), { recursive: true });
+  fs.writeFileSync(path.join(proj, '.agents', 'hooks.json'), JSON.stringify({ 'my-custom-hook': { PostToolUse: [] } }, null, 2));
+
+  const inst = node(REPO, ['install.mjs', proj, '--no-auto-assign', '--no-skills']);
+  assert(inst.status === 0, inst.stdout + inst.stderr);
+  const agyCfg = json(path.join(proj, '.agents', 'hooks.json'));
+  assert(agyCfg['my-custom-hook'] && agyCfg['agentic-harness']?.SessionStart && agyCfg['agentic-harness']?.PreToolUse && agyCfg['agentic-harness']?.Stop, 'install.mjs must merge .agents/hooks.json and keep custom hooks');
+  const claudeCfg = json(path.join(proj, '.claude', 'settings.json'));
+  assert(JSON.stringify(claudeCfg.hooks.Stop || []).includes('hook-stop.mjs'), 'Stop hook must be wired in .claude/settings.json');
+  assert(claudeCfg.permissions.deny.includes('Edit(.claude/settings.json)') && claudeCfg.permissions.deny.includes('Edit(.agents/hooks.json)'), 'installed project deny rules must protect hook configs');
+
+  // 1. Antigravity SessionStart JSON protocol (running with cwd = .agents/ just like Antigravity)
+  const agySess = spawnSync(process.execPath, ['../.harness/hook-session.mjs', '--agy', '--no-fetch'], { cwd: path.join(proj, '.agents'), encoding: 'utf8', env });
+  assert(agySess.status === 0, agySess.stderr);
+  const sessJson = JSON.parse(agySess.stdout);
+  assert(Array.isArray(sessJson.injectSteps) && /visible\.mjs brief/.test(sessJson.injectSteps[0]?.systemMessage?.systemMessage || ''), agySess.stdout);
+  const agySessWorker = spawnSync(process.execPath, ['../.harness/hook-session.mjs', '--agy', '--no-fetch'], { cwd: path.join(proj, '.agents'), encoding: 'utf8', env: { ...env, HARNESS_WORKER: '1' } });
+  assert(agySessWorker.status === 0 && agySessWorker.stdout.trim() === '{}', agySessWorker.stdout);
+
+  const callClaude = (tool, input, extra = {}, extraEnv = {}) => spawnSync(process.execPath, ['.harness/hook-guard.mjs'], {
+    cwd: proj, input: JSON.stringify({ tool_name: tool, tool_input: input, ...extra }), encoding: 'utf8', env: { ...env, CLAUDE_PROJECT_DIR: proj, ...extraEnv }
+  });
+  const callAgy = (name, args, extra = {}, extraEnv = {}) => {
+    const r = spawnSync(process.execPath, ['../.harness/hook-guard.mjs', '--agy'], {
+      cwd: path.join(proj, '.agents'),
+      input: JSON.stringify({ hookEventName: 'PreToolUse', cwd: proj, workspacePaths: [proj], toolCall: { id: 't1', name, args }, ...extra }),
+      encoding: 'utf8', env: { ...env, ...extraEnv }
+    });
+    assert(r.status === 0, `agy hook must exit 0 with JSON decision: ${r.stderr}`);
+    return JSON.parse(r.stdout);
+  };
+
+  // 2. Installed project: hook configs hard-denied; governance files force_ask in Antigravity
+  assert(callClaude('Edit', { file_path: '.claude/settings.json' }).status === 2, 'Claude must block .claude/settings.json in installed project');
+  assert(callClaude('Write', { file_path: '.agents/hooks.json' }).status === 2, 'Claude must block .agents/hooks.json in installed project');
+  assert(callAgy('edit_file', { Path: path.join(proj, '.agents/hooks.json') }).decision === 'deny', 'Agy must deny .agents/hooks.json');
+  assert(callAgy('write_file', { Path: path.join(proj, '.harness/config.json') }).decision === 'force_ask', 'Agy must force_ask on .harness/config.json');
+  assert(callAgy('edit_file', { Path: path.join(proj, '.harness/charter.md') }).decision === 'force_ask', 'Agy must force_ask on .harness/charter.md');
+
+  // 3. Charter forbiddenPaths & forbiddenTools enforced pre-tool
+  assert(callClaude('Write', { file_path: 'production-credentials/prod.key' }).status === 2, 'charter forbiddenPaths must block production-credentials/**');
+  assert(callAgy('write_file', { Path: path.join(proj, 'node_modules/pkg/index.js') }).decision === 'deny', 'charter forbiddenPaths must block node_modules/**');
+  assert(callClaude('Bash', { command: 'rm -rf ./tmp-dir' }).status === 2, 'charter forbiddenTools must block rm -rf');
+  assert(callAgy('run_command', { CommandLine: 'npm publish' }).decision === 'deny', 'charter forbiddenTools must block npm publish');
+  assert(callClaude('Bash', { command: 'git remote set-url origin https://evil.example/x.git' }).status === 2, 'charter forbiddenTools must block mutating git remote');
+  assert(callClaude('Bash', { command: 'git remote -v' }).status === 0, 'read-only git remote -v must be allowed');
+
+  // 4. Controller-First Gate (Claude + Antigravity)
+  assert(callClaude('Write', { file_path: 'src/app.js' }).status === 2, 'Controller-First must block src/app.js with no active run (Claude)');
+  const noRunAgy = callAgy('write_file', { Path: path.join(proj, 'src/style.css') });
+  assert(noRunAgy.decision === 'deny' && /Controller-First Gate/.test(noRunAgy.reason), JSON.stringify(noRunAgy));
+  // Shell-write bypass must ALSO be blocked!
+  assert(callClaude('Bash', { command: 'echo "secret=1" > .env' }).status === 2, 'shell redirect to .env must be blocked');
+  assert(callAgy('run_command', { CommandLine: 'node -e "require(\'fs\').writeFileSync(\'.env\', \'x\')"' }).decision === 'deny', 'node -e writeFileSync .env must be blocked');
+  assert(callAgy('run_command', { CommandLine: 'Set-Content .claude/settings.json "{}"' }).decision === 'deny', 'PowerShell Set-Content .claude/settings.json must be blocked');
+  assert(callClaude('Bash', { command: 'rm .harness/MANIFEST.json' }).status === 2, 'rm .harness/MANIFEST.json must be blocked');
+  assert(callAgy('run_command', { CommandLine: 'echo "x" > src/bypass.js' }).decision === 'deny', 'shell redirect to src/bypass.js without active run must be blocked');
+  assert(callAgy('run_command', { CommandLine: 'node -e "console.log(\'.env\')"' }).decision === 'allow', 'benign node -e console.log must be allowed');
+
+  // Start a BRIEFED run: still blocked until assign!
+  const br = node(proj, ['.harness/visible.mjs', 'brief', '--goal', 'Add feature and test', '--editor', 'antigravity', '--check', PASS]);
+  assert(br.status === 0, br.stdout + br.stderr);
+  const rid = (br.stdout.match(/^RUN_ID=(\S+)/m) || [])[1];
+  assert(callAgy('write_file', { Path: path.join(proj, 'src/app.js') }).decision === 'deny', 'BRIEFED run before assign must still block edits');
+
+  // Assign lead-dev (src/app.js) and lead-qa (tests/app.test.js)
+  const asg = node(proj, ['.harness/visible.mjs', 'assign', rid, JSON.stringify({
+    interfaceContract: 'export const ok = true',
+    assignments: [
+      { lead: 'lead-dev', goal: 'implement app', files: ['src/app.js'] },
+      { lead: 'lead-qa', goal: 'test app', files: ['tests/app.test.js'] }
+    ]
+  })]);
+  assert(asg.status === 0, asg.stdout + asg.stderr);
+  assert(callAgy('write_file', { Path: path.join(proj, 'src/unassigned.js') }).decision === 'deny', 'DELEGATED run must block unassigned files');
+  assert(callAgy('write_file', { Path: path.join(proj, 'src/app.js') }).decision === 'allow', 'DELEGATED run must allow assigned file');
+  // Per-lead identity enforcement: lead-dev cannot edit lead-qa's test file
+  assert(callClaude('Write', { file_path: 'tests/app.test.js' }, { agent_name: 'lead-dev' }).status === 2, 'lead-dev must be blocked from editing lead-qa test file');
+  assert(callClaude('Write', { file_path: 'tests/app.test.js' }, { agent_name: 'lead-qa' }).status === 0, 'lead-qa must be allowed to edit its own test file');
+  assert(fs.existsSync(path.join(proj, '.harness', 'visible', rid, 'edits.jsonl')), 'edits.jsonl attribution log must be written');
+
+  // 5. Stop hook blocks on DELEGATED run, allows on re-entry/cancel/worker, blocks on AWAITING JUDGE
+  const callStopClaude = (payload = {}, extraEnv = {}) => spawnSync(process.execPath, ['.harness/hook-stop.mjs'], {
+    cwd: proj, input: JSON.stringify(payload), encoding: 'utf8', env: { ...env, CLAUDE_PROJECT_DIR: proj, ...extraEnv }
+  });
+  const callStopAgy = (payload = {}, extraEnv = {}) => {
+    const r = spawnSync(process.execPath, ['../.harness/hook-stop.mjs', '--agy'], {
+      cwd: path.join(proj, '.agents'), input: JSON.stringify({ hookEventName: 'Stop', cwd: proj, terminationReason: 'NO_TOOL_CALL', continuationActive: false, ...payload }), encoding: 'utf8', env: { ...env, ...extraEnv }
+    });
+    assert(r.status === 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  assert(callStopClaude().status === 2, 'Stop hook (Claude) must block while run is DELEGATED');
+  assert(callStopClaude({ stop_hook_active: true }).status === 0, 'Stop hook (Claude) must allow on stop_hook_active re-entry');
+  assert(callStopAgy().decision === 'continue', 'Stop hook (Agy) must return continue while run is DELEGATED');
+  assert(!callStopAgy({ continuationActive: true }).decision, 'Stop hook (Agy) must allow on continuationActive re-entry');
+  assert(!callStopAgy({ terminationReason: 'USER_CANCELED' }).decision, 'Stop hook (Agy) must allow on USER_CANCELED');
+  assert(callStopClaude({}, { HARNESS_WORKER: '1' }).status === 0, 'Stop hook must be silent for HARNESS_WORKER=1');
+
+  // Complete files + verify -> PASSED (still awaiting judge!) -> Stop hook still blocks until judged
+  fs.mkdirSync(path.join(proj, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(proj, 'tests'), { recursive: true });
+  fs.writeFileSync(path.join(proj, 'src/app.js'), 'export const ok = true;\n');
+  fs.writeFileSync(path.join(proj, 'tests/app.test.js'), 'export const t = true;\n');
+  // Inject a mismatched attribution entry to verify visible.mjs surfaces it
+  fs.appendFileSync(path.join(proj, '.harness', 'visible', rid, 'edits.jsonl'), `${JSON.stringify({ ts: new Date().toISOString(), agent: 'lead-dev', file: 'tests/app.test.js' })}\n`);
+  const ver = node(proj, ['.harness/visible.mjs', 'verify', rid]);
+  assert(ver.status === 0 && /Edit attribution warnings/.test(ver.stdout) && /tests\/app\.test\.js/.test(ver.stdout), ver.stdout + ver.stderr);
+  assert(callStopAgy().decision === 'continue' && /reviewer judge/.test(callStopAgy().reason), 'Stop hook must block PASSED run awaiting judge');
+  const verdict = JSON.stringify({
+    verdict: 'APPROVE',
+    scores: { correctness: 5, acceptance: 5, tests: 5, rootCause: 5, safety: 5, intentFit: 5, states: 'n/a', craft: 'n/a' },
+    doneVsGood: { intent: 'Add feature module and unit test cleanly', weak: ['Checked module export and unit test coverage; no issues found.'] },
+    findings: [], summary: 'Looks good.'
+  });
+  assert(node(proj, ['.harness/visible.mjs', 'judge', rid, '--agent', 'reviewer', '--verdict', verdict]).status === 0);
+  assert(callStopClaude().status === 0 && !callStopAgy().decision, 'Stop hook must allow once run is verified and judged');
+
+  // Opt-out via config.guard.controllerFirst = false
+  const cfgPath = path.join(proj, '.harness', 'config.json');
+  const cfgObj = json(cfgPath); cfgObj.guard = { controllerFirst: false };
+  fs.writeFileSync(cfgPath, JSON.stringify(cfgObj, null, 2));
+  assert(callAgy('write_file', { Path: path.join(proj, 'src/free.js') }).decision === 'allow', 'controllerFirst: false must allow direct src edits');
+
+  // 6. Headless worker read-only & targetFiles enforcement (for agy -p)
+  assert(callAgy('write_file', { Path: path.join(proj, 'src/a.js') }, {}, { HARNESS_WORKER: '1', HARNESS_WORKER_READONLY: '1' }).decision === 'deny', 'HARNESS_WORKER_READONLY must block file writes');
+  assert(callAgy('run_command', { CommandLine: 'echo x > src/a.js' }, {}, { HARNESS_WORKER: '1', HARNESS_WORKER_READONLY: '1' }).decision === 'deny', 'HARNESS_WORKER_READONLY must block shell writes');
+  assert(callAgy('run_command', { CommandLine: 'git commit -m x' }, {}, { HARNESS_WORKER: '1', HARNESS_WORKER_READONLY: '1' }).decision === 'deny', 'HARNESS_WORKER_READONLY must block git commit');
+  assert(callAgy('run_command', { CommandLine: 'git status' }, {}, { HARNESS_WORKER: '1', HARNESS_WORKER_READONLY: '1' }).decision === 'allow', 'HARNESS_WORKER_READONLY must allow git status');
+  assert(callAgy('write_file', { Path: path.join(proj, 'src/other.js') }, {}, { HARNESS_WORKER: '1', HARNESS_WORKER_FILES: JSON.stringify(['src/mine.js']) }).decision === 'deny', 'HARNESS_WORKER_FILES must block outside files');
+  assert(callAgy('write_file', { Path: path.join(proj, 'src/mine.js') }, {}, { HARNESS_WORKER: '1', HARNESS_WORKER_FILES: JSON.stringify(['src/mine.js']) }).decision === 'allow', 'HARNESS_WORKER_FILES must allow assigned file');
+
+  // 7. Antigravity force_ask parity & cross-editor human approval gates
+  assert(callAgy('run_command', { CommandLine: 'node .harness/backlog.mjs approve B1' }).decision === 'force_ask', 'Agy hook must force_ask backlog approve');
+  assert(callAgy('run_command', { CommandLine: 'node .harness/sessions.mjs merge FEAT-1' }).decision === 'force_ask', 'Agy hook must force_ask sessions merge');
+  assert(callAgy('run_command', { CommandLine: 'git push origin feature/x' }).decision === 'force_ask', 'Agy hook must force_ask non-protected git push');
+  assert(callAgy('run_command', { CommandLine: 'git push origin main' }).decision === 'deny', 'Agy hook must still hard-deny protected branch push');
+
+  // Controller-side checkHumanApprovalOrigin: Cursor refused, Antigravity with hooks allowed, Antigravity without hooks refused
+  node(proj, ['.harness/backlog.mjs', 'add', 'Held task', '--files', 'src/x.js']);
+  const bid = json(path.join(proj, '.harness', 'backlog.json')).tasks[0].id;
+  const cursorBlock = node(proj, ['.harness/backlog.mjs', 'approve', bid], { CURSOR_AGENT: '1' });
+  assert(cursorBlock.status === 1 && /APPROVAL REFUSED/.test(cursorBlock.stderr), cursorBlock.stderr);
+  const agyWithHooksOk = node(proj, ['.harness/backlog.mjs', 'approve', bid], { ANTIGRAVITY_AGENT: '1' });
+  assert(agyWithHooksOk.status === 0, agyWithHooksOk.stdout + agyWithHooksOk.stderr);
+  // Remove .agents/hooks.json -> Antigravity self-approval must now be refused!
+  fs.rmSync(path.join(proj, '.agents', 'hooks.json'));
+  const agyNoHooksBlock = node(proj, ['.harness/backlog.mjs', 'approve', bid], { ANTIGRAVITY_AGENT: '1' });
+  assert(agyNoHooksBlock.status === 1 && /APPROVAL REFUSED/.test(agyNoHooksBlock.stderr), agyNoHooksBlock.stderr);
+
+  // 8. Doctor warns when hooks are missing/broken
+  fs.writeFileSync(path.join(proj, '.agents', 'hooks.json'), JSON.stringify({ 'agentic-harness': { enabled: false, PreToolUse: [] } }));
+  const docBad = node(proj, ['.harness/doctor.mjs']);
+  assert(/\.agents\/hooks\.json is missing or has disabled hook/.test(docBad.stdout), docBad.stdout);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -268,6 +268,75 @@ export function checkVisualEvidence(file, { since = 0 } = {}) {
 
 export const VISUAL_CONFIRM_RULE = 'Bash(node .harness/visible.mjs visual confirm:*)';
 
+/** True when `.agents/hooks.json` exists, is enabled, and wires `hook-guard.mjs` on `PreToolUse`. */
+export function hasAgyPreToolGuard(root) {
+  if (!root) return false;
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(root, '.agents', 'hooks.json'), 'utf8'));
+    if (!raw || typeof raw !== 'object') return false;
+    for (const cfg of Object.values(raw)) {
+      if (!cfg || typeof cfg !== 'object' || cfg.enabled === false) continue;
+      if (!Array.isArray(cfg.PreToolUse)) continue;
+      for (const group of cfg.PreToolUse) {
+        for (const h of group?.hooks || []) {
+          if (typeof h?.command === 'string' && h.command.includes('hook-guard.mjs')) return true;
+        }
+      }
+    }
+    return false;
+  } catch { return false; }
+}
+
+/** True when `.claude/settings.json` places `rule` in `permissions.ask` (and neither `allow` nor `deny`). */
+export function hasClaudeAskRule(root, rule) {
+  if (!root || !rule) return false;
+  try {
+    const p = JSON.parse(fs.readFileSync(path.join(root, '.claude', 'settings.json'), 'utf8')).permissions || {};
+    const ask = Array.isArray(p.ask) ? p.ask : [];
+    const allow = Array.isArray(p.allow) ? p.allow : [];
+    const deny = Array.isArray(p.deny) ? p.deny : [];
+    return ask.includes(rule) && !allow.includes(rule) && !deny.includes(rule);
+  } catch { return false; }
+}
+
+/**
+ * Guard human-approval CLI actions (`backlog approve/import`, `feature approve`, `hunt approve`,
+ * `sessions merge/cleanup`, `visible rollback`) against silent AI self-approval across editors.
+ * - Interactive terminal (`isTTY === true`): allowed (`how: 'tty'`).
+ * - Claude Code: allowed only when `.claude/settings.json` guards `actionRule` under `permissions.ask`.
+ * - Antigravity: allowed only when `.agents/hooks.json` wires `hook-guard.mjs` on `PreToolUse` (`force_ask`).
+ * - Cursor / Windsurf / Codex (no `ask` hook): refused non-TTY — human must run in their own terminal.
+ * - Plain non-TTY shell / CI (no editor env vars): allowed (`how: 'shell'`).
+ */
+export function checkHumanApprovalOrigin({ root, actionRule, commandHint, env = process.env, isTTY = Boolean(process.stdin.isTTY) } = {}) {
+  if (isTTY === true) return { ok: true, how: 'tty' };
+  const isAgy = Boolean(env.ANTIGRAVITY_AGENT);
+  const isOtherNoAskEditor = Boolean(env.CURSOR_AGENT || env.CURSOR_TRACE_ID || env.CODEX_SANDBOX || env.WINDSURF_AGENT);
+  const isClaude = (env.CLAUDECODE === '1' || Boolean(env.CLAUDE_CODE_ENTRYPOINT)) && !isAgy && !isOtherNoAskEditor;
+
+  if (isClaude) {
+    if (hasClaudeAskRule(root, actionRule)) return { ok: true, how: 'claude-ask' };
+    return {
+      ok: false,
+      reason: `APPROVAL REFUSED: Claude Code does not have "${actionRule}" in .claude/settings.json permissions.ask, so an AI cannot run this without confirmation.\nAsk the human to run it in their own terminal:\n  ${commandHint || actionRule}`
+    };
+  }
+  if (isAgy) {
+    if (hasAgyPreToolGuard(root)) return { ok: true, how: 'agy-force-ask' };
+    return {
+      ok: false,
+      reason: `APPROVAL REFUSED: Antigravity has no active PreToolUse guard (.agents/hooks.json -> hook-guard.mjs), so an AI cannot self-approve this action.\nAsk the human to run it in their own terminal (or re-install the harness to add .agents/hooks.json):\n  ${commandHint || actionRule}`
+    };
+  }
+  if (isOtherNoAskEditor) {
+    return {
+      ok: false,
+      reason: `APPROVAL REFUSED: this editor has no runtime confirmation hook for "${actionRule}", so an AI cannot self-approve it.\nAsk the human to run this command in their own terminal:\n  ${commandHint || actionRule}`
+    };
+  }
+  return { ok: true, how: 'shell' };
+}
+
 /**
  * Guard human `visual confirm` against silent AI self-approval in editors without ask rules (Antigravity, Cursor).
  * Allows confirmation only from an interactive terminal (where a human answers the prompt), or inside Claude Code
@@ -278,16 +347,7 @@ export function checkVisualConfirmOrigin({ root, run, env = process.env, isTTY =
   const otherEditor = Boolean(env.ANTIGRAVITY_AGENT || env.CURSOR_AGENT || env.CURSOR_TRACE_ID || env.CODEX_SANDBOX);
   const claudeHost = (env.CLAUDECODE === '1' || Boolean(env.CLAUDE_CODE_ENTRYPOINT)) && !otherEditor;
   const runIsClaude = !run?.editor || run.editor === 'claude-code';
-  let askProtected = false;
-  if (root) {
-    try {
-      const p = JSON.parse(fs.readFileSync(path.join(root, '.claude', 'settings.json'), 'utf8')).permissions || {};
-      const ask = Array.isArray(p.ask) ? p.ask : [];
-      const allow = Array.isArray(p.allow) ? p.allow : [];
-      const deny = Array.isArray(p.deny) ? p.deny : [];
-      askProtected = ask.includes(VISUAL_CONFIRM_RULE) && !allow.includes(VISUAL_CONFIRM_RULE) && !deny.includes(VISUAL_CONFIRM_RULE);
-    } catch { askProtected = false; }
-  }
+  const askProtected = hasClaudeAskRule(root, VISUAL_CONFIRM_RULE);
   if (claudeHost && runIsClaude && askProtected) return { ok: true, how: 'claude-ask', needsPrompt: false };
   const id = run?.id || '<run>';
   return {

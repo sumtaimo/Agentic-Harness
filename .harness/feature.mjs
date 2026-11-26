@@ -24,6 +24,7 @@ import { ROOT, HARNESS_DIR, ensureDirs, helpIfAsked } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import { readBacklog, writeBacklog } from './lib/governance.mjs';
 import { createFeature, findFeature, engineGate, markFeatureError, approveFeature, featureProgress, renderFeatureDoc, readFeatures, FEATURE_MAX_STEPS } from './lib/feature.mjs';
+import { checkHumanApprovalOrigin } from './lib/guard.mjs';
 
 ensureDirs();
 const argv = process.argv.slice(2);
@@ -86,6 +87,8 @@ switch (cmd) {
     const f = need();
     const spec = flag('--all') ? 'all' : val('--keep');
     if (!spec) die(`Say which steps to keep: node .harness/feature.mjs approve ${f.id} --keep 1,2,5   (or --keep 1-4, or --all)`);
+    const origin = checkHumanApprovalOrigin({ root: ROOT, actionRule: 'Bash(node .harness/feature.mjs approve:*)', commandHint: `node .harness/feature.mjs approve ${f.id} ${spec === 'all' ? '--all' : `--keep ${spec}`}` });
+    if (!origin.ok) die(origin.reason);
     let r; try { r = approveFeature(f.id, spec); } catch (e) { die(e.message); }
     console.log(`${r.feature.id} APPROVED: ${r.added.length} step(s) are READY in the backlog (${r.added.map((t) => t.id).join(', ')}).`);
     for (const w of r.warnings) console.log(`! ${w}`);
@@ -94,6 +97,8 @@ switch (cmd) {
   }
   case 'cancel': {
     const f = need();
+    const origin = checkHumanApprovalOrigin({ root: ROOT, actionRule: 'Bash(node .harness/feature.mjs cancel:*)', commandHint: `node .harness/feature.mjs cancel ${f.id}` });
+    if (!origin.ok) die(origin.reason);
     if (f.status === 'APPROVED') die(`${f.id} is approved: its steps are backlog items now. Block them instead: node .harness/backlog.mjs block <id> "reason"`);
     const b = readBacklog();
     b.features = readFeatures(b).map((x) => (x.id === f.id ? { ...x, status: 'CANCELLED', cancelledAt: new Date().toISOString() } : x));

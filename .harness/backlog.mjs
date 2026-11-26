@@ -25,12 +25,13 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DIRS, FILES, ensureDirs, readJsonSafe, helpIfAsked, harnessPidAlive } from './lib/common.mjs';
+import { ROOT, DIRS, FILES, ensureDirs, readJsonSafe, helpIfAsked, harnessPidAlive } from './lib/common.mjs';
 helpIfAsked(import.meta.url);
 import {
   GOV, STATUSES, readBacklog, writeBacklog, updateBacklogItem, validateBacklog, nextReady, backlogCounts,
   itemToJob, snapshotRelease, resetMemory, listReleases, loadSkills, waitingReady
 } from './lib/governance.mjs';
+import { checkHumanApprovalOrigin } from './lib/guard.mjs';
 
 ensureDirs();
 let argv = process.argv.slice(2);
@@ -154,6 +155,8 @@ switch (cmd) {
 
   case 'approve': { // a big run that autopilot held: the person OKs it (also allows the high model for this item)
     const id = positional[0];
+    const origin = checkHumanApprovalOrigin({ root: ROOT, actionRule: 'Bash(node .harness/backlog.mjs approve:*)', commandHint: `node .harness/backlog.mjs approve ${id || '<id>'}` });
+    if (!origin.ok) { console.error(origin.reason); process.exit(1); }
     guardChange(id, 'approve');
     const item = updateBacklogItem(id, { status: 'READY', costApproved: true, injectionApproved: true, needsApproval: undefined, blockedReason: undefined });
     if (!item) { console.error(`No backlog item "${id}".`); process.exit(1); }
@@ -177,6 +180,8 @@ switch (cmd) {
   }
 
   case 'import': {
+    const origin = checkHumanApprovalOrigin({ root: ROOT, actionRule: 'Bash(node .harness/backlog.mjs import:*)', commandHint: `node .harness/backlog.mjs import ${positional[0] || '<file>'}` });
+    if (!origin.ok) { console.error(origin.reason); process.exit(1); }
     const src = positional[0] && path.resolve(process.cwd(), positional[0]);
     if (!src || !fs.existsSync(src)) { console.error(`File or folder not found: ${positional[0] || '(none given)'}`); process.exit(1); }
     const busy = daemonBusy();

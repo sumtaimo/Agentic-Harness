@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * .harness/hook-session.mjs — Claude Code SessionStart hook (wired in .claude/settings.json).
+ * .harness/hook-session.mjs — Multi-editor SessionStart hook (Claude Code `.claude/settings.json` & Antigravity `.agents/hooks.json`).
  * Whatever this prints is added to the editor AI's context when a session starts, so it knows the
  * harness exists, whether the controller is running, and how to work through it.
  *
  *   node .harness/hook-session.mjs          full SessionStart context for Claude Code
+ *   node .harness/hook-session.mjs --agy    Antigravity SessionStart JSON (`{ injectSteps: [{ systemMessage }] }`)
  *   node .harness/hook-session.mjs --brief  4–8 line summary for Antigravity, Cursor, VS Code, or terminal (read-only)
  *   node .harness/hook-session.mjs --help   print this help and exit 0
  *
@@ -14,6 +15,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+
+const agyMode = process.argv.includes('--agy');
+const emitSession = (text) => {
+  if (agyMode) {
+    console.log(text ? JSON.stringify({ injectSteps: [{ systemMessage: { systemMessage: text } }] }) : '{}');
+  } else if (text) {
+    console.log(text);
+  }
+};
 
 try {
   const {
@@ -28,7 +38,7 @@ try {
     } catch { return false; }
   };
   helpIfAsked(import.meta.url);
-  if (process.env.HARNESS_WORKER === '1') process.exit(0);
+  if (process.env.HARNESS_WORKER === '1') { if (agyMode) console.log('{}'); process.exit(0); }
   const brief = process.argv.includes('--brief');
   const noFetch = process.argv.includes('--no-fetch') || process.env.HARNESS_NO_FETCH === '1';
   const { readCharter, readBacklog, backlogCounts, nextReady } = await import('./lib/governance.mjs');
@@ -191,7 +201,7 @@ try {
     for (const l of updateLines) briefLines.push(`! ${l}`);
     for (const l of foundryLines) briefLines.push(`! ${l}`);
     briefLines.push('- Menu: node .harness/start.mjs (template: npm start) · Web UI: node .harness/ui.mjs · Health: node .harness/doctor.mjs · Rules: AGENTS.md');
-    console.log(briefLines.join('\n'));
+    emitSession(briefLines.join('\n'));
     process.exit(0);
   }
 
@@ -304,6 +314,8 @@ try {
     lines.push(`- A previous editor run stopped and needs a human decision: ${s.id} ("${s.title}", ${s.status}${diag}). Report it to the user if they have not seen it.`);
   }
   for (const l of foundryLines) lines.push(`- ${l}`);
-  lines.push('- To run work with visible named agents: use /harness:run <goal>. Autonomous: /harness:auto. Team: /harness:team. Status: /harness:status. Health check: /harness:doctor. Teach a rule: /harness:teach <rule>. Several sessions at once (Session A + up to 4 child sessions): /harness:sessions.');
-  console.log(lines.join('\n'));
-} catch { /* never block the session */ }
+  lines.push(agyMode
+    ? '- To run work through the controller in Antigravity: start with `node .harness/visible.mjs brief --goal "<task>" --editor antigravity`, delegate via `visible.mjs assign`, verify via `visible.mjs verify`, and finish with `visible.mjs judge` / `visual attach` as required. Status: `node .harness/status.mjs`. Health: `node .harness/doctor.mjs`.'
+    : '- To run work with visible named agents: use /harness:run <goal>. Autonomous: /harness:auto. Team: /harness:team. Status: /harness:status. Health check: /harness:doctor. Teach a rule: /harness:teach <rule>. Several sessions at once (Session A + up to 4 child sessions): /harness:sessions.');
+  emitSession(lines.join('\n'));
+} catch { if (agyMode) console.log('{}'); /* never block the session */ }

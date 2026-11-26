@@ -103,6 +103,16 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .harness/hook-stop.mjs"
+          }
+        ]
+      }
     ]
   }
 }

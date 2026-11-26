@@ -33,7 +33,7 @@ import { ROOT, FILES, ensureDirs, loadConfig, readJsonSafe, atomicWriteJson, lis
 helpIfAsked(import.meta.url);
 import { fetchSkillsOnDemand } from './lib/skill-fetch.mjs';
 import { readCharter, loadRoles, loadSkills, matchSkills, loadTeam, validateTeam, validateDelegation, matchesAny, withinAll, readBacklog, writeBacklog, updateBacklogItem, nextReady, leadOwns, editorModelFor, runsNode, ENGINE_SCRIPTS, isTestFilePath, auditPatchSignals, scanPatchSafety } from './lib/governance.mjs';
-import { JUDGE_AGENTS, JUDGE_DEFAULT_MIN_SCORE, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, UNTRUSTED_CONTENT_RULE, scanInjection, taskText, injectionHoldReason, isReviewableFile, reviewPolicy, judgeApproved, scanAddedInjection, isUiFile, visualPending, reviewComplete, checkVisualEvidence, checkVisualConfirmOrigin, askVisualConfirm } from './lib/guard.mjs';
+import { JUDGE_AGENTS, JUDGE_DEFAULT_MIN_SCORE, JUDGE_FORMAT, parseJudgeVerdict, decideJudge, formatJudge, UNTRUSTED_CONTENT_RULE, scanInjection, taskText, injectionHoldReason, isReviewableFile, reviewPolicy, judgeApproved, scanAddedInjection, isUiFile, visualPending, reviewComplete, checkVisualEvidence, checkVisualConfirmOrigin, checkHumanApprovalOrigin, askVisualConfirm } from './lib/guard.mjs';
 import { VISIBLE_TERMINAL, MAX_VISIBLE_FILES, normalizeEditor, editorDisplayName, editorUsageKey, visibleRunDir, listVisibleRuns, stripSlash, insideTargets, captureSnapshot, diffSnapshots, restoreVisibleFiles, findDefaultHandoffRun, inspectVisibleRun, buildHandoffPrompt, formatHandoffText } from './lib/handoff.mjs';
 
 if (process.env.HARNESS_WORKER === '1') { console.error('Harness workers must not use the editor workflow.'); process.exit(2); }
@@ -151,6 +151,7 @@ function reportText(run, v) {
   if (v.skipped) L.push(`  ⚠ ${v.skipped} test(s) were SKIPPED. A skipped test proves nothing: find out why (for example a missing browser) before trusting this result.`);
   if (v.patchSafety?.blocking?.length) L.push('', 'Safety gate BLOCKED (remove secrets/conflict markers before passing verify):', ...v.patchSafety.blocking.map((s) => `  ✖ ${s}`));
   if (v.patchSafety?.warnings?.length) L.push('', 'Safety warnings (non-blocking):', ...v.patchSafety.warnings.map((w) => `  ⚠ ${w}`));
+  if (v.attributionWarnings?.length) L.push('', 'Edit attribution warnings (recorded by PreToolUse hook):', ...v.attributionWarnings.map((w) => `  ⚠ ${w}`));
   if (v.antiCheatSignals?.length) L.push('', 'Anti-cheat & root-cause signals:', ...v.antiCheatSignals.map((s) => `  ⚠ ${s}`));
   if (v.status !== 'PASSED' && v.diagnosis?.headline) L.push('', 'Failure diagnosis:', ...formatDiagnosis(v.diagnosis).split('\n').map((l) => `  ${l}`));
   if (visual) L.push('', `Visual review needed: ${v.uiFiles.length} UI file(s) changed (${v.uiFiles.slice(0, 6).join(', ')}${v.uiFiles.length > 6 ? ', …' : ''}).`,
@@ -464,6 +465,29 @@ function verify() {
   });
   const audit = auditPatchSignals({ baseFiles: auditBase, curFiles: auditCur, root: ROOT, baselineDir, testsChangedAfterFail, reports, cycle: run.cycles, isBugFix, devIds });
   const safety = scanPatchSafety({ baseFiles: auditBase, curFiles: auditCur, root: ROOT, baselineDir });
+  // Edit attribution audit: compare PreToolUse edits.jsonl (when recorded) against lead file ownership
+  const attributionWarnings = [];
+  const editsLogPath = path.join(runDir(run.id), 'edits.jsonl');
+  if (fs.existsSync(editsLogPath)) {
+    const seenAttr = new Set();
+    try {
+      for (const line of fs.readFileSync(editsLogPath, 'utf8').split(/\r?\n/).filter(Boolean)) {
+        let ev; try { ev = JSON.parse(line); } catch { continue; }
+        const f = String(ev.file || '');
+        if (!f || !cleanChanged.includes(f)) continue;
+        const owner = run.assignments.find((a) => {
+          if (!inside(f, a.files)) return false;
+          const lead = leads.find((l) => l.id === a.lead);
+          return !lead || !leads.length || leadOwns(lead, f, leads);
+        });
+        const actor = String(ev.agent || '');
+        if (owner && actor && actor !== 'orchestrator-or-unknown' && actor.toLowerCase() !== owner.lead.toLowerCase()) {
+          const msg = `${f} was assigned to ${owner.lead}, but PreToolUse recorded edit by "${actor}"`;
+          if (!seenAttr.has(msg)) { seenAttr.add(msg); attributionWarnings.push(msg); }
+        }
+      }
+    } catch { /* attribution log is best-effort */ }
+  }
   const passed = !violations.length && check.ok && !safety.blocked;
   // Instructions an agent planted in a file (non-blocking: shown to the judge and the human)
   const planted = scanAddedInjection(cleanChanged.filter((f) => f in cur).map((f) => {
@@ -508,6 +532,7 @@ function verify() {
     reverted,
     check: check.text,
     antiCheatSignals: audit.signals,
+    ...(attributionWarnings.length ? { attributionWarnings } : {}),
     patchSafety: { blocking: safety.blocking, warnings: safety.warnings },
     plantedInstructions: planted,
     ...(diagnosis ? { diagnosis } : {}),
@@ -531,6 +556,7 @@ function verify() {
     testsChangedAfterFail,
     testsDeleted,
     antiCheatSignals: audit.signals,
+    attributionWarnings,
     patchSafety: { blocking: safety.blocking, warnings: [...safety.warnings, ...planted] },
     diagnosis
   };
@@ -696,6 +722,8 @@ function visualReject() {
 
 function rollback() {
   const run = loadRun(positional[0]);
+  const origin = checkHumanApprovalOrigin({ root: ROOT, actionRule: 'Bash(node .harness/visible.mjs rollback:*)', commandHint: `node .harness/visible.mjs rollback ${run.id}` });
+  if (!origin.ok) die(origin.reason);
   // Decide BEFORE touching any file: a restore without the baseline copy cannot bring changed files back, but it would
   // still delete every file created since the run (newer human work included).
   if (run.status === 'ROLLED_BACK') die(`Run ${run.id} was already rolled back (${run.rolledBackAt || 'earlier'}). Nothing to do.`);
